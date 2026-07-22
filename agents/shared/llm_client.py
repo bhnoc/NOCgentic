@@ -75,6 +75,7 @@ _COST_PER_1M: dict[str, tuple[float, float]] = {
     "gemini-2.5-flash-preview":        (0.075, 0.30),
     "gemini-2.0-flash":                (0.075, 0.30),
     "gemini-3.1-flash-lite-preview":   (0.05,  0.20),
+    "gemini-3.5-flash-lite":           (0.05,  0.20),
     "gemini-3.1-pro-preview":          (1.25, 10.00),
     "anthropic/claude-3-haiku":        (0.25,  1.25),
     "anthropic/claude-3-5-sonnet":     (3.00, 15.00),
@@ -166,6 +167,12 @@ def _get_gemini_model(
         "max_retries": 1,
     }
     if thinking_budget is not None:
+        # gemini-3.5-flash-lite (and the 3.x lite line generally) rejects
+        # thinkingBudget=0 with 400 INVALID_ARGUMENT — it cannot fully disable
+        # thinking the way 3.1-flash-lite-preview could. Use -1 (dynamic/minimal)
+        # instead so callers can keep expressing "don't think much" as 0.
+        if thinking_budget == 0 and "flash-lite" in model_name:
+            thinking_budget = -1
         kwargs["thinking_budget"] = thinking_budget
 
     return ChatGoogleGenerativeAI(**kwargs)

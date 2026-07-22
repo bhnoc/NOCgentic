@@ -9,7 +9,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-lite-preview}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
       - THREAT_HUNTER_URL=http://threat-hunter:8002
       - ALERT_TRIAGE_URL=http://alert-triage:8003
       - THOUSANDEYES_ANALYST_URL=http://thousandeyes-analyst:8004
@@ -38,7 +38,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-lite-preview}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
       - S3_BUCKET=${S3_BUCKET:-blackhat-pope-dev-logs}
       - S3_REGION=${S3_REGION:-us-west-2}
       - S3_PREFIX=${S3_PREFIX}
@@ -58,7 +58,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-lite-preview}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
       - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
       - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
       - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
@@ -78,7 +78,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-lite-preview}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
       - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
       - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
       - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
@@ -99,7 +99,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-lite-preview}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}

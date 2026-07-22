@@ -433,7 +433,7 @@ async def parse_query_filters(query: str) -> dict[str, Any]:
             user_content=query,
             max_tokens=256,
             temperature=0.0,
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.5-flash-lite",
         )
         text = raw.strip()
         try:
@@ -506,7 +506,7 @@ async def llm_triage(
             user_content=user_content,
             max_tokens=4096,
             temperature=0.1,
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.5-flash-lite",
             thinking_budget=0,
         )
     except RuntimeError as exc:
