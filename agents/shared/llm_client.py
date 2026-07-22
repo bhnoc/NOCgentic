@@ -1,0 +1,305 @@
+"""
+llm_client.py — Unified LLM client using LangChain + LangSmith OTEL tracing.
+
+LangSmith's native OTEL integration automatically captures all LangChain calls
+(prompts, completions, token usage, latency) and exports them as OpenTelemetry
+spans via the TracerProvider configured in telemetry.py.
+
+No manual span creation needed — just set LANGSMITH_TRACING=true and
+LANGSMITH_OTEL_ENABLED=true before importing LangChain (done in telemetry.py).
+
+Native spans include langsmith.span.kind (llm, chain, tool, retriever),
+GenAI attributes (gen_ai.system, gen_ai.usage.*), and LangSmith metadata.
+
+Usage:
+    from llm_client import llm_complete
+
+    answer = await llm_complete(
+        system_prompt="You are a security analyst.",
+        user_content="Analyze this IP: 1.2.3.4",
+        max_tokens=1024,
+        temperature=0.1,
+    )
+
+Environment variables:
+    LLM_PROVIDER       — "gemini" or "openrouter" (default: "gemini")
+    GEMINI_API_KEY      — Google Gemini API key
+    OPENROUTER_API_KEY  — OpenRouter API key
+    GEMINI_MODEL        — default: gemini-3.1-pro-preview
+    OPENROUTER_MODEL    — default: anthropic/claude-3-haiku
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from typing import Any
+
+from telemetry import get_meter
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# OTEL Metrics instruments (lazily initialised on first LLM call)
+# ---------------------------------------------------------------------------
+
+_metrics_ready = False
+_token_counter = None
+_cost_counter = None
+_llm_duration = None
+
+
+def _ensure_metrics() -> None:
+    global _metrics_ready, _token_counter, _cost_counter, _llm_duration
+    if _metrics_ready:
+        return
+    meter = get_meter()
+    _token_counter = meter.create_counter(
+        "bhnoc.tokens", unit="tokens",
+        description="LLM token usage by type (input, output)",
+    )
+    _cost_counter = meter.create_counter(
+        "bhnoc.cost.usd", unit="USD",
+        description="Estimated LLM cost in USD",
+    )
+    _llm_duration = meter.create_histogram(
+        "bhnoc.llm.duration_ms", unit="ms",
+        description="LLM call end-to-end latency in milliseconds",
+    )
+    _metrics_ready = True
+
+
+_COST_PER_1M: dict[str, tuple[float, float]] = {
+    "gemini-2.5-flash":                (0.075, 0.30),
+    "gemini-2.5-flash-preview":        (0.075, 0.30),
+    "gemini-2.0-flash":                (0.075, 0.30),
+    "gemini-3.1-flash-lite-preview":   (0.05,  0.20),
+    "gemini-3.1-pro-preview":          (1.25, 10.00),
+    "anthropic/claude-3-haiku":        (0.25,  1.25),
+    "anthropic/claude-3-5-sonnet":     (3.00, 15.00),
+}
+
+
+def _estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    in_rate, out_rate = _COST_PER_1M.get(model, (1.0, 1.0))
+    return (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000
+
+
+def _record_otel_metrics(
+    provider: str, model: str, latency_ms: float,
+    input_tokens: int, output_tokens: int,
+) -> None:
+    _ensure_metrics()
+    attrs = {"gen_ai.system": provider, "gen_ai.request.model": model}
+    _token_counter.add(input_tokens, {**attrs, "token.type": "input"})
+    _token_counter.add(output_tokens, {**attrs, "token.type": "output"})
+    _cost_counter.add(_estimate_cost_usd(model, input_tokens, output_tokens), attrs)
+    _llm_duration.record(latency_ms, attrs)
+
+
+# ---------------------------------------------------------------------------
+# In-process metrics snapshot (used by agents for span attrs)
+# ---------------------------------------------------------------------------
+
+_last_metrics: dict[str, Any] = {}
+
+
+def get_last_llm_metrics() -> dict[str, Any]:
+    """Return metrics from the most recent llm_complete call."""
+    return dict(_last_metrics)
+
+
+def _record_metrics(
+    provider: str, model: str, latency_ms: float,
+    input_tokens: int, output_tokens: int,
+    thinking_tokens: int, finish_reason: str,
+) -> None:
+    tok_per_sec = round(output_tokens / (latency_ms / 1000), 1) if latency_ms > 0 else 0
+    _last_metrics.clear()
+    _last_metrics.update({
+        "provider": provider,
+        "model": model,
+        "latency_ms": round(latency_ms, 1),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "thinking_tokens": thinking_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "tok_per_sec": tok_per_sec,
+        "finish_reason": finish_reason,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
+
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
+
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku")
+
+
+# ---------------------------------------------------------------------------
+# LangChain model factories
+# ---------------------------------------------------------------------------
+
+def _get_gemini_model(
+    model: str | None = None,
+    max_tokens: int = 1024,
+    temperature: float = 0.1,
+    thinking_budget: int | None = None,
+):
+    """Create a LangChain ChatGoogleGenerativeAI instance."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    model_name = model or GEMINI_MODEL
+    kwargs: dict[str, Any] = {
+        "model": model_name,
+        "google_api_key": GEMINI_API_KEY,
+        "max_output_tokens": max_tokens,
+        "temperature": temperature,
+        "timeout": 120,
+        "max_retries": 1,
+    }
+    if thinking_budget is not None:
+        kwargs["thinking_budget"] = thinking_budget
+
+    return ChatGoogleGenerativeAI(**kwargs)
+
+
+def _get_openrouter_model(
+    model: str | None = None,
+    max_tokens: int = 1024,
+    temperature: float = 0.1,
+):
+    """Create a LangChain ChatOpenAI instance pointing at OpenRouter."""
+    from langchain_openai import ChatOpenAI
+
+    model_name = model or OPENROUTER_MODEL
+    return ChatOpenAI(
+        model=model_name,
+        openai_api_key=OPENROUTER_API_KEY,
+        openai_api_base="https://openrouter.ai/api/v1",
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=90,
+        default_headers={
+            "HTTP-Referer": "https://bhasia2026.noc",
+            "X-Title": "BH Asia NOC Agent",
+        },
+    )
+
+
+def _extract_content(response) -> str:
+    """Extract text content from LangChain response (handles both str and list)."""
+    raw = response.content
+    if isinstance(raw, str):
+        return raw.strip()
+    elif isinstance(raw, list):
+        parts = []
+        for block in raw:
+            if isinstance(block, dict):
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts).strip()
+    return str(raw).strip()
+
+
+# ---------------------------------------------------------------------------
+# Unified public API
+# ---------------------------------------------------------------------------
+
+async def llm_complete(
+    system_prompt: str,
+    user_content: str,
+    max_tokens: int = 1024,
+    temperature: float = 0.1,
+    model: str | None = None,
+    provider: str | None = None,
+    thinking_budget: int | None = None,
+) -> str:
+    """
+    Send a completion request via LangChain.
+
+    LangSmith OTEL integration automatically traces all LLM calls —
+    prompts, completions, token usage, and model metadata are captured
+    as OTEL spans and exported to Manifold via our TracerProvider.
+    """
+    from langchain_core.messages import SystemMessage, HumanMessage
+
+    active = (provider or LLM_PROVIDER).lower()
+
+    # Resolve provider with fallback
+    if active == "gemini":
+        if not GEMINI_API_KEY:
+            if OPENROUTER_API_KEY:
+                logger.warning("GEMINI_API_KEY not set — falling back to OpenRouter")
+                active = "openrouter"
+            else:
+                raise RuntimeError("No LLM API key configured")
+    elif active == "openrouter":
+        if not OPENROUTER_API_KEY:
+            if GEMINI_API_KEY:
+                logger.warning("OPENROUTER_API_KEY not set — falling back to Gemini")
+                active = "gemini"
+            else:
+                raise RuntimeError("No LLM API key configured")
+    else:
+        raise ValueError(f"Unknown LLM_PROVIDER: {active}")
+
+    # Build LangChain model
+    if active == "gemini":
+        llm = _get_gemini_model(model, max_tokens, temperature, thinking_budget)
+        provider_name = "google"
+    else:
+        llm = _get_openrouter_model(model, max_tokens, temperature)
+        provider_name = "openrouter"
+
+    model_name = model or (GEMINI_MODEL if active == "gemini" else OPENROUTER_MODEL)
+
+    # Build messages
+    messages = []
+    if system_prompt:
+        messages.append(SystemMessage(content=system_prompt))
+    messages.append(HumanMessage(content=user_content))
+
+    # Invoke — LangSmith OTEL auto-traces this
+    t0 = time.monotonic()
+    response = await llm.ainvoke(messages)
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    result = _extract_content(response)
+
+    # Extract token usage from LangChain response metadata
+    usage = getattr(response, "usage_metadata", None) or {}
+    if isinstance(usage, dict):
+        input_tok = usage.get("input_tokens", 0)
+        output_tok = usage.get("output_tokens", 0)
+    else:
+        input_tok = getattr(usage, "input_tokens", 0)
+        output_tok = getattr(usage, "output_tokens", 0)
+
+    thinking_tok = 0
+    resp_meta = getattr(response, "response_metadata", None) or {}
+    if isinstance(resp_meta, dict):
+        thinking_tok = resp_meta.get("thoughts_token_count", 0)
+
+    finish_reason = "stop"
+    if isinstance(resp_meta, dict):
+        fr = resp_meta.get("finish_reason", "stop")
+        if isinstance(fr, str):
+            finish_reason = fr.lower()
+
+    _record_metrics(
+        provider=provider_name, model=model_name, latency_ms=latency_ms,
+        input_tokens=input_tok, output_tokens=output_tok,
+        thinking_tokens=thinking_tok, finish_reason=finish_reason,
+    )
+    _record_otel_metrics(provider_name, model_name, latency_ms, input_tok, output_tok)
+
+    return result

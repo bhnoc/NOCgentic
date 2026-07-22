@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>After-Action Report: BHNOCgentic x Manifold Integration</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --accent: #2563eb;
+    --border: #e5e7eb;
+    --code-bg: #f3f4f6;
+    --table-header: #f9fafb;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.7;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    font-size: 15px;
+  }
+  h1 { font-size: 1.9rem; margin: 2rem 0 0.5rem; border-bottom: 3px solid var(--accent); padding-bottom: 0.5rem; }
+  h2 { font-size: 1.45rem; margin: 2.5rem 0 0.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; color: var(--accent); }
+  h3 { font-size: 1.15rem; margin: 1.8rem 0 0.5rem; }
+  p { margin: 0.6rem 0; }
+  ul, ol { margin: 0.6rem 0 0.6rem 1.5rem; }
+  li { margin: 0.25rem 0; }
+  strong { font-weight: 600; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    margin: 0.8rem 0;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.92em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+  }
+  th { background: var(--table-header); font-weight: 600; }
+  blockquote {
+    border-left: 4px solid var(--accent);
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    background: #f0f4ff;
+    border-radius: 0 4px 4px 0;
+  }
+  .meta { color: #555; font-size: 0.95em; margin-bottom: 0.2rem; }
+  @media print {
+    body { max-width: 100%; padding: 1.5rem; font-size: 12pt; }
+    h2 { page-break-before: auto; }
+    pre { white-space: pre-wrap; word-wrap: break-word; }
+  }
+</style>
+</head>
+<body>
+
+<h1>After-Action Report: BHNOCgentic x Manifold Integration</h1>
+<p class="meta"><strong>Black Hat Asia 2026 NOC &mdash; AI-Powered Security Operations Platform</strong></p>
+<p class="meta"><strong>Date:</strong> 2026-05-18</p>
+<p class="meta"><strong>Author:</strong> Matt Spicer</p>
+<p class="meta"><strong>Addressed to:</strong> Manifold Security</p>
+
+<hr>
+
+<h2>Executive Summary</h2>
+
+<p>BHNOCgentic is an AI-powered, multi-agent Security Operations Center platform deployed live at the Black Hat Asia 2026 Network Operations Center. The platform enables real-time threat hunting against Corelight/Zeek telemetry by routing analyst questions through specialized LLM-driven agents backed by AWS Athena, ThousandEyes, and raw S3 log data &mdash; all observable end-to-end via OpenTelemetry exported to Manifold.</p>
+
+<p>This report provides a technical debrief on the integration with Manifold, documents our architecture and design decisions, outlines challenges encountered, and lays out requirements for the upcoming Black Hat USA 2026 (&ldquo;Vegas&rdquo;) deployment.</p>
+
+<hr>
+
+<h2>1. Platform Architecture</h2>
+
+<h3>1.1 Infrastructure</h3>
+
+<p>The platform runs as an 8-container Docker Compose stack on a single EC2 instance (<code>aing.bhnoc.com</code>, g6e.4xlarge, us-west-2), fronted by nginx for TLS termination and reverse proxying.</p>
+
+<pre><code>Browser (static SPA) ──HTTPS──┐
+                               ▼
+                  ┌── nginx (443) ──────────┐
+                  │                         │
+                  ▼                         ▼
+   Web Server (Fastify, :3000)    Audit Monitor (FastAPI, :8787)
+        │                          (admin swim-lane dashboard at
+        │ POST /query              /bh/1337/thetraces/)
+        ▼
+   Orchestrator (FastAPI, :8001)
+        │  ┌─ Restricted-range filter (silent, &lt;10ms)
+        │  ├─ LLM classifier (Gemini Flash-Lite, ~500ms)
+        │  ├─ Guardrail filter (silent cover on refused intent)
+        │  └─ 4-intent router
+        │
+   ┌────┼──────────┬──────────────────┐
+   ▼    ▼          ▼                  ▼
+alert  thousandeyes  athena-hunter   threat-hunter
+triage  analyst      :8005           :8002
+:8003   :8004        (primary)       (S3 fallback)
+  │      │              │               │
+  │      │              ▼               ▼
+  │      │         AWS Athena        S3 NDJSON
+  │      │         (Parquet)         (raw Zeek TSV)
+  └──────┴──────────┐
+                    ▼
+          Gemini 3.1 Flash-Lite Preview
+          (via LangChain + LangSmith OTEL bridge)</code></pre>
+
+<p><strong>Key infrastructure decisions:</strong></p>
+<ul>
+  <li><strong>EC2 + Docker Compose</strong> over managed services (ECS/EKS) &mdash; cost-effective for a time-boxed event (~$25-35/week), rapid iteration during the build, and direct SSH access for live debugging during the NOC.</li>
+  <li><strong>AWS Athena over OpenSearch</strong> &mdash; migrated mid-build from OpenSearch to Athena-backed Parquet queries. Sub-second UID lookups, 1-5s aggregations, 5-15s full-day scans. Eliminated the operational burden of managing an OpenSearch cluster.</li>
+  <li><strong>Instance role credentials</strong> (no static keys in containers) &mdash; boto3 falls through to IMDSv2 for automatic credential rotation. We learned this the hard way after 6-hour credential expiry outages with cached clients (see Section 5).</li>
+</ul>
+
+<h3>1.2 Agents</h3>
+
+<p>The platform uses five specialized Python agents, each a FastAPI service with its own Docker container:</p>
+
+<table>
+  <thead>
+    <tr><th>Agent</th><th>Role</th><th>Data Source</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Orchestrator</strong> (:8001)</td><td>Routing brain &mdash; classifies intent, enforces guardrails, sanitizes output, manages trace context</td><td>LLM classifier (Gemini Flash-Lite)</td></tr>
+    <tr><td><strong>Athena Hunter</strong> (:8005)</td><td>Primary threat hunt &mdash; generates SQL from natural language, executes against Corelight Parquet data</td><td>AWS Athena (<code>blackhat_pope_logs</code>)</td></tr>
+    <tr><td><strong>Alert Triage</strong> (:8003)</td><td>Active alert prioritization and IDS feed summarization</td><td>Athena <code>alerts</code> / <code>suricata_corelight</code> tables</td></tr>
+    <tr><td><strong>Threat Hunter</strong> (:8002)</td><td>Legacy S3-backed raw Zeek scanning, auto-secondary fallback</td><td>S3 raw NDJSON logs</td></tr>
+    <tr><td><strong>ThousandEyes Analyst</strong> (:8004)</td><td>BGP health, packet loss, latency, reachability analysis</td><td>ThousandEyes v7 REST API</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Query routing</strong> uses a two-phase approach:</p>
+<ol>
+  <li><strong>Heuristic pre-filter</strong>: Restricted subnet/zone checks execute in &lt;10ms, returning a silent cover response for sensitive infrastructure ranges.</li>
+  <li><strong>LLM classifier</strong> (Gemini Flash-Lite, <code>thinking_budget=0</code>, ~500ms): Routes to one of four intents &mdash; <code>alert_triage</code>, <code>thousandeyes_analyst</code>, <code>athena_hunter</code> (default), or <code>refused</code> (guardrail). Heuristic fallback engages if the LLM call fails.</li>
+</ol>
+
+<p>All guardrail and restricted-range responses return the <strong>identical</strong> generic cover response (&ldquo;nothing notable on that range&rdquo;) with 5 hunt hints. This prevents outsiders from fuzzing the system to discover what&rsquo;s blocked.</p>
+
+<h3>1.3 User-Facing Application</h3>
+
+<p>The web UI (<code>https://aing.bhnoc.com</code>) is a single-page application with a Black Hat retro-techno theme:</p>
+<ul>
+  <li>Chat interface with WebSocket streaming + 2s HTTP polling fallback (race-safe via <code>renderedJobs</code> Set)</li>
+  <li>Collapsible answer sections (Key Entities, Next Steps, Evidence, Recommended Actions)</li>
+  <li>Live alert sidebar fed from Athena (30-min refresh, 9s trickle, deduped by signature+IP)</li>
+  <li>6 curated starter prompts covering threat hunting and network quality</li>
+  <li>Mobile layout (iPhone 12) with single rotating alert card</li>
+  <li>Session tracking via dual-channel identity (<code>bh_sid</code> HttpOnly cookie + <code>X-Client-Session</code> localStorage header)</li>
+</ul>
+
+<hr>
+
+<h2>2. Manifold Integration &mdash; OpenTelemetry Architecture</h2>
+
+<h3>2.1 What We Export</h3>
+
+<p>Every Python agent calls <code>init_telemetry(service_name="bhnocgentic-&lt;role&gt;")</code> at startup, which registers exporters for:</p>
+<ul>
+  <li><strong>Traces</strong> &rarr; Manifold OTLP-HTTP (<code>blackcap.app.manifoldsecurity.io:4318/v1/traces</code>)</li>
+  <li><strong>Metrics</strong> &rarr; Manifold (<code>/v1/metrics</code>)</li>
+  <li><strong>Logs</strong> &rarr; Manifold (<code>/v1/logs</code>)</li>
+  <li><strong>Traces (parallel)</strong> &rarr; S3 gzipped NDJSON archive (<code>s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/</code>)</li>
+</ul>
+
+<p>Five services emit telemetry: <code>bhnocgentic-orchestrator</code>, <code>bhnocgentic-athena-hunter</code>, <code>bhnocgentic-alert-triage</code>, <code>bhnocgentic-threat-hunter</code>, <code>bhnocgentic-thousandeyes-analyst</code>.</p>
+
+<h3>2.2 Trace Depth &mdash; High Level to Individual Trace</h3>
+
+<p>The OTel integration captures the full lifecycle of every query, from high-level routing decisions down to individual LLM token counts:</p>
+
+<p><strong>High-level spans (orchestrator):</strong></p>
+<ul>
+  <li><code>orchestrator.query</code> &mdash; root span carrying <code>client.ip</code>, <code>client.user_agent</code>, <code>client.session_id</code>, <code>query.text</code> (raw), <code>routing.intent</code>, <code>classification.confidence</code>, <code>classification.reasoning</code></li>
+  <li>Filter status attributes: <code>filter.restricted</code>, <code>filter.guardrail</code>, <code>filter.kill_switch</code></li>
+  <li><code>orchestrator.classify</code> &mdash; the LLM classification sub-span</li>
+  <li><code>orchestrator.dispatch</code> &mdash; agent dispatch with timing</li>
+</ul>
+
+<p><strong>Agent-level spans:</strong></p>
+<ul>
+  <li><code>athena_hunter.generate_sql</code> &mdash; NL-to-SQL generation</li>
+  <li><code>athena_hunter.execute_sql_&lt;n&gt;</code> &mdash; each Athena query with <code>sql.query</code>, <code>sql.row_count</code>, <code>athena.execution_time_ms</code>, <code>athena.data_scanned_mb</code></li>
+  <li><code>athena_hunter.gather_context</code> &mdash; multi-query aggregation</li>
+  <li><code>alert_triage.analyze</code> &mdash; alert summarization</li>
+  <li><code>thousandeyes_analyst.query</code> &mdash; TE API calls</li>
+</ul>
+
+<p><strong>LLM spans (via LangSmith OTEL bridge):</strong></p>
+<ul>
+  <li><code>gen_ai.system</code>, <code>gen_ai.request.model</code>, <code>gen_ai.request.max_tokens</code></li>
+  <li><code>gen_ai.usage.input_tokens</code>, <code>gen_ai.usage.output_tokens</code></li>
+  <li><code>gen_ai.response.finish_reason</code></li>
+  <li>Events: <code>gen_ai.content.prompt</code> (full message array), <code>gen_ai.content.completion</code></li>
+  <li>LangSmith metadata: <code>langsmith.span.kind</code> (<code>llm</code>, <code>chain</code>, <code>tool</code>, <code>retriever</code>)</li>
+</ul>
+
+<p><strong>HTTP spans (auto-instrumentation):</strong></p>
+<ul>
+  <li>Inbound: <code>FastAPIInstrumentor</code> tags every request with method, route, status, and extracts <code>traceparent</code></li>
+  <li>Outbound: <code>HTTPXClientInstrumentor</code> injects <code>traceparent</code> into every inter-service call</li>
+</ul>
+
+<p>All spans are stitched into distributed traces via W3C Trace Context propagation, so a single user query produces a flame graph from browser &rarr; web server &rarr; orchestrator &rarr; specialist agent &rarr; Athena/API &rarr; LLM.</p>
+
+<p><strong>Custom metrics:</strong></p>
+<ul>
+  <li><code>bhnoc.tokens</code> (counter, split by <code>token.type=input|output</code>)</li>
+  <li><code>bhnoc.cost.usd</code> (counter, estimated per-model cost)</li>
+  <li><code>bhnoc.llm.duration_ms</code> (histogram, latency distribution by model)</li>
+</ul>
+
+<h3>2.3 The LangSmith OTEL Bridge &mdash; The Load-Bearing Trick</h3>
+
+<p>The single most important integration decision was leveraging LangSmith&rsquo;s native OTEL bridge rather than manual LLM span instrumentation. The entire wire-up is three environment variables set in <code>init_telemetry()</code> <strong>before any LangChain import</strong>:</p>
+
+<pre><code>trace.set_tracer_provider(trace_provider)   # our provider with OTLP+S3+console
+os.environ.setdefault("LANGSMITH_TRACING", "true")
+os.environ.setdefault("LANGSMITH_OTEL_ENABLED", "true")
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")  # don't also send to LangSmith cloud</code></pre>
+
+<p>When <code>ChatGoogleGenerativeAI.ainvoke()</code> is called, LangSmith intercepts it and emits GenAI semantic-convention spans through <strong>our</strong> TracerProvider &mdash; so every LLM call lands at Manifold and in the S3 archive without any manual wrapping. This is what populates Manifold&rsquo;s LLM panel with prompt text, completion text, token counts, and finish reasons.</p>
+
+<p><strong>The order is critical</strong>: <code>init_telemetry()</code> must run before <code>langchain*</code> is imported, otherwise LangSmith never sees the env vars and falls back to no-op. Every agent&rsquo;s <code>main.py</code> is structured accordingly.</p>
+
+<h3>2.4 The S3 Sister Exporter</h3>
+
+<p>Every span exported to Manifold is simultaneously written to S3 via a parallel <code>BatchSpanProcessor</code>:</p>
+
+<pre><code>s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/
+  service=bhnocgentic-orchestrator/dt=2026-04-23/hour=14/orchestrator-20260423T140532-a3f8b2c1.jsonl.gz
+  service=bhnocgentic-athena-hunter/dt=2026-04-23/hour=14/athena-hunter-20260423T140535-e7d91ab4.jsonl.gz
+  ...</code></pre>
+
+<p><strong>Why dual export:</strong></p>
+<ul>
+  <li><strong>Forensics</strong>: Raw spans (including full LLM prompts) live in infrastructure we control, on our retention terms</li>
+  <li><strong>Resilience</strong>: The admin audit monitor reads S3 directly &mdash; it works even if the Manifold tenant is unreachable</li>
+  <li><strong>Queryability</strong>: Hive-partitioned (<code>service=</code>, <code>dt=</code>, <code>hour=</code>) for future Athena analysis of our own telemetry</li>
+  <li><strong>Local dev</strong>: <code>aws s3 sync</code> + <code>tools/trace-export.py</code> gives a CSV of all queries without logging into any vendor UI</li>
+</ul>
+
+<hr>
+
+<h2>3. Administrative Swim-Lane Dashboard</h2>
+
+<h3>3.1 Purpose and Design</h3>
+
+<p>The most operationally critical artifact of the observability stack is our custom <strong>audit monitor</strong> &mdash; a real-time swim-lane dashboard at <code>https://aing.bhnoc.com/bh/1337/thetraces/</code> that turns the S3 span archive into a live SOC operator view.</p>
+
+<p>Three needs drove building a custom admin surface rather than relying solely on Manifold&rsquo;s UI:</p>
+<ol>
+  <li><strong>Demo legibility</strong>: A Black Hat NOC audience needs to see the orchestrator &rarr; classify &rarr; athena-hunter &rarr; SQL &rarr; response chain unfold in real time, with raw prompts and actual SQL visible. A flame graph in a vendor UI doesn&rsquo;t carry on a projector.</li>
+  <li><strong>SOC-grade unfiltered view</strong>: End users see sanitized cover responses (scrubbed IPs, generic copy). SOC operators need the real <code>query.text</code>, real <code>client.ip</code>, real zone names &mdash; without piping sensitive data into a third-party SaaS.</li>
+  <li><strong>A panic button</strong>: Mid-demo, if a query starts going somewhere problematic, the operator needs a one-click kill switch visible on the same screen as the traffic.</li>
+</ol>
+
+<h3>3.2 UI Layout</h3>
+<ul>
+  <li><strong>Five swim lanes</strong> &mdash; one per service (orchestrator, threat-hunter, alert-triage, athena-hunter, thousandeyes-analyst)</li>
+  <li><strong>Color-coded cards by kind</strong>: LLM (yellow), Athena (purple), Agent (cyan), Tool (orange), HTTP (green, off by default)</li>
+  <li><strong>Card preview</strong>: &le;300-char snippet showing (in priority): LLM prompt text, SQL query, raw user query, or HTTP method+path</li>
+  <li><strong>Click-to-expand drawer</strong>: Full span attributes, LLM prompt/completion, events, resource tags, raw JSON</li>
+  <li><strong>Filter chips</strong>: Toggle card kinds on/off, persisted in localStorage</li>
+  <li><strong>Status dot</strong>: Green (SSE connected) / Red (disconnected), auto-reconnect</li>
+  <li><strong>Lane count badges + timestamps</strong>: At-a-glance confirmation that traffic is flowing</li>
+</ul>
+
+<h3>3.3 Data Pipeline</h3>
+
+<p>The audit monitor polls S3 every 2 seconds using <code>list_objects_v2(StartAfter=last_seen_key)</code> &mdash; a cheap-tail trick that only returns keys newer than the last one processed. Spans are gunzipped, classified by kind, and broadcast to connected browsers via Server-Sent Events (SSE).</p>
+
+<p>On startup, a preload cycle pulls the last 5 minutes of spans so lanes are populated immediately &mdash; no empty-state waiting.</p>
+
+<hr>
+
+<h2>4. Kill Switch</h2>
+
+<h3>4.1 Design</h3>
+
+<p>The kill switch is an in-memory flag in the orchestrator that, when armed, causes all <code>athena_hunter</code> intent queries to return the same generic cover response as restricted-range queries. It is operated from the audit monitor dashboard via a single button: <strong>KILL ATHENA</strong>.</p>
+
+<pre><code>Browser (KILL ATHENA button)
+    │ GET  /admin/killswitch        (poll every 5s)
+    │ POST /admin/killswitch/athena {killed: bool}
+    ▼
+Audit Monitor (FastAPI) ──httpx──▶ Orchestrator (state owner)
+    (stateless proxy)               _kill_switches = {"athena_hunter": false}</code></pre>
+
+<h3>4.2 Key Properties</h3>
+<ul>
+  <li><strong>Indistinguishable to outsiders</strong>: When armed, the user receives the exact same cover response as restricted-IP queries. No error, no &ldquo;service unavailable&rdquo; &mdash; an attacker cannot detect the switch was flipped. The orchestrator span is tagged <code>filter.kill_switch=true</code> for admin visibility.</li>
+  <li><strong>In-memory only</strong>: Restarting the orchestrator disarms the switch. This is intentional &mdash; it&rsquo;s a panic brake, not a persistent configuration. You don&rsquo;t want a tense mid-demo flip to silently persist past the event.</li>
+  <li><strong>Audit monitor holds no state</strong>: If the audit monitor crashes, the switch (already set in the orchestrator) keeps working. The browser&rsquo;s 5s poll is the only sync mechanism &mdash; two operators on two browsers stay consistent within 5s automatically.</li>
+</ul>
+
+<h3>4.3 Future: Manifold-Driven Kill Switch</h3>
+
+<p>For Black Hat Vegas, a key objective is extending kill switch control to be triggered by <strong>Manifold rulesets</strong> &mdash; not just manual operator action. If Manifold detects anomalous LLM behavior, cost spikes, prompt injection patterns, or other policy violations in the trace data, it should be able to programmatically arm the kill switch via the orchestrator&rsquo;s admin API.</p>
+
+<hr>
+
+<h2>5. Challenges Encountered</h2>
+
+<h3>5.1 Project Nearly Cancelled &mdash; 72-Hour Pivot</h3>
+
+<p>The most significant challenge was non-technical. This project was nearly cancelled by the team, which severely limited prior planning and build-out time. Traditional approaches to design review, architecture approval, and phased development were not available.</p>
+
+<p>I was able to pivot the idea by reframing the value proposition: the platform could <strong>securely limit access to dangerous unencrypted traffic</strong> while still enabling meaningful threat hunting. This addressed the team&rsquo;s primary concern &mdash; that exposing raw NOC telemetry to an LLM-powered interface could leak sensitive infrastructure details.</p>
+
+<p>The solution was the silent guardrail architecture: restricted subnet ranges, zone names, and sensitive service identifiers are filtered at both the input (pre-classification) and output (post-agent) stages. The cover responses are indistinguishable from normal &ldquo;no results&rdquo; responses, so even adversarial probing cannot reveal what&rsquo;s protected.</p>
+
+<p>With this security model validated, I built the proof of concept in <strong>72 hours</strong> while simultaneously performing my primary Black Hat NOC operational functions. The platform went from concept to live deployment serving real analyst queries against real Corelight/Zeek telemetry.</p>
+
+<p>The result: I now have buy-in from the team. We are building toward a <strong>&ldquo;Remote NOC&rdquo;</strong> deployment for Black Hat USA 2026 in Vegas, which will be on the vendor floor and will target having <strong>attendees perform threat hunting using the agentic platform</strong>. This is a significant expansion from a back-of-house NOC tool to a public-facing interactive experience.</p>
+
+<h3>5.2 Custom Agent Connection Integration</h3>
+
+<p>Integrating Manifold with our custom agent architecture presented friction. Our agents are not off-the-shelf LangChain agents or standard chatbot frameworks &mdash; they&rsquo;re purpose-built FastAPI services with custom routing, guardrails, and multi-agent orchestration. The standard Manifold integration paths assume a more conventional agent topology.</p>
+
+<p>Specific challenges:</p>
+<ul>
+  <li><strong>Traceloop SDK was a dead end</strong>: An early attempt to use <code>traceloop-sdk</code> for LangChain instrumentation demanded its own API key and tried to ship spans to <code>api.traceloop.com</code> &mdash; not to our Manifold tenant. Abandoned in favor of the LangSmith OTEL bridge.</li>
+  <li><strong>LangChain import order sensitivity</strong>: LangSmith&rsquo;s OTEL bridge reads environment variables at import time. If any <code>langchain*</code> module was imported before <code>init_telemetry()</code> ran, the bridge was inert and no GenAI spans were emitted. Required restructuring every agent&rsquo;s module initialization.</li>
+  <li><strong><code>ProxyTracerProvider</code> confusion</strong>: <code>init_telemetry()</code> was being invoked in test processes but not in the actual uvicorn worker, resulting in traces silently going nowhere. Diagnosed by exec&rsquo;ing into containers and inspecting <code>trace.get_tracer_provider()</code>.</li>
+  <li><strong>Thinking model timeouts</strong>: Gemini 3.1 Pro thinking-mode calls hit 504s with 3-5 minute latency, exceeding the orchestrator&rsquo;s 90s downstream timeout. Required raising timeouts and ultimately switching to <code>thinking_budget=0</code> on Flash-Lite paths.</li>
+  <li><strong>EC2 credential expiry</strong>: Module-level boto3 client caching held onto credentials from container start. After ~6 hours, S3 span exports and Athena queries started returning <code>ExpiredToken</code>. Fixed by constructing fresh <code>boto3.Session</code> per call &mdash; a pattern now enforced across all shared modules.</li>
+</ul>
+
+<h3>5.3 Nginx Upstream Caching</h3>
+
+<p>Docker container recreation (image rebuild, env change) assigns new IPs. Nginx&rsquo;s <code>upstream {}</code> blocks resolve service hostnames once at config-load time and cache forever, causing 502s after any container restart. Fixed with variable-based <code>proxy_pass</code> that forces re-resolution via Docker&rsquo;s embedded DNS every 10 seconds.</p>
+
+<hr>
+
+<h2>6. What We Observed</h2>
+
+<h3>6.1 Platform Performance</h3>
+<ul>
+  <li><strong>Typical query latency</strong>: 5-15s (athena-hunter/alert-triage), 2-4s (thousandeyes), &lt;1s (cover/guardrail paths)</li>
+  <li><strong>LLM classifier accuracy</strong>: 15/15 routing tests passing across all 4 intents + guardrail</li>
+  <li><strong>Guardrail integrity</strong>: 5/5 leak probes returned zero leak strings &mdash; no <code>guardrail</code>, <code>refused</code>, <code>rephrase</code>, or <code>off-topic</code> appeared in any response</li>
+  <li><strong>Telemetry lag</strong>: S3 spans land within ~5s of query completion; audit monitor updates within 2s of S3 write</li>
+  <li><strong>Model</strong>: Gemini 3.1 Flash-Lite-Preview at <code>(0.05, 0.20)</code> per 1M in/out tokens &mdash; cost-effective for demo-scale traffic</li>
+</ul>
+
+<h3>6.2 Real Threat Findings</h3>
+
+<p>During live NOC operation, the platform surfaced actionable findings including:</p>
+<ul>
+  <li><strong>NetSupport RAT C2 patterns</strong> in connection logs</li>
+  <li><strong>Registration Web-to-DB lateral movement</strong> across zone boundaries</li>
+  <li><strong>27 Zoho TLS connections</strong> to unexpected endpoints</li>
+  <li><strong>Beaconing patterns</strong> in DNS and connection duration data</li>
+</ul>
+
+<h3>6.3 Observability Value</h3>
+
+<p>The dual Manifold + S3 export design proved its worth:</p>
+<ul>
+  <li><strong>Manifold</strong> provides the long-term system of record &mdash; aggregate dashboards, LLM cost tracking, historical query analysis</li>
+  <li><strong>S3 + audit monitor</strong> provides the real-time operator cockpit &mdash; immediate visibility during live demos and NOC operations</li>
+  <li>Both read the same span stream, so there&rsquo;s no data divergence</li>
+</ul>
+
+<hr>
+
+<h2>7. Key Requirements from Manifold for Black Hat Vegas</h2>
+
+<p>Black Hat USA 2026 in Las Vegas represents a major expansion: from a back-of-house NOC tool to a <strong>public-facing, vendor-floor &ldquo;Remote NOC&rdquo;</strong> where conference attendees will perform interactive threat hunting using the agentic platform. The scale, visibility, and security requirements are significantly higher.</p>
+
+<h3>7.1 Seamless Integration into Our Custom Application</h3>
+
+<p>We need Manifold to integrate seamlessly into our custom multi-agent architecture with full visibility and monitoring of LLM/agent interactions. Specifically:</p>
+<ul>
+  <li><strong>Support for custom agent topologies</strong>: Our orchestrator &rarr; specialist agent routing doesn&rsquo;t map to standard chatbot or single-agent patterns. Manifold should be able to ingest and visualize our multi-hop distributed traces (orchestrator &rarr; classify &rarr; dispatch &rarr; agent &rarr; Athena/API &rarr; LLM) as a coherent workflow, not just individual spans.</li>
+  <li><strong>GenAI semantic convention support</strong>: The LangSmith OTEL bridge emits <code>gen_ai.*</code> attributes and events. Manifold&rsquo;s LLM panel should fully parse these for prompt/completion display, token accounting, and cost estimation.</li>
+  <li><strong>Custom attribute visibility</strong>: Our spans carry domain-specific attributes (<code>filter.restricted</code>, <code>filter.guardrail</code>, <code>filter.kill_switch</code>, <code>routing.intent</code>, <code>classification.confidence</code>, <code>sql.query</code>, <code>athena.data_scanned_mb</code>). These should be searchable and filterable in Manifold&rsquo;s UI.</li>
+  <li><strong>Reduced integration friction</strong>: The Traceloop SDK dead-end and LangChain import-order issues cost significant time during the Asia build. For Vegas, we need a documented, tested integration path for custom Python FastAPI agents using LangChain + LangSmith OTEL bridge that doesn&rsquo;t require trial-and-error.</li>
+</ul>
+
+<h3>7.2 Alert Triggering and Kill Switch Control Based on Manifold Rulesets</h3>
+
+<p>The current kill switch is manually operated from our audit monitor. For Vegas, we need Manifold to be an active participant in threat response:</p>
+<ul>
+  <li><strong>Automated kill switch activation</strong>: Manifold should be able to call our orchestrator&rsquo;s <code>POST /admin/killswitch/athena</code> endpoint when its rulesets detect concerning patterns &mdash; anomalous LLM behavior, prompt injection attempts, cost spikes, or policy violations.</li>
+  <li><strong>Alert rules on custom metrics</strong>: <code>bhnoc.tokens</code>, <code>bhnoc.cost.usd</code>, and <code>bhnoc.llm.duration_ms</code> are already being exported. Manifold should support alerting thresholds on these (e.g., &ldquo;if <code>bhnoc.cost.usd</code> exceeds $X in Y minutes, trigger kill switch&rdquo;).</li>
+  <li><strong>Pattern detection on trace attributes</strong>: Alert when <code>filter.guardrail=true</code> spikes above a threshold (indicating active probing), or when <code>classification.confidence</code> drops consistently (indicating model confusion).</li>
+  <li><strong>Webhook / API callback</strong>: A documented webhook mechanism for Manifold to push alerts back to our infrastructure for automated response.</li>
+</ul>
+
+<h3>7.3 Administrative Dashboard with Easy Real-Time Monitoring</h3>
+
+<p>We built our own swim-lane dashboard because we needed real-time, unfiltered, demo-legible visibility. For Vegas, we&rsquo;d like to evaluate whether Manifold can provide this natively:</p>
+<ul>
+  <li><strong>Real-time span streaming</strong>: Sub-5-second latency from span emission to dashboard visibility. Our current S3 poll loop achieves ~7s end-to-end; direct OTLP &rarr; dashboard should be faster.</li>
+  <li><strong>Swim-lane or workflow view</strong>: Ability to see the orchestrator &rarr; agent &rarr; LLM chain unfold per-query, not just aggregated metrics. Think &ldquo;what is this specific query doing right now&rdquo; rather than &ldquo;what&rsquo;s the P99 latency.&rdquo;</li>
+  <li><strong>LLM prompt/completion inspection</strong>: Click-to-expand on any LLM span to see the full prompt messages and completion text. This is the primary debugging and demo tool for SOC operators.</li>
+  <li><strong>Custom dashboard embedding</strong>: If Manifold provides a dashboard URL or iframe-able view, we can embed it in our admin interface alongside the swim lanes, giving operators a unified console.</li>
+  <li><strong>See our custom swim-lane implementation</strong> (<code>tools/audit-monitor/</code>) as a reference for the UX we need &mdash; it was built because this specific view didn&rsquo;t exist elsewhere.</li>
+</ul>
+
+<h3>7.4 Technical Debrief on Observed Data</h3>
+
+<p>We are exporting comprehensive telemetry to Manifold &mdash; distributed traces, LLM spans with full prompt/completion text, custom metrics, and correlated logs. For Vegas planning, we need Manifold&rsquo;s analysis of what they observed:</p>
+<ul>
+  <li><strong>LLM behavior patterns</strong>: What did the GenAI span data reveal about model performance, token efficiency, and response quality across the different agent types?</li>
+  <li><strong>Cost and usage trends</strong>: What does the <code>bhnoc.cost.usd</code> and <code>bhnoc.tokens</code> data show over the course of the Asia event? Are there optimization opportunities?</li>
+  <li><strong>Trace topology insights</strong>: From Manifold&rsquo;s perspective, how does our multi-agent distributed trace topology compare to other integrations? Are there structural improvements that would make the data more useful in Manifold&rsquo;s analytics?</li>
+  <li><strong>Security observations</strong>: Did Manifold&rsquo;s analysis surface any patterns in the trace data that we didn&rsquo;t catch ourselves &mdash; unusual query patterns, LLM behavior anomalies, or telemetry gaps?</li>
+  <li><strong>Recommendations for Vegas scale</strong>: The Vegas deployment will have significantly more concurrent users (vendor floor attendees vs. NOC operators). What changes to sampling rate, export frequency, or span structure would Manifold recommend?</li>
+</ul>
+
+<hr>
+
+<h2>8. Design Decisions Worth Highlighting</h2>
+
+<h3>8.1 Silent Guardrails</h3>
+
+<p>Every filtered response &mdash; restricted range, guardrail refusal, kill switch &mdash; returns the <strong>identical</strong> cover response. No error codes, no &ldquo;I can&rsquo;t help with that,&rdquo; no signal whatsoever that content was blocked. This prevents adversarial fuzzing and maintains the illusion of a fully open system while protecting sensitive infrastructure. Admin spans carry the truth (<code>filter.*</code> attributes) for operator visibility.</p>
+
+<h3>8.2 Dual Export (Manifold + S3)</h3>
+
+<p>Not a hedge against Manifold reliability &mdash; a deliberate architectural decision. Manifold owns historical analytics and alerting. S3 owns forensic retention on our terms plus the real-time admin surface. Same data, different access patterns, different retention policies, different failure domains.</p>
+
+<h3>8.3 LangSmith Bridge Over Custom Instrumentation</h3>
+
+<p>Zero lines of manual LLM span code. The LangSmith OTEL bridge captures everything automatically through env-var configuration. This means adding a new agent or changing the LLM provider requires no instrumentation changes &mdash; spans just appear.</p>
+
+<h3>8.4 In-Memory Kill Switch</h3>
+
+<p>Restarting the container disarms the switch. This is a feature, not a bug &mdash; panic brakes shouldn&rsquo;t persist past the event that triggered them, and the operator who flipped it should be the one who decides when to re-enable.</p>
+
+<hr>
+
+<h2>9. Looking Forward &mdash; Black Hat Vegas 2026</h2>
+
+<h3>9.1 The Remote NOC</h3>
+
+<p>The Vegas deployment represents a fundamental expansion: from a back-of-house NOC analyst tool to a <strong>public-facing &ldquo;Remote NOC&rdquo; on the vendor floor</strong> where conference attendees will interactively hunt threats using the agentic platform.</p>
+
+<p>This changes the requirements profile:</p>
+<ul>
+  <li><strong>Higher concurrency</strong> &mdash; dozens of simultaneous users vs. a handful of NOC analysts</li>
+  <li><strong>Adversarial users</strong> &mdash; attendees at a security conference will absolutely probe the guardrails</li>
+  <li><strong>Demo reliability</strong> &mdash; every query needs to return something useful in a reasonable time, with graceful degradation</li>
+  <li><strong>Manifold as mission-critical</strong> &mdash; real-time monitoring and automated kill switch become operational requirements, not nice-to-haves</li>
+</ul>
+
+<h3>9.2 What We&rsquo;re Building</h3>
+<ul>
+  <li>Scaled infrastructure (likely multi-instance or container orchestration)</li>
+  <li>Hardened guardrails tested against red-team probing</li>
+  <li>Manifold-integrated alerting and automated response</li>
+  <li>Enhanced audit dashboard (potentially co-developed with Manifold)</li>
+  <li>Attendee-facing onboarding flow with guided threat hunting scenarios</li>
+</ul>
+
+<h3>9.3 Partnership Model</h3>
+
+<p>The Asia deployment proved the concept. Vegas is where we prove the partnership. We&rsquo;re looking for Manifold to be a deeply integrated observability and safety layer &mdash; not just a trace destination, but an active participant in the platform&rsquo;s security posture through ruleset-driven alerting and automated response.</p>
+
+<hr>
+
+<h2>Appendix A: File Map</h2>
+
+<table>
+  <thead>
+    <tr><th>Path</th><th>Role</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>agents/shared/telemetry.py</code></td><td><code>init_telemetry()</code>, OTLP + S3 exporters, LangSmith bridge wiring</td></tr>
+    <tr><td><code>agents/shared/s3_span_exporter.py</code></td><td>S3SpanExporter (gzip NDJSON to Hive partitions)</td></tr>
+    <tr><td><code>agents/shared/llm_client.py</code></td><td>LangChain wrapper, custom GenAI metrics</td></tr>
+    <tr><td><code>agents/shared/athena_client.py</code></td><td>SELECT-only Athena wrapper, date partitioning</td></tr>
+    <tr><td><code>agents/orchestrator/main.py</code></td><td>Routing, classify, guardrails, kill switch, output sanitizer</td></tr>
+    <tr><td><code>agents/athena-hunter/main.py</code></td><td>NL-to-SQL, multi-query execution, result synthesis</td></tr>
+    <tr><td><code>agents/alert-triage/main.py</code></td><td>Athena-backed alert prioritization</td></tr>
+    <tr><td><code>agents/threat-hunter/main.py</code></td><td>S3 raw Zeek fallback</td></tr>
+    <tr><td><code>agents/thousandeyes-analyst/main.py</code></td><td>ThousandEyes API integration</td></tr>
+    <tr><td><code>packages/web-server/</code></td><td>Fastify web server + static SPA</td></tr>
+    <tr><td><code>tools/audit-monitor/</code></td><td>FastAPI + SSE swim-lane dashboard</td></tr>
+    <tr><td><code>docker-compose.agents.yml</code></td><td>Full 8-container stack</td></tr>
+    <tr><td><code>nginx/nginx-ssl.conf</code></td><td>TLS + reverse proxy with DNS re-resolution</td></tr>
+  </tbody>
+</table>
+
+<h2>Appendix B: Environment Variables (Manifold-Relevant)</h2>
+
+<table>
+  <thead>
+    <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>OTEL_EXPORTER_OTLP_ENDPOINT</code></td><td><code>https://blackcap.app.manifoldsecurity.io:4318</code></td><td>Manifold OTLP base URL</td></tr>
+    <tr><td><code>OTEL_EXPORTER_OTLP_API_KEY</code></td><td><em>(required)</em></td><td>Manifold bearer token</td></tr>
+    <tr><td><code>OTEL_SERVICE_NAME</code></td><td>per agent</td><td><code>bhnocgentic-&lt;role&gt;</code></td></tr>
+    <tr><td><code>OTEL_ENABLED</code></td><td><code>true</code></td><td>Master toggle</td></tr>
+    <tr><td><code>OTEL_SAMPLE_RATE</code></td><td><code>1.0</code></td><td>Parent-based ratio sampler</td></tr>
+    <tr><td><code>OTEL_METRICS_INTERVAL_MS</code></td><td><code>60000</code></td><td>Metric export cadence</td></tr>
+    <tr><td><code>TRACE_S3_ENABLED</code></td><td><code>true</code></td><td>S3 sister exporter toggle</td></tr>
+    <tr><td><code>TRACE_S3_BUCKET</code></td><td><code>blackhat-pope-dev-logs</code></td><td>Span archive bucket</td></tr>
+    <tr><td><code>TRACE_S3_PREFIX</code></td><td><code>bh-asia-26/aing-trace</code></td><td>S3 path prefix</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<p><em>BHNOCgentic &mdash; Black Hat Asia 2026 NOC</em><br>
+<em>Live at <code>https://aing.bhnoc.com</code></em><br>
+<em>Report date: 2026-05-18</em></p>
+
+</body>
+</html>

@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BHNOCgentic // Audit Monitor</title>
+<style>
+  :root {
+    --bg: #030712;
+    --bg-2: #0a1220;
+    --bg-card: #0e1a2e;
+    --border: #182a47;
+    --border-bright: #2a4775;
+    --ice: #1e90ff;
+    --frost: #00d4ff;
+    --text: #d8e6f5;
+    --muted: #6d85a8;
+    --green: #00ff88;
+    --yellow: #ffd000;
+    --orange: #ff6b35;
+    --red: #ff3050;
+    --purple: #c084fc;
+    --font: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    height: 100vh;
+    overflow: hidden;
+  }
+  body { display: flex; flex-direction: column; }
+  header {
+    height: 44px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--bg-2), var(--bg));
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .brand {
+    color: var(--frost);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 13px;
+    text-shadow: 0 0 10px rgba(0,212,255,0.5);
+  }
+  .meta { color: var(--muted); font-size: 11px; }
+  .controls { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .filter { display: flex; align-items: center; gap: 6px; }
+  .filter input[type=checkbox] { accent-color: var(--ice); }
+  .filter label { color: var(--muted); cursor: pointer; user-select: none; }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+  .status-dot.off { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* Kill-switch button — safe idle state is outline-only.
+     When armed, the whole button turns solid red with a pulsing border. */
+  .kill-btn {
+    background: transparent;
+    border: 1px solid var(--orange);
+    color: var(--orange);
+    padding: 4px 10px;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-family: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.15s ease;
+  }
+  .kill-btn:hover:not(.armed) { background: rgba(255,107,53,0.12); color: var(--yellow); border-color: var(--yellow); }
+  .kill-btn.armed {
+    background: var(--red);
+    color: #fff;
+    border-color: var(--red);
+    box-shadow: 0 0 12px rgba(255,48,80,0.6);
+    animation: armed-pulse 1.4s infinite;
+  }
+  .kill-btn.armed:hover { background: #c8263f; }
+  @keyframes armed-pulse {
+    0%,100% { box-shadow: 0 0 12px rgba(255,48,80,0.6); }
+    50%     { box-shadow: 0 0 22px rgba(255,48,80,0.95); }
+  }
+
+  main {
+    flex: 1;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 1px;
+    background: var(--border);
+    min-height: 0;
+  }
+  .lane {
+    flex: 1 1 0;
+    min-width: 240px;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-2);
+    min-height: 0;
+  }
+  .lane-head {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+  .lane-name {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ice);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .lane-count {
+    background: rgba(30,144,255,0.1);
+    border: 1px solid rgba(30,144,255,0.3);
+    color: var(--frost);
+    padding: 1px 7px;
+    font-size: 10px;
+    border-radius: 2px;
+  }
+  .lane-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .lane-body::-webkit-scrollbar { width: 4px; }
+  .lane-body::-webkit-scrollbar-thumb { background: var(--border-bright); }
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--muted);
+    border-radius: 2px;
+    padding: 6px 8px;
+    cursor: pointer;
+    animation: slideIn 0.25s ease;
+    transition: background 0.1s;
+  }
+  .card:hover { background: rgba(30,144,255,0.07); border-color: var(--border-bright); }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+  .card.kind-llm      { border-left-color: var(--yellow); background: rgba(255,208,0,0.04); }
+  .card.kind-athena   { border-left-color: var(--purple); }
+  .card.kind-agent    { border-left-color: var(--frost); }
+  .card.kind-http     { border-left-color: var(--green); opacity: 0.7; }
+  .card.kind-tool     { border-left-color: var(--orange); }
+
+  .card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .card-name {
+    font-size: 11px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .kind-badge {
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 1px 5px;
+    border-radius: 1px;
+    font-weight: 700;
+    background: rgba(120,130,160,0.15);
+    color: var(--muted);
+  }
+  .kind-llm    .kind-badge { background: rgba(255,208,0,0.15); color: var(--yellow); }
+  .kind-athena .kind-badge { background: rgba(192,132,252,0.15); color: var(--purple); }
+  .kind-agent  .kind-badge { background: rgba(0,212,255,0.12); color: var(--frost); }
+  .kind-http   .kind-badge { background: rgba(0,255,136,0.1); color: var(--green); }
+  .kind-tool   .kind-badge { background: rgba(255,107,53,0.12); color: var(--orange); }
+
+  .card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 9px;
+    color: var(--muted);
+    margin-top: 3px;
+    gap: 6px;
+  }
+  .card-dur { color: var(--ice); font-weight: 600; }
+  .card-err { color: var(--red); }
+
+  /* Prompt / URL / query preview under the span name */
+  .card-preview {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.35;
+    max-height: 44px;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    word-break: break-word;
+    border-top: 1px dashed var(--border);
+    padding-top: 3px;
+  }
+  .card.kind-llm .card-preview { color: #d6c36a; }
+  .card.kind-athena .card-preview { color: #b98ff0; }
+
+  /* Detail drawer */
+  .drawer {
+    position: fixed;
+    right: 0; top: 0; bottom: 0;
+    width: 520px;
+    max-width: 90vw;
+    background: var(--bg-2);
+    border-left: 1px solid var(--border-bright);
+    box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    z-index: 50;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .drawer-close {
+    background: none;
+    border: 1px solid var(--border-bright);
+    color: var(--muted);
+    padding: 3px 10px;
+    cursor: pointer;
+    font-family: var(--font);
+    font-size: 11px;
+  }
+  .drawer-close:hover { color: var(--text); border-color: var(--ice); }
+  .drawer-body { flex: 1; overflow: auto; padding: 14px; }
+  .drawer-title {
+    font-size: 14px;
+    color: var(--ice);
+    margin: 0;
+    word-break: break-word;
+  }
+  .drawer-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .kv {
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 4px 12px;
+    font-size: 11px;
+    margin-top: 12px;
+  }
+  .kv .k { color: var(--muted); word-break: break-word; }
+  .kv .v {
+    color: var(--text);
+    word-break: break-word;
+    white-space: pre-wrap;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  .kv .v code {
+    display: block;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 6px 8px;
+    border-radius: 2px;
+    font-size: 11px;
+    color: var(--frost);
+  }
+  .section-label {
+    margin-top: 18px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+    color: var(--ice);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .trace-id { font-size: 10px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">BHNOC&nbsp;&nbsp;//&nbsp;&nbsp;audit monitor</div>
+    <div class="meta" id="meta">connecting…</div>
+    <div class="controls">
+      <span class="filter">
+        <input type="checkbox" id="f-llm" checked /><label for="f-llm">LLM</label>
+      </span>
+      <span class="filter">
+        <input type="checkbox" id="f-agent" checked /><label for="f-agent">AGENT</label>
+      </span>
+      <span class="filter">
+        <input type="checkbox" id="f-athena" checked /><label for="f-athena">ATHENA</label>
+      </span>
+      <span class="filter">
+        <input type="checkbox" id="f-tool" checked /><label for="f-tool">TOOL</label>
+      </span>
+      <span class="filter">
+        <input type="checkbox" id="f-http" /><label for="f-http">HTTP</label>
+      </span>
+      <span class="filter">
+        <input type="checkbox" id="f-span" checked /><label for="f-span">OTHER</label>
+      </span>
+      <span class="filter">
+        <input type="checkbox" id="f-pause" /><label for="f-pause">PAUSE</label>
+      </span>
+      <span class="status-dot" id="dot" title="stream status"></span>
+      <button id="kill-athena" class="kill-btn" title="Emergency: stop routing user queries to the Athena agent. Users will see a generic 'nothing notable' response instead.">KILL ATHENA</button>
+      <form method="POST" action="logout" style="margin:0;">
+        <button type="submit" style="background:transparent;border:1px solid var(--border-bright);color:var(--muted);padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;letter-spacing:0.1em;text-transform:uppercase;">logout</button>
+      </form>
+    </div>
+  </header>
+  <main id="lanes">
+    <!-- lanes injected -->
+  </main>
+
+  <aside class="drawer" id="drawer">
+    <div class="drawer-head">
+      <div>
+        <div class="drawer-title" id="d-title">–</div>
+        <div class="drawer-sub" id="d-sub"></div>
+      </div>
+      <button class="drawer-close" id="d-close">close</button>
+    </div>
+    <div class="drawer-body" id="d-body"></div>
+  </aside>
+
+<script>
+  const FIXED_SERVICES = [
+    "orchestrator", "alert-triage", "athena-hunter", "thousandeyes-analyst",
+  ];
+  // Services we never want to display — they still emit spans but the dashboard
+  // ignores them so the lanes split the viewport evenly.
+  const HIDDEN_SERVICES = new Set(["threat-hunter"]);
+  const MAX_CARDS_PER_LANE = 80;
+
+  const state = {
+    lanes: new Map(), // service -> {head,body,count}
+    filters: { llm: true, agent: true, athena: true, tool: true, http: false, span: true, pause: false },
+    total: 0,
+    byId: new Map(), // span_id → {event, element}
+  };
+
+  function ensureLane(svc) {
+    if (HIDDEN_SERVICES.has(svc)) return null;
+    if (state.lanes.has(svc)) return state.lanes.get(svc);
+    const lane = document.createElement('section');
+    lane.className = 'lane';
+    lane.dataset.svc = svc;
+
+    const head = document.createElement('div');
+    head.className = 'lane-head';
+    head.innerHTML = `<span class="lane-name">${escHtml(svc)}</span><span class="lane-count">0</span>`;
+
+    const body = document.createElement('div');
+    body.className = 'lane-body';
+
+    lane.appendChild(head);
+    lane.appendChild(body);
+    document.getElementById('lanes').appendChild(lane);
+
+    const laneObj = { el: lane, head, body, count: 0, countEl: head.querySelector('.lane-count') };
+    state.lanes.set(svc, laneObj);
+    reorderLanes();
+    return laneObj;
+  }
+
+  function reorderLanes() {
+    const main = document.getElementById('lanes');
+    const entries = [...state.lanes.entries()];
+    entries.sort((a, b) => {
+      const ai = FIXED_SERVICES.indexOf(a[0]);
+      const bi = FIXED_SERVICES.indexOf(b[0]);
+      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+    });
+    for (const [, lane] of entries) main.appendChild(lane.el);
+  }
+
+  function escHtml(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function passes(event) {
+    const k = event.kind || 'span';
+    return state.filters[k] !== false;
+  }
+
+  // ------ Per-card preview extraction ------
+  // Try to surface the most-useful first-line context for an at-a-glance read.
+  // Capped to 300 chars. Covers LangSmith LLM spans, httpx "POST" spans,
+  // Athena SQL spans, and our custom agent spans.
+  function getPreview(event) {
+    const attrs = event.attributes || {};
+    const tryKeys = (keys) => {
+      for (const k of keys) if (attrs[k]) return String(attrs[k]);
+      return null;
+    };
+    const flat = (v) => (typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return String(v); } })());
+
+    // 0. If the span wrote out the final user-facing answer, that's the most
+    // interesting thing to show — prefer it over prompt/SQL.
+    if (attrs['response.text']) {
+      return '→ ' + flat(attrs['response.text']);
+    }
+
+    // 1. LLM completion (actual model output)
+    const genAiCompl = [];
+    for (const [k, v] of Object.entries(attrs)) {
+      const m = /^gen_ai\.completion\.(\d+)\.(role|content)$/.exec(k);
+      if (m) {
+        const idx = Number(m[1]);
+        genAiCompl[idx] = genAiCompl[idx] || {};
+        genAiCompl[idx][m[2]] = v;
+      }
+    }
+    if (genAiCompl.length) {
+      const last = genAiCompl[genAiCompl.length - 1];
+      if (last && last.content) return '← ' + String(last.content);
+    }
+
+    // 2. LLM prompt — prefer the last user message from GenAI-convention keys
+    const genAiMsgs = [];
+    for (const [k, v] of Object.entries(attrs)) {
+      const m = /^gen_ai\.prompt\.(\d+)\.(role|content)$/.exec(k);
+      if (m) {
+        const idx = Number(m[1]);
+        genAiMsgs[idx] = genAiMsgs[idx] || {};
+        genAiMsgs[idx][m[2]] = v;
+      }
+    }
+    if (genAiMsgs.length) {
+      const users = genAiMsgs.filter(m => (m.role || '').toLowerCase() === 'user');
+      const pick = users.length ? users[users.length - 1] : genAiMsgs[genAiMsgs.length - 1];
+      if (pick && pick.content) return String(pick.content);
+    }
+
+    // 2. LangSmith-style lumped inputs/outputs
+    const ls = tryKeys([
+      'langsmith.span.inputs', 'langsmith.inputs', 'input.value', 'inputs',
+      'llm.prompts', 'llm.input_messages', 'prompt', 'prompts',
+    ]);
+    if (ls) return flat(ls);
+
+    // 3. Athena SQL spans (our custom attribute on execute_sql_N spans)
+    const sql = tryKeys(['sql.query', 'sql', 'db.statement', 'athena.query']);
+    if (sql) return flat(sql);
+
+    // 4. Our custom agent spans with user query content
+    const userQ = tryKeys(['analyst.query', 'user.query', 'query', 'query.text']);
+    if (userQ) return flat(userQ);
+
+    // 5. httpx "POST" spans → show HTTP method + URL path
+    const method = attrs['http.method'] || attrs['http.request.method'] || '';
+    const url = attrs['http.url'] || attrs['url.full'] || attrs['http.target'] || attrs['url.path'] || '';
+    if (method || url) {
+      let path = String(url);
+      try {
+        const u = new URL(path);
+        path = u.pathname + (u.search || '');
+      } catch { /* keep as-is */ }
+      return (`${method} ${path}`).trim();
+    }
+
+    // 6. FastAPI route
+    const route = tryKeys(['http.route', 'fastapi.route']);
+    if (route) return flat(route);
+
+    return null;
+  }
+
+  function truncate(s, n = 300) {
+    if (!s) return '';
+    s = String(s).replace(/\s+/g, ' ').trim();
+    return s.length > n ? s.slice(0, n - 1) + '…' : s;
+  }
+
+  function addCard(event) {
+    if (state.filters.pause) return;
+    if (!passes(event)) return;
+    if (event.span_id && state.byId.has(event.span_id)) return;
+    if (HIDDEN_SERVICES.has(event.service)) return;
+
+    const lane = ensureLane(event.service || 'unknown');
+    if (!lane) return;  // hidden service
+    const card = document.createElement('div');
+    card.className = `card kind-${event.kind || 'span'}`;
+    card.dataset.spanId = event.span_id || '';
+
+    const dur = event.duration_ms != null ? (event.duration_ms >= 1000
+      ? (event.duration_ms/1000).toFixed(2) + 's'
+      : Math.round(event.duration_ms) + 'ms') : '';
+    const errBadge = event.status_code === 'ERROR' ? '<span class="card-err">ERR</span>' : '';
+    const kindBadge = (event.kind || 'span').toUpperCase();
+
+    const time = event.start_time ? new Date(event.start_time).toLocaleTimeString('en-US',
+      { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '';
+
+    const previewText = truncate(getPreview(event), 300);
+    const previewHtml = previewText
+      ? `<div class="card-preview" title="${escHtml(previewText)}">${escHtml(previewText)}</div>`
+      : '';
+
+    card.innerHTML = `
+      <div class="card-top">
+        <span class="card-name">${escHtml(event.name || '')}</span>
+        <span class="kind-badge">${escHtml(kindBadge)}</span>
+      </div>
+      ${previewHtml}
+      <div class="card-foot">
+        <span>${escHtml(time)}</span>
+        <span class="card-dur">${escHtml(dur)}</span>
+        ${errBadge}
+      </div>`;
+
+    card.addEventListener('click', () => openDrawer(event));
+
+    lane.body.insertBefore(card, lane.body.firstChild);
+    while (lane.body.children.length > MAX_CARDS_PER_LANE) lane.body.removeChild(lane.body.lastChild);
+    lane.count++;
+    lane.countEl.textContent = lane.count;
+
+    if (event.span_id) state.byId.set(event.span_id, event);
+
+    state.total++;
+    document.getElementById('meta').textContent = `${state.total} spans · ${state.lanes.size} services`;
+  }
+
+  function openDrawer(ev) {
+    const d = document.getElementById('drawer');
+    document.getElementById('d-title').textContent = ev.name || '(unnamed)';
+    const sub = [];
+    if (ev.service) sub.push(ev.service);
+    if (ev.kind) sub.push(ev.kind);
+    if (ev.duration_ms != null) sub.push(Math.round(ev.duration_ms) + 'ms');
+    document.getElementById('d-sub').textContent = sub.join(' · ');
+
+    const body = document.getElementById('d-body');
+    body.innerHTML = '';
+
+    // Basic section
+    const basic = document.createElement('div');
+    basic.className = 'kv';
+    const kvPairs = [
+      ['trace_id', ev.trace_id || ''],
+      ['span_id', ev.span_id || ''],
+      ['parent_span_id', ev.parent_span_id || ''],
+      ['status', ev.status_code || ''],
+      ['start', ev.start_time || ''],
+      ['end', ev.end_time || ''],
+    ];
+    for (const [k, v] of kvPairs) {
+      basic.innerHTML += `<div class="k">${escHtml(k)}</div><div class="v">${escHtml(v)}</div>`;
+    }
+    body.appendChild(basic);
+
+    // LLM-specific section if attrs look like LLM
+    const attrs = ev.attributes || {};
+    const llmKeys = Object.keys(attrs).filter(k =>
+      k.startsWith('gen_ai') || k.startsWith('langsmith') || /prompt|completion|input|output|token|model/i.test(k)
+    );
+    if (llmKeys.length) {
+      const h = document.createElement('div');
+      h.className = 'section-label';
+      h.textContent = 'LLM / GenAI';
+      body.appendChild(h);
+      const grid = document.createElement('div');
+      grid.className = 'kv';
+      for (const k of llmKeys.sort()) {
+        const v = attrs[k];
+        const val = typeof v === 'string' ? v : JSON.stringify(v);
+        grid.innerHTML += `<div class="k">${escHtml(k)}</div><div class="v"><code>${escHtml(val)}</code></div>`;
+      }
+      body.appendChild(grid);
+    }
+
+    // All attributes
+    const otherKeys = Object.keys(attrs).filter(k => !llmKeys.includes(k));
+    if (otherKeys.length) {
+      const h = document.createElement('div');
+      h.className = 'section-label';
+      h.textContent = 'Attributes';
+      body.appendChild(h);
+      const grid = document.createElement('div');
+      grid.className = 'kv';
+      for (const k of otherKeys.sort()) {
+        const v = attrs[k];
+        const val = typeof v === 'string' ? v : JSON.stringify(v);
+        grid.innerHTML += `<div class="k">${escHtml(k)}</div><div class="v">${escHtml(val)}</div>`;
+      }
+      body.appendChild(grid);
+    }
+
+    // Events
+    if (Array.isArray(ev.events) && ev.events.length) {
+      const h = document.createElement('div');
+      h.className = 'section-label';
+      h.textContent = 'Events';
+      body.appendChild(h);
+      for (const e of ev.events) {
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'background:var(--bg);border:1px solid var(--border);padding:6px;font-size:10px;margin:6px 0;white-space:pre-wrap;';
+        pre.textContent = JSON.stringify(e, null, 2);
+        body.appendChild(pre);
+      }
+    }
+
+    // Raw json for debugging
+    const h = document.createElement('div');
+    h.className = 'section-label';
+    h.textContent = 'Raw';
+    body.appendChild(h);
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'background:var(--bg);border:1px solid var(--border);padding:6px;font-size:10px;white-space:pre-wrap;';
+    pre.textContent = JSON.stringify(ev, null, 2);
+    body.appendChild(pre);
+
+    d.classList.add('open');
+  }
+
+  document.getElementById('d-close').addEventListener('click', () =>
+    document.getElementById('drawer').classList.remove('open'));
+
+  for (const id of ['llm','agent','athena','tool','http','span','pause']) {
+    const el = document.getElementById('f-' + id);
+    el.addEventListener('change', () => { state.filters[id] = el.checked; });
+  }
+
+  // Pre-create fixed lanes for predictable ordering at startup
+  for (const svc of FIXED_SERVICES) ensureLane(svc);
+
+  // SSE connection — relative URL so it works under /bh/1337/thetraces/ prefix
+  function connect() {
+    const es = new EventSource('api/stream');
+    const dot = document.getElementById('dot');
+    es.addEventListener('open', () => { dot.classList.remove('off'); });
+    es.addEventListener('error', () => {
+      dot.classList.add('off');
+      es.close();
+      setTimeout(connect, 3000);
+    });
+    es.addEventListener('snapshot', (ev) => {
+      try { JSON.parse(ev.data).forEach(addCard); } catch (_) {}
+    });
+    es.addEventListener('span', (ev) => {
+      try { addCard(JSON.parse(ev.data)); } catch (_) {}
+    });
+  }
+  connect();
+
+  // ========== Kill switch ==========
+  // Polls current state every 5 s so multiple admin tabs stay in sync.
+  let athenaKilled = false;
+
+  function paintKillBtn() {
+    const btn = document.getElementById('kill-athena');
+    if (!btn) return;
+    if (athenaKilled) {
+      btn.textContent = '⚠ RESTORE ATHENA';
+      btn.classList.add('armed');
+      btn.title = 'Athena agent is currently blocked. Click to restore normal routing.';
+    } else {
+      btn.textContent = 'KILL ATHENA';
+      btn.classList.remove('armed');
+      btn.title = 'Emergency: stop routing user queries to the Athena agent. Users will see a generic \'nothing notable\' response instead.';
+    }
+  }
+
+  async function refreshKillState() {
+    try {
+      const r = await fetch('admin/killswitch', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const s = await r.json();
+      athenaKilled = !!s.athena_hunter;
+      paintKillBtn();
+    } catch (_) { /* ignore */ }
+  }
+
+  async function toggleKill() {
+    const want = !athenaKilled;
+    const msg = want
+      ? 'KILL the Athena agent?\n\nAll user queries routed to Athena will silently return a generic cover response until restored.\n\nThis is an emergency control — proceed?'
+      : 'Restore normal Athena routing?';
+    if (!confirm(msg)) return;
+    const btn = document.getElementById('kill-athena');
+    btn.disabled = true;
+    try {
+      const r = await fetch('admin/killswitch/athena', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ killed: want }),
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      athenaKilled = !!s.athena_hunter;
+      paintKillBtn();
+    } catch (e) {
+      alert('Kill-switch toggle failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('kill-athena').addEventListener('click', toggleKill);
+  refreshKillState();
+  setInterval(refreshKillState, 5000);
+</script>
+</body>
+</html>

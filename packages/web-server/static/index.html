@@ -1,0 +1,1771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BlackHat NOCGentic // AI SOC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-void:       #000000;
+      --bg-primary:    #020a14;
+      --bg-secondary:  #041020;
+      --bg-card:       #061428;
+      --bg-input:      #0a1a30;
+      --border:        #0c2a4a;
+      --border-bright: #1a4070;
+      --border-glow:   #1e90ff30;
+      --ice-100:       #e0f4ff;
+      --ice-200:       #b0e0ff;
+      --ice-300:       #60c8ff;
+      --ice-400:       #30a8ff;
+      --ice-500:       #1e90ff;
+      --ice-600:       #0070dd;
+      --ice-700:       #0050aa;
+      --ice-glow:      #1e90ff;
+      --frost:         #00d4ff;
+      --neon-blue:     #4dc9f6;
+      --neon-purple:   #8b5cf6;
+      --accent-red:    #ff3050;
+      --accent-orange: #ff6b35;
+      --accent-yellow: #ffd000;
+      --accent-green:  #00ff88;
+      --text-primary:  #c8dff0;
+      --text-secondary:#6898b8;
+      --text-muted:    #304860;
+      --font-mono:     'Share Tech Mono', 'Courier New', monospace;
+      --font-display:  'Orbitron', 'Share Tech Mono', monospace;
+      --font-sans:     'Share Tech Mono', monospace;
+      --radius:        2px;
+      --transition:    0.18s ease;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg-void);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.6;
+      overflow: hidden;
+    }
+
+    /* CRT scanline overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 20, 40, 0.15) 2px,
+        rgba(0, 20, 40, 0.15) 4px
+      );
+      z-index: 9999;
+    }
+
+    /* CRT flicker */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 100%);
+      z-index: 9998;
+    }
+
+    /* Glow text utility */
+    .glow { text-shadow: 0 0 8px var(--ice-glow), 0 0 20px rgba(30,144,255,0.3); }
+    .glow-frost { text-shadow: 0 0 8px var(--frost), 0 0 20px rgba(0,212,255,0.3); }
+
+    /* ---- Layout ---- */
+    .app {
+      display: grid;
+      grid-template-rows: 60px 1fr;
+      grid-template-columns: 1fr 300px;
+      grid-template-areas:
+        "header header"
+        "main   sidebar";
+      height: 100vh;
+    }
+
+    /* ---- Header ---- */
+    header {
+      grid-area: header;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+      border-bottom: 1px solid var(--border);
+      position: relative;
+      z-index: 10;
+    }
+
+    header::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--ice-500), var(--frost), var(--ice-500), transparent);
+      opacity: 0.6;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .header-logo-img {
+      height: 36px;
+      filter: brightness(1.2);
+    }
+    .header-logo {
+      width: 40px;
+      height: 40px;
+      border: 2px solid var(--ice-500);
+      border-radius: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 900;
+      color: var(--frost);
+      text-shadow: 0 0 10px var(--frost);
+      position: relative;
+      background: rgba(30,144,255,0.08);
+      box-shadow: 0 0 15px rgba(30,144,255,0.2), inset 0 0 15px rgba(30,144,255,0.05);
+    }
+
+    .header-logo::before {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border: 1px solid var(--ice-500);
+      border-radius: 3px;
+      opacity: 0.3;
+    }
+
+    .header-title {
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--ice-200);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-shadow: 0 0 10px rgba(30,144,255,0.4);
+    }
+
+    .header-subtitle {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 1px;
+      border: 1px solid var(--border);
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+      background: rgba(0,10,20,0.6);
+      letter-spacing: 0.05em;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background var(--transition);
+    }
+
+    .status-dot.online  { background: var(--frost); box-shadow: 0 0 8px var(--frost), 0 0 16px rgba(0,212,255,0.4); }
+    .status-dot.offline { background: var(--accent-red); box-shadow: 0 0 6px rgba(255,48,80,0.4); }
+    .status-dot.pulse   { animation: pulse 1.5s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+
+    /* ---- Main chat area ---- */
+    main {
+      grid-area: main;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-right: 1px solid var(--border);
+      background: var(--bg-primary);
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .chat-messages::-webkit-scrollbar { width: 3px; }
+    .chat-messages::-webkit-scrollbar-track { background: transparent; }
+    .chat-messages::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 1px; }
+
+    /* Welcome banner */
+    .welcome {
+      text-align: center;
+      padding: 50px 20px;
+      color: var(--text-secondary);
+    }
+
+    .welcome-icon {
+      font-size: 56px;
+      margin-bottom: 16px;
+      filter: drop-shadow(0 0 20px var(--ice-glow)) drop-shadow(0 0 40px rgba(30,144,255,0.2));
+    }
+
+    .welcome h2 {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--ice-200);
+      margin-bottom: 6px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      text-shadow: 0 0 15px rgba(30,144,255,0.5);
+    }
+
+    .welcome .tagline {
+      font-family: var(--font-display);
+      font-size: 10px;
+      color: var(--frost);
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      opacity: 0.7;
+    }
+
+    .welcome p {
+      font-size: 13px;
+      max-width: 500px;
+      margin: 0 auto 24px;
+      line-height: 1.7;
+      color: var(--text-secondary);
+    }
+
+    .example-queries {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      max-width: 580px;
+      margin: 0 auto;
+    }
+
+    .example-chip {
+      padding: 6px 14px;
+      border: 1px solid var(--border-bright);
+      border-radius: 1px;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--ice-300);
+      background: rgba(30,144,255,0.04);
+      transition: all var(--transition);
+      letter-spacing: 0.02em;
+    }
+
+    .example-chip:hover {
+      background: rgba(30,144,255,0.12);
+      border-color: var(--ice-500);
+      color: var(--ice-100);
+      box-shadow: 0 0 10px rgba(30,144,255,0.15);
+    }
+
+    /* Message bubbles */
+    .message {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-width: 780px;
+      animation: msgIn 0.3s ease;
+    }
+
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .message.user  { align-self: flex-end; align-items: flex-end; }
+    .message.agent { align-self: flex-start; align-items: flex-start; }
+
+    .message-meta {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      letter-spacing: 0.04em;
+    }
+
+    .agent-badge {
+      padding: 2px 8px;
+      border-radius: 1px;
+      font-size: 9px;
+      font-weight: 700;
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .badge-orchestrator          { background: rgba(30,144,255,0.15);  color: var(--ice-400);        border: 1px solid rgba(30,144,255,0.3); }
+    .badge-threat-hunter         { background: rgba(255,48,80,0.12);   color: #ff6080;               border: 1px solid rgba(255,48,80,0.3); }
+    .badge-alert-triage          { background: rgba(255,208,0,0.12);   color: var(--accent-yellow);  border: 1px solid rgba(255,208,0,0.3); }
+    .badge-thousandeyes-analyst  { background: rgba(0,255,136,0.1);    color: var(--accent-green);   border: 1px solid rgba(0,255,136,0.3); }
+    .badge-athena-hunter         { background: rgba(168,85,247,0.12);  color: #c084fc;               border: 1px solid rgba(168,85,247,0.3); }
+    .badge-direct                { background: rgba(0,212,255,0.12);   color: var(--frost);          border: 1px solid rgba(0,212,255,0.3); }
+    .badge-error                 { background: rgba(255,48,80,0.12);   color: #ff6080;               border: 1px solid rgba(255,48,80,0.25); }
+
+    /* ThousandEyes data summary panel */
+    .te-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+      padding: 10px;
+      background: rgba(0,255,136,0.04);
+      border: 1px solid rgba(0,255,136,0.15);
+      border-radius: var(--radius);
+    }
+    .te-stat {
+      text-align: center;
+    }
+    .te-stat-value {
+      font-size: 22px;
+      font-weight: 900;
+      font-family: var(--font-display);
+      color: var(--accent-green);
+      text-shadow: 0 0 10px rgba(0,255,136,0.35);
+    }
+    .te-stat-label {
+      font-size: 9px;
+      font-family: var(--font-display);
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .te-flag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--accent-green);
+      opacity: 0.75;
+    }
+    .te-flag.inactive { color: var(--text-muted); }
+
+    .message-bubble {
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      line-height: 1.7;
+      word-break: break-word;
+    }
+
+    .message.user .message-bubble {
+      background: rgba(30,144,255,0.1);
+      border: 1px solid rgba(30,144,255,0.25);
+      color: var(--ice-200);
+    }
+
+    .message.agent .message-bubble {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      min-width: 200px;
+      position: relative;
+    }
+
+    .message.agent .message-bubble::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, var(--ice-500), transparent);
+      opacity: 0.3;
+    }
+
+    .message.agent .message-bubble.error-bubble {
+      border-color: rgba(255,48,80,0.3);
+      background: rgba(255,48,80,0.06);
+    }
+
+    /* Thinking indicator */
+    .thinking-bubble {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    .thinking-dots span {
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--ice-400);
+      box-shadow: 0 0 6px var(--ice-glow);
+      animation: bounce 1.2s infinite;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+      40%            { transform: translateY(-6px); opacity: 1; }
+    }
+
+    /* Confidence bar */
+    .confidence-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+
+    .confidence-label {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      white-space: nowrap;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .confidence-bar {
+      flex: 1;
+      height: 3px;
+      background: var(--bg-input);
+      border-radius: 1px;
+      overflow: hidden;
+    }
+
+    .confidence-fill {
+      height: 100%;
+      border-radius: 1px;
+      transition: width 0.6s ease;
+    }
+
+    .conf-high   { background: var(--frost); box-shadow: 0 0 6px var(--frost); }
+    .conf-medium { background: var(--accent-yellow); box-shadow: 0 0 6px rgba(255,208,0,0.4); }
+    .conf-low    { background: var(--accent-red); box-shadow: 0 0 6px rgba(255,48,80,0.4); }
+
+    .confidence-pct {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--ice-300);
+      min-width: 32px;
+      text-align: right;
+    }
+
+    /* Data table */
+    .data-table-wrap {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: auto;
+      max-height: 200px;
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      font-family: var(--font-mono);
+    }
+
+    .data-table th {
+      background: var(--bg-input);
+      padding: 6px 10px;
+      text-align: left;
+      color: var(--ice-400);
+      font-weight: 700;
+      font-family: var(--font-display);
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      position: sticky;
+      top: 0;
+      white-space: nowrap;
+    }
+
+    .data-table td {
+      padding: 5px 10px;
+      border-top: 1px solid var(--border);
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    .data-table tr:hover td { background: rgba(30,144,255,0.04); }
+
+    /* Input area */
+    .chat-input-area {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      position: relative;
+    }
+
+    .chat-input-area::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--ice-600), transparent);
+      opacity: 0.4;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+
+    .query-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      color: var(--ice-100);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      resize: none;
+      min-height: 42px;
+      max-height: 140px;
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+      scrollbar-width: thin;
+    }
+
+    .query-input::placeholder { color: var(--text-muted); }
+    .query-input:focus {
+      border-color: var(--ice-500);
+      box-shadow: 0 0 12px rgba(30,144,255,0.15), inset 0 0 12px rgba(30,144,255,0.03);
+    }
+
+    .send-btn {
+      background: transparent;
+      border: 1px solid var(--ice-500);
+      border-radius: var(--radius);
+      padding: 0 20px;
+      height: 42px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 11px;
+      font-family: var(--font-display);
+      color: var(--ice-300);
+      white-space: nowrap;
+      transition: all var(--transition);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .send-btn:hover:not(:disabled) {
+      background: rgba(30,144,255,0.12);
+      color: var(--ice-100);
+      box-shadow: 0 0 15px rgba(30,144,255,0.2);
+      border-color: var(--frost);
+    }
+
+    .send-btn:active:not(:disabled) { transform: scale(0.97); }
+    .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .input-hint {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      font-family: var(--font-mono);
+      letter-spacing: 0.04em;
+    }
+
+    /* ---- Sidebar ---- */
+    .sidebar {
+      grid-area: sidebar;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-secondary);
+      border-left: 1px solid var(--border);
+    }
+
+    .sidebar-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 12px 16px;
+      font-size: 10px;
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--ice-400);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .sidebar-header .live-badge {
+      font-size: 8px;
+      font-family: var(--font-display);
+      padding: 2px 8px;
+      border-radius: 1px;
+      background: rgba(0,212,255,0.1);
+      color: var(--frost);
+      border: 1px solid rgba(0,212,255,0.3);
+      letter-spacing: 0.15em;
+      animation: pulse 2s infinite;
+    }
+
+    .alerts-feed {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .alerts-feed::-webkit-scrollbar { width: 3px; }
+    .alerts-feed::-webkit-scrollbar-thumb { background: var(--border-bright); }
+
+    .alert-card {
+      background: rgba(4,16,32,0.8);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      cursor: default;
+      transition: all var(--transition);
+      animation: slideIn 0.3s ease;
+      position: relative;
+    }
+
+    .alert-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 2px;
+    }
+
+    .alert-card.sev-card-critical::before { background: var(--accent-red); box-shadow: 0 0 6px var(--accent-red); }
+    .alert-card.sev-card-high::before { background: var(--accent-orange); box-shadow: 0 0 6px var(--accent-orange); }
+    .alert-card.sev-card-medium::before { background: var(--accent-yellow); }
+    .alert-card.sev-card-low::before { background: var(--text-muted); }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(10px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .alert-card:hover { border-color: var(--border-bright); background: rgba(30,144,255,0.04); }
+
+    .alert-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .sev-badge {
+      font-size: 8px;
+      font-weight: 700;
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 2px 6px;
+      border-radius: 1px;
+    }
+
+    .sev-critical { background: rgba(255,48,80,0.2);   color: #ff6080; border: 1px solid rgba(255,48,80,0.3); }
+    .sev-high     { background: rgba(255,107,53,0.2);   color: #ff8855; border: 1px solid rgba(255,107,53,0.3); }
+    .sev-medium   { background: rgba(255,208,0,0.15);   color: var(--accent-yellow); border: 1px solid rgba(255,208,0,0.25); }
+    .sev-low      { background: rgba(100,120,140,0.15); color: #7090a8; border: 1px solid rgba(100,120,140,0.25); }
+    .sev-info     { background: rgba(30,144,255,0.12);  color: var(--ice-400); border: 1px solid rgba(30,144,255,0.25); }
+
+    .alert-time {
+      font-size: 9px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    .alert-desc {
+      font-size: 11px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .alert-src {
+      font-size: 9px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+
+    /* Stats row at sidebar bottom */
+    .sidebar-stats {
+      border-top: 1px solid var(--border);
+      padding: 12px 16px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .sidebar-stats::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--ice-600), transparent);
+      opacity: 0.3;
+    }
+
+    .stat-box {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 900;
+      font-family: var(--font-display);
+      color: var(--ice-300);
+      text-shadow: 0 0 10px rgba(30,144,255,0.4);
+    }
+
+    .stat-label {
+      font-size: 8px;
+      font-family: var(--font-display);
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .app {
+        grid-template-columns: 1fr;
+        grid-template-rows: 60px 1fr 260px;
+        grid-template-areas:
+          "header"
+          "main"
+          "sidebar";
+      }
+      .sidebar { border-top: 1px solid var(--border); border-left: none; }
+      .header-subtitle { display: none; }
+    }
+
+    /* iPhone 12 / narrow phones — 390px viewport */
+    @media (max-width: 480px) {
+      html, body { overflow-x: hidden; }
+      .app {
+        grid-template-rows: 50px 1fr 120px;
+        height: 100dvh;
+      }
+      /* On mobile: sidebar is just the rotating alert — no stats row */
+      .sidebar-stats { display: none; }
+      .sidebar-section { flex: 1; min-height: 0; }
+
+      /* Header tightens up */
+      header { padding: 0 10px; }
+      .header-brand { gap: 8px; }
+      .header-logo-img { height: 26px; }
+      .header-title { font-size: 11px; letter-spacing: 0.08em; }
+      .header-status { gap: 8px; font-size: 10px; }
+      .status-indicator { font-size: 9px; }
+
+      /* Main chat column fills width */
+      main { border-right: none; }
+      .chat-messages { padding: 12px; gap: 12px; }
+      .message { max-width: 100%; }
+      .message-bubble {
+        font-size: 13px;
+        padding: 10px 12px;
+        line-height: 1.55;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .message-meta { font-size: 9px; gap: 6px; flex-wrap: wrap; }
+
+      /* Welcome / example queries */
+      .welcome { padding: 24px 12px; }
+      .welcome-icon { font-size: 42px; }
+      .welcome h2 { font-size: 15px; }
+      .welcome p { font-size: 12px; }
+      .example-queries { gap: 6px; }
+      .example-chip { font-size: 10px; padding: 5px 9px; }
+
+      /* Input area */
+      .chat-input-area { padding: 10px 12px; }
+      .input-row { gap: 8px; }
+      .query-input { font-size: 13px; padding: 9px 11px; min-height: 40px; }
+      .send-btn { padding: 0 12px; height: 40px; font-size: 10px; }
+      .input-hint { display: none; }
+
+      /* Sidebar: single-alert rotator fills the whole sidebar on mobile */
+      .sidebar { min-height: 0; }
+      .sidebar-header { padding: 6px 12px; font-size: 9px; flex-shrink: 0; }
+      .alerts-feed {
+        padding: 8px 10px;
+        gap: 0;
+        overflow: hidden;
+        position: relative;
+        flex: 1;
+        display: flex;
+        align-items: center;
+      }
+      .alerts-feed .empty-feed { display: none; }
+      .alert-card {
+        padding: 10px 12px;
+        display: none;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .alert-card.mobile-show {
+        display: block;
+        animation: mobileAlertIn 0.4s ease;
+      }
+      @keyframes mobileAlertIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .alert-desc { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+      .alert-src, .alert-time { font-size: 9px; overflow-wrap: anywhere; }
+
+      /* Data tables / code — keep inside bubble, horizontal scroll locally */
+      .data-table { font-size: 10px; }
+      .data-table th, .data-table td { padding: 4px 8px; }
+      pre.code-block { font-size: 10px; padding: 8px 10px; }
+
+      /* Te-summary grid can get too dense */
+      .te-summary { grid-template-columns: repeat(2, 1fr); gap: 6px; padding: 8px; }
+      .te-stat-value { font-size: 18px; }
+
+      /* Hints */
+      .hint-chip { font-size: 10px; padding: 5px 9px; }
+      .metrics-row { font-size: 9px; gap: 6px; }
+    }
+
+    /* Markdown rendering in answers */
+    .md-header { display: block; color: var(--ice); font-size: 1.05em; margin: 0.6em 0 0.3em; text-transform: uppercase; letter-spacing: 0.05em; }
+    .md-li { padding: 0.15em 0 0.15em 0.8em; line-height: 1.5; }
+    .md-num { color: var(--ice); font-weight: 700; }
+    code.inline-code { background: rgba(30,144,255,0.12); color: var(--frost); padding: 0.1em 0.35em; border-radius: 2px; font-family: var(--font-mono); font-size: 0.9em; }
+
+    /* Collapsible answer sections (Key Entities / Next Steps) */
+    details.answer-section { margin: 0.6em 0; }
+    details.answer-section > summary {
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+      display: block;
+    }
+    details.answer-section > summary::-webkit-details-marker { display: none; }
+    details.answer-section > summary.md-collapsible::before {
+      content: '▸';
+      display: inline-block;
+      width: 1em;
+      color: var(--ice-400);
+      transition: transform 0.15s ease;
+    }
+    details.answer-section[open] > summary.md-collapsible::before {
+      content: '▾';
+    }
+    details.answer-section > summary:hover { color: var(--frost); }
+
+    /* LLM performance metrics */
+    .metrics-row {
+      display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; padding: 8px 0;
+      border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 10px; color: var(--dim);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .metric-item strong { color: var(--frost); margin-left: 3px; }
+
+    /* Follow-up hint chips */
+    .hints-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .hints-label { width: 100%; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); margin-bottom: 2px; font-family: var(--font-display); }
+    .hint-chip {
+      background: rgba(30,144,255,0.08); border: 1px solid rgba(30,144,255,0.3); color: var(--frost);
+      padding: 6px 12px; border-radius: 2px; font-size: 11px; font-family: var(--font-mono);
+      cursor: pointer; transition: all 0.15s ease; line-height: 1.3; max-width: 100%;
+    }
+    .hint-chip:hover { background: rgba(30,144,255,0.18); border-color: var(--ice); color: var(--ice); box-shadow: 0 0 8px rgba(30,144,255,0.2); }
+    .hint-chip::before { content: '> '; color: var(--dim); }
+
+    /* Syntax highlights in answers */
+    .highlight-ip     { color: var(--accent-yellow); font-family: var(--font-mono); font-size: 0.9em; }
+    .highlight-domain { color: var(--frost); font-family: var(--font-mono); font-size: 0.9em; }
+    .highlight-port   { color: var(--accent-orange); font-family: var(--font-mono); font-size: 0.9em; }
+    .highlight-hash   { color: var(--neon-purple); font-family: var(--font-mono); font-size: 0.85em; word-break: break-all; }
+
+    pre.code-block {
+      background: var(--bg-void);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-size: 11px;
+      overflow-x: auto;
+      margin-top: 8px;
+      font-family: var(--font-mono);
+      color: var(--ice-300);
+      scrollbar-width: thin;
+    }
+
+    details.data-collapse {
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    details.data-collapse summary {
+      cursor: pointer;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--ice-500);
+      background: var(--bg-void);
+      user-select: none;
+      list-style: none;
+    }
+    details.data-collapse summary::-webkit-details-marker { display: none; }
+    details.data-collapse summary::before {
+      content: '\25B6  ';
+      font-size: 9px;
+      transition: transform 0.15s;
+      display: inline-block;
+    }
+    details.data-collapse[open] summary::before {
+      transform: rotate(90deg);
+    }
+    details.data-collapse > pre.code-block {
+      margin-top: 0;
+      border: none;
+      border-top: 1px solid var(--border);
+      border-radius: 0;
+      max-height: 400px;
+    }
+    details.data-collapse > .data-table-wrap {
+      border-top: 1px solid var(--border);
+      max-height: 400px;
+      overflow: auto;
+    }
+
+    .empty-feed {
+      text-align: center;
+      padding: 30px 16px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+    .empty-feed .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: 0.5; }
+
+    /* Glitch effect on title hover */
+    .header-title:hover {
+      animation: glitch 0.3s linear;
+    }
+
+    @keyframes glitch {
+      0%   { text-shadow: 2px 0 var(--accent-red), -2px 0 var(--frost); }
+      25%  { text-shadow: -2px 0 var(--accent-red), 2px 0 var(--frost); }
+      50%  { text-shadow: 2px 0 var(--frost), -2px 0 var(--accent-red); }
+      75%  { text-shadow: -1px 0 var(--accent-red), 1px 0 var(--frost); }
+      100% { text-shadow: 0 0 10px rgba(30,144,255,0.4); }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== HEADER ===== -->
+  <header>
+    <div class="header-brand">
+      <img class="header-logo-img" src="https://blackhat.com/images/logo.png" alt="Black Hat" />
+      <div>
+        <div class="header-title">BLACKHAT NOCGentic</div>
+        <div class="header-subtitle">AI-Powered Network Operations Center // 2026</div>
+      </div>
+    </div>
+    <div class="header-status">
+      <div class="status-pill" id="ws-status">
+        <div class="status-dot" id="ws-dot"></div>
+        <span id="ws-label">CONNECTING</span>
+      </div>
+      <div class="status-pill" id="api-status">
+        <div class="status-dot" id="api-dot"></div>
+        <span id="api-label">API</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== MAIN CHAT ===== -->
+  <main>
+    <div class="chat-messages" id="chat-messages">
+      <div class="welcome" id="welcome-banner">
+        <img src="https://blackhat.com/images/logo.png" alt="Black Hat" style="height:48px; margin-bottom:8px; filter: brightness(1.2);" />
+        <h2>BlackHat NOCGentic Operations</h2>
+        <div class="tagline">AI-Powered Network Operations Center // Black Hat Asia 2026</div>
+        <p>
+          Query live network threats, investigate IOCs, triage firewall alerts,
+          or ask about suspicious activity. AI agents analyze NOC telemetry in real time.
+        </p>
+        <div class="example-queries" id="example-queries">
+          <button class="example-chip" onclick="fillQuery(this)">What are the highest-severity threats active right now?</button>
+          <button class="example-chip" onclick="fillQuery(this)">Any beaconing or C2 patterns in outbound traffic today?</button>
+          <button class="example-chip" onclick="fillQuery(this)">Show brute-force or credential attacks on conference hosts</button>
+          <button class="example-chip" onclick="fillQuery(this)">Any packet loss, latency, or BGP issues on conference uplinks?</button>
+          <button class="example-chip" onclick="fillQuery(this)">Are there any network outages impacting attendees right now?</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <div class="input-row">
+        <textarea
+          id="query-input"
+          class="query-input"
+          placeholder="> enter query // threats, alerts, flows, IOCs..."
+          rows="1"
+          maxlength="5000"
+        ></textarea>
+        <button id="send-btn" class="send-btn" onclick="sendQuery()">
+          <span>&#9654;</span> SEND
+        </button>
+      </div>
+      <div class="input-hint">ENTER to send // SHIFT+ENTER new line // 5000 char max</div>
+    </div>
+  </main>
+
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-header">
+        <span>Alert Feed</span>
+        <span class="live-badge">LIVE</span>
+      </div>
+      <div class="alerts-feed" id="alerts-feed">
+        <div class="empty-feed">
+          <div class="empty-icon">&#x1F4E1;</div>
+          <div>Connecting to alert stream...</div>
+        </div>
+      </div>
+    </div>
+    <div class="sidebar-stats">
+      <div class="stat-box">
+        <div class="stat-value" id="stat-total">0</div>
+        <div class="stat-label">Alerts</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="stat-critical">0</div>
+        <div class="stat-label">Critical</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="stat-queries">0</div>
+        <div class="stat-label">Queries</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="stat-agents">4</div>
+        <div class="stat-label">Agents</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+  // ========== State ==========
+  let ws = null;
+  let wsReconnectTimer = null;
+  let queryCount = 0;
+  let totalAlerts = 0;
+  let criticalAlerts = 0;
+  const pollIntervals = new Map();
+
+  // ========== WebSocket ==========
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${proto}://${location.host}/ws`;
+    ws = new WebSocket(url);
+    ws.onopen = () => setWsStatus('online', 'LIVE');
+    ws.onclose = () => { setWsStatus('offline', 'RECONNECT'); ws = null; wsReconnectTimer = setTimeout(connectWS, 4000); };
+    ws.onerror = () => setWsStatus('offline', 'ERROR');
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'alert_feed' && Array.isArray(msg.alerts)) renderAlerts(msg.alerts);
+        else if (msg.type === 'job_update' && msg.job) handleJobUpdate(msg.job);
+      } catch (_) {}
+    };
+  }
+
+  function setWsStatus(state, label) {
+    document.getElementById('ws-dot').className = 'status-dot ' + (state === 'online' ? 'online' : 'offline');
+    document.getElementById('ws-label').textContent = label;
+  }
+
+  // ========== Alert Feed ==========
+  function renderAlerts(alerts) {
+    if (!alerts || alerts.length === 0) return;
+    const feed = document.getElementById('alerts-feed');
+    const empty = feed.querySelector('.empty-feed');
+    if (empty) empty.remove();
+
+    alerts.reverse().forEach(a => {
+      if (feed.querySelector(`[data-id="${a.id}"]`)) return;
+      const card = document.createElement('div');
+      const sev = (a.severity || 'low').toLowerCase();
+      card.className = 'alert-card sev-card-' + sev;
+      card.dataset.id = a.id;
+
+      const sevClass = { critical:'sev-critical', high:'sev-high', medium:'sev-medium', low:'sev-low', informational:'sev-info' }[sev] || 'sev-low';
+      const ts = new Date(a.timestamp);
+      const timeStr = ts.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+
+      card.innerHTML = `
+        <div class="alert-top">
+          <span class="sev-badge ${sevClass}">${sev}</span>
+          <span class="alert-time">${timeStr}</span>
+        </div>
+        <div class="alert-desc">${escHtml(a.description)}</div>
+        <div class="alert-src">${escHtml(a.source||'')}${a.srcIp?' // '+escHtml(a.srcIp):''}${a.dstPort?':'+a.dstPort:''}</div>
+      `;
+      feed.insertBefore(card, feed.firstChild);
+      totalAlerts++;
+      if (sev === 'critical') criticalAlerts++;
+      document.getElementById('stat-total').textContent = totalAlerts;
+      document.getElementById('stat-critical').textContent = criticalAlerts;
+    });
+
+    while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+    // On mobile, ensure exactly one card is visible after new arrivals
+    if (mobileAlertMode) showMobileAlert();
+  }
+
+  // ========== Mobile single-alert rotator ==========
+  const mobileMQ = window.matchMedia('(max-width: 480px)');
+  let mobileAlertMode = mobileMQ.matches;
+  let mobileRotateTimer = null;
+
+  function showMobileAlert(specific) {
+    const feed = document.getElementById('alerts-feed');
+    if (!feed) return;
+    const cards = Array.from(feed.querySelectorAll('.alert-card'));
+    if (cards.length === 0) return;
+    const next = specific || cards[Math.floor(Math.random() * cards.length)];
+    cards.forEach(c => c.classList.remove('mobile-show'));
+    next.classList.add('mobile-show');
+  }
+
+  function scheduleMobileRotate() {
+    if (mobileRotateTimer) clearTimeout(mobileRotateTimer);
+    if (!mobileAlertMode) return;
+    const delay = 3000 + Math.random() * 2000; // 3–5 s
+    mobileRotateTimer = setTimeout(() => {
+      showMobileAlert();
+      scheduleMobileRotate();
+    }, delay);
+  }
+
+  function applyMobileAlertMode() {
+    mobileAlertMode = mobileMQ.matches;
+    if (mobileAlertMode) {
+      showMobileAlert();
+      scheduleMobileRotate();
+    } else {
+      if (mobileRotateTimer) clearTimeout(mobileRotateTimer);
+      mobileRotateTimer = null;
+      const feed = document.getElementById('alerts-feed');
+      if (feed) feed.querySelectorAll('.alert-card.mobile-show')
+                    .forEach(c => c.classList.remove('mobile-show'));
+    }
+  }
+  mobileMQ.addEventListener('change', applyMobileAlertMode);
+
+  async function loadInitialAlerts() {
+    try {
+      const resp = await fetch('/api/v1/alerts/recent');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.alerts && data.alerts.length > 0) renderAlerts(data.alerts);
+      // No demo fallback here — the boot timer handles empty feed after grace.
+    } catch (_) { /* WebSocket trickle will populate */ }
+  }
+
+  function injectDemoAlerts() {
+    const now = Date.now();
+    renderAlerts([
+      { id:'d1', severity:'critical', source:'paloalto', description:'C2 beacon detected -- high frequency TCP/4444', srcIp:'172.16.4.88', dstPort:4444, timestamp:new Date(now-12000).toISOString() },
+      { id:'d2', severity:'high', source:'corelight', description:'Port scan -- 1,247 SYN packets in 10s', srcIp:'45.83.193.150', timestamp:new Date(now-45000).toISOString() },
+      { id:'d3', severity:'high', source:'paloalto', description:'Outbound DENY -- blocked TOR exit node connection', srcIp:'10.0.2.15', dstPort:9001, timestamp:new Date(now-90000).toISOString() },
+      { id:'d4', severity:'medium', source:'corelight', description:'DNS tunneling suspected -- 63-char subdomain', srcIp:'10.0.1.22', timestamp:new Date(now-130000).toISOString() },
+      { id:'d5', severity:'medium', source:'partner', description:'Threat intel match -- IP on Emerging Threats blocklist', srcIp:'185.220.101.45', timestamp:new Date(now-200000).toISOString() },
+      { id:'d6', severity:'low', source:'corelight', description:'Unusual protocol -- SSH on TCP/8022', srcIp:'192.168.5.14', dstPort:8022, timestamp:new Date(now-310000).toISOString() },
+    ]);
+  }
+
+  function startDemoAlertTicker() {
+    const templates = [
+      { severity:'high', source:'paloalto', descriptions:['Lateral movement -- SMB to multiple hosts','Repeated auth failure -- brute force suspected','Outbound DENY to GeoIP:CN -- policy block'] },
+      { severity:'medium', source:'corelight', descriptions:['Long connection -- 3600s on TCP/443','HTTP POST to suspicious URI','TLS cert mismatch on internal host'] },
+      { severity:'critical', source:'partner', descriptions:['Ransomware signature in flow data','Known APT C2 domain queried','Data exfil pattern -- 50MB outbound burst'] },
+      { severity:'low', source:'corelight', descriptions:['ICMP sweep across /24','Expired TLS cert observed','Cleartext creds in HTTP form-post'] },
+      { severity:'high', source:'thousandeyes', descriptions:['BGP route hijack detected -- prefix withdrawn','Packet loss >15% on uplink to conference ISP','Latency spike -- 320ms avg on external probes'] },
+      { severity:'medium', source:'thousandeyes', descriptions:['ThousandEyes test failure -- HTTP 503 from CDN','Path change detected -- 3 additional AS hops','Network reachability degraded -- 2 agents reporting'] },
+    ];
+    let counter = 100;
+    setInterval(() => {
+      const t = templates[Math.floor(Math.random()*templates.length)];
+      renderAlerts([{
+        id:'demo-'+(counter++), severity:t.severity, source:t.source,
+        description:t.descriptions[Math.floor(Math.random()*t.descriptions.length)],
+        srcIp:randomIp(), timestamp:new Date().toISOString(),
+      }]);
+    }, 8000 + Math.random()*12000);
+  }
+
+  function randomIp() {
+    const p = ['45.83.','185.220.','91.108.','194.165.','80.82.'][Math.floor(Math.random()*5)];
+    return p + Math.floor(Math.random()*200) + '.' + Math.floor(Math.random()*254);
+  }
+
+  // ========== Chat ==========
+  function fillQuery(btn) {
+    const input = document.getElementById('query-input');
+    input.value = btn.textContent;
+    autoResize(input);
+    input.focus();
+  }
+
+  function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; }
+
+  document.getElementById('query-input').addEventListener('input', function() { autoResize(this); });
+  document.getElementById('query-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(); }
+  });
+
+  // ========== Client session tracking ==========
+  // localStorage-backed stable ID so the same person is recognised across
+  // refreshes / restarts / even if cookies are cleared. Server pairs this with
+  // the bh_sid HttpOnly cookie; if either survives, continuity is maintained.
+  function getClientSessionId() {
+    try {
+      let id = localStorage.getItem('bhnoc.client_id');
+      if (!id) {
+        id = (crypto.randomUUID && crypto.randomUUID()) ||
+             ('c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
+        localStorage.setItem('bhnoc.client_id', id);
+      }
+      return id;
+    } catch (_) {
+      // Private mode / storage blocked — fall back to an in-memory UUID for this tab
+      if (!window.__bhnocTabId) {
+        window.__bhnocTabId = 'c-tab-' + Math.random().toString(36).slice(2, 12);
+      }
+      return window.__bhnocTabId;
+    }
+  }
+
+  async function sendQuery() {
+    const input = document.getElementById('query-input');
+    const query = input.value.trim();
+    if (!query) return;
+
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = true;
+
+    const banner = document.getElementById('welcome-banner');
+    if (banner) banner.remove();
+
+    appendMessage('user', query);
+    input.value = '';
+    input.style.height = 'auto';
+
+    const thinkingId = 'thinking-' + Date.now();
+    appendThinking(thinkingId);
+
+    queryCount++;
+    document.getElementById('stat-queries').textContent = queryCount;
+
+    try {
+      // AbortController so the fetch can't hang forever (browser default is infinite)
+      const ctrl = new AbortController();
+      const killer = setTimeout(() => ctrl.abort(), 30000);
+      let resp;
+      try {
+        resp = await fetch('/api/v1/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Client-Session': getClientSessionId(),
+          },
+          body: JSON.stringify({ query }),
+          credentials: 'same-origin',
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(killer);
+      }
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        removeThinking(thinkingId);
+        appendAgentMessage({ status:'error', error:err.error||`HTTP ${resp.status}`, agentUsed:'system' });
+        sendBtn.disabled = false;
+        return;
+      }
+
+      console.log('[sendQuery] POST ok — parsing body');
+      let body;
+      try { body = await resp.json(); }
+      catch (jsonErr) {
+        console.error('[sendQuery] JSON parse failed:', jsonErr);
+        removeThinking(thinkingId);
+        appendAgentMessage({ status:'error', error:'Malformed server response: ' + jsonErr.message, agentUsed:'system' });
+        sendBtn.disabled = false;
+        return;
+      }
+      const jobId = body && body.jobId;
+      console.log('[sendQuery] got jobId=', jobId);
+      if (!jobId) {
+        removeThinking(thinkingId);
+        appendAgentMessage({ status:'error', error:'Server did not return a jobId', agentUsed:'system' });
+        sendBtn.disabled = false;
+        return;
+      }
+
+      // WebSocket subscribe — best-effort, must never abort the poll flow.
+      try {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type:'subscribe', jobId }));
+      } catch (wsErr) {
+        console.warn('[sendQuery] ws.send failed (non-fatal):', wsErr);
+      }
+
+      try {
+        pollJob(jobId, thinkingId, sendBtn);
+        console.log('[sendQuery] pollJob scheduled for', jobId);
+      } catch (pollErr) {
+        console.error('[sendQuery] pollJob threw synchronously:', pollErr);
+        removeThinking(thinkingId);
+        appendAgentMessage({ status:'error', error:'Failed to start polling: ' + pollErr.message, agentUsed:'system' });
+        sendBtn.disabled = false;
+      }
+    } catch (err) {
+      console.error('[sendQuery] outer catch:', err);
+      removeThinking(thinkingId);
+      const msg = err && err.name === 'AbortError'
+        ? 'Request timed out — server may be overloaded. Please retry.'
+        : (err && err.message) || 'Network error — check DevTools → Network.';
+      appendAgentMessage({ status:'error', error: msg, agentUsed:'system' });
+      sendBtn.disabled = false;
+    }
+  }
+
+  function pollJob(jobId, thinkingId, sendBtn) {
+    let attempts = 0;
+    let consecFail = 0;
+    const timer = setInterval(async () => {
+      attempts++;
+      try {
+        const resp = await fetch(`/api/v1/chat/${jobId}`);
+        if (!resp.ok) { clearInterval(timer); removeThinking(thinkingId); appendAgentMessage({status:'error',error:`Poll error ${resp.status}`,agentUsed:'system'}); sendBtn.disabled=false; return; }
+        const job = await resp.json();
+        consecFail = 0;
+        if (job.status === 'done' || job.status === 'error') {
+          clearInterval(timer);
+          removeThinking(thinkingId);
+          // If the WS job_update already rendered this job, skip
+          if (renderedJobs.has(job.jobId)) { sendBtn.disabled = false; return; }
+          renderedJobs.add(job.jobId);
+          // Defensive render — if any later formatter throws, the bubble still appears
+          // instead of the UI looking frozen on "thinking".
+          try {
+            appendAgentMessage(job);
+          } catch (renderErr) {
+            console.error('appendAgentMessage threw:', renderErr);
+            try {
+              const msgs = document.getElementById('chat-messages');
+              const div = document.createElement('div');
+              div.className = 'message agent';
+              div.innerHTML =
+                '<div class="message-meta"><span class="agent-badge badge-error">RENDER ERROR</span></div>' +
+                '<div class="message-bubble error-bubble"><strong style="color:#ff6080;">Client render error:</strong> ' +
+                escHtml(String(renderErr && renderErr.message || renderErr)) + '<br><br>' +
+                '<details><summary>Raw answer</summary><pre class="code-block">' +
+                escHtml(job.answer || '') + '</pre></details></div>';
+              msgs.appendChild(div);
+              scrollToBottom(msgs);
+            } catch (_) { /* last-resort: nothing we can do */ }
+          }
+          sendBtn.disabled = false;
+          if (job.status === 'done' && (!job.hints || job.hints.length === 0)) pollForHints(jobId);
+        }
+        else if (attempts >= 90) { clearInterval(timer); removeThinking(thinkingId); appendAgentMessage({status:'error',error:'Timeout after 180s',agentUsed:'system'}); sendBtn.disabled = false; }
+      } catch (err) {
+        consecFail++;
+        console.warn('poll failed (' + consecFail + '):', err);
+        if (consecFail >= 5) {
+          clearInterval(timer);
+          removeThinking(thinkingId);
+          appendAgentMessage({status:'error', error:'Lost contact with server — check DevTools → Network.', agentUsed:'system'});
+          sendBtn.disabled = false;
+        }
+      }
+    }, 2000);
+    pollIntervals.set(jobId, timer);
+  }
+
+  function pollForHints(jobId) {
+    let hintAttempts = 0;
+    const hintTimer = setInterval(async () => {
+      hintAttempts++;
+      if (hintAttempts > 10) { clearInterval(hintTimer); return; }
+      try {
+        const resp = await fetch(`/api/v1/chat/${jobId}`);
+        if (!resp.ok) return;
+        const job = await resp.json();
+        if (job.hints && job.hints.length > 0) {
+          clearInterval(hintTimer);
+          const container = document.getElementById(`hints-${jobId}`);
+          if (container) {
+            container.innerHTML = `<span class="hints-label">Next Steps</span>${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
+            container.querySelectorAll('.hint-chip').forEach(chip => {
+              chip.addEventListener('click', () => {
+                const q = chip.getAttribute('data-hint');
+                if (q) { document.getElementById('query-input').value = q; document.getElementById('query-input').focus(); sendQuery(); }
+              });
+            });
+          }
+        }
+      } catch (_) {}
+    }, 2000);
+  }
+
+  // Jobs we've already rendered — de-duplicates WS job_update vs pollJob races.
+  const renderedJobs = new Set();
+
+  function handleJobUpdate(job) {
+    if (!job || !job.jobId) return;
+    if (job.status === 'done' || job.status === 'error') {
+      // Cancel any outstanding poll for this job
+      const timer = pollIntervals.get(job.jobId);
+      if (timer) { clearInterval(timer); pollIntervals.delete(job.jobId); }
+      // Render the result if we haven't already — this is the fast path when
+      // the server finishes before pollJob's first 2s tick (e.g. cover / guardrail).
+      if (renderedJobs.has(job.jobId)) return;
+      renderedJobs.add(job.jobId);
+      // Find and remove any thinking bubble still on screen
+      const msgs = document.getElementById('chat-messages');
+      if (msgs) {
+        const stillThinking = msgs.querySelectorAll('[id^="thinking-"]');
+        stillThinking.forEach(el => el.remove());
+      }
+      try { appendAgentMessage(job); }
+      catch (renderErr) { console.error('[handleJobUpdate] render failed:', renderErr); }
+      // Re-enable the send button
+      const sendBtn = document.getElementById('send-btn');
+      if (sendBtn) sendBtn.disabled = false;
+      // If no hints arrived with the update, poll for them
+      if (job.status === 'done' && (!job.hints || job.hints.length === 0)) {
+        pollForHints(job.jobId);
+      }
+    }
+  }
+
+  // ========== Message rendering ==========
+  function appendMessage(role, text) {
+    const msgs = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    div.innerHTML = `
+      <div class="message-meta">${role === 'user' ? '> YOU' : 'SYSTEM'} // ${timeNow()}</div>
+      <div class="message-bubble">${escHtml(text)}</div>
+    `;
+    msgs.appendChild(div);
+    scrollToBottom(msgs);
+  }
+
+  function appendThinking(id) {
+    const msgs = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.id = id;
+    div.innerHTML = `
+      <div class="message-meta">AGENT // ${timeNow()}</div>
+      <div class="thinking-bubble">
+        <div class="thinking-dots"><span></span><span></span><span></span></div>
+        Processing query...
+      </div>
+    `;
+    msgs.appendChild(div);
+    scrollToBottom(msgs);
+  }
+
+  function removeThinking(id) { const el = document.getElementById(id); if (el) el.remove(); }
+
+  function appendAgentMessage(job) {
+    const msgs = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'message agent';
+
+    const agentKey = (job.agentUsed || 'direct').toLowerCase().replace(/\s+/g, '-');
+    const agentLabel = { orchestrator:'ORCHESTRATOR', 'threat-hunter':'THREAT HUNTER', 'alert-triage':'ALERT TRIAGE', 'thousandeyes-analyst':'NET MONITOR', 'athena-hunter':'ATHENA SQL', direct:'DIRECT', 'direct-fallback':'DIRECT', system:'SYSTEM' }[agentKey] || (job.agentUsed||'AGENT').toUpperCase();
+    const badgeClass = { orchestrator:'badge-orchestrator', 'threat-hunter':'badge-threat-hunter', 'alert-triage':'badge-alert-triage', 'thousandeyes-analyst':'badge-thousandeyes-analyst', 'athena-hunter':'badge-athena-hunter', direct:'badge-direct', 'direct-fallback':'badge-direct', system:'badge-error' }[agentKey] || 'badge-direct';
+
+    let bubbleContent = '';
+    if (job.status === 'error') {
+      bubbleContent = `<div class="message-bubble error-bubble"><strong style="color:#ff6080;">ERROR:</strong> ${escHtml(job.error||'Unknown error')}</div>`;
+    } else {
+      const answerHtml = formatAnswer(job.answer || '');
+      let confHtml = '';
+      if (typeof job.confidence === 'number') {
+        const pct = Math.round(job.confidence * 100);
+        const fillClass = pct >= 70 ? 'conf-high' : pct >= 40 ? 'conf-medium' : 'conf-low';
+        confHtml = `<div class="confidence-row"><span class="confidence-label">Confidence</span><div class="confidence-bar"><div class="confidence-fill ${fillClass}" style="width:${pct}%"></div></div><span class="confidence-pct">${pct}%</span></div>`;
+      }
+      let metricsHtml = '';
+      const m = job.data?.llm_metrics;
+      if (m) {
+        const items = [
+          m.model ? `<span class="metric-item">MODEL <strong>${escHtml(m.model)}</strong></span>` : '',
+          m.latency_ms ? `<span class="metric-item">LATENCY <strong>${(m.latency_ms/1000).toFixed(1)}s</strong></span>` : '',
+          m.tok_per_sec ? `<span class="metric-item">SPEED <strong>${m.tok_per_sec} tok/s</strong></span>` : '',
+          m.completion_tokens ? `<span class="metric-item">OUTPUT <strong>${m.completion_tokens} tok</strong></span>` : '',
+          m.thinking_tokens ? `<span class="metric-item">THINKING <strong>${m.thinking_tokens} tok</strong></span>` : '',
+          m.prompt_tokens ? `<span class="metric-item">PROMPT <strong>${m.prompt_tokens} tok</strong></span>` : '',
+        ].filter(Boolean).join('');
+        metricsHtml = `<div class="metrics-row">${items}</div>`;
+      }
+      let dataHtml = '';
+      if (job.data && agentKey === 'thousandeyes-analyst') {
+        dataHtml = renderThousandEyesData(job.data);
+      } else if (job.data) {
+        const rawDataHtml = renderData({...job.data, llm_metrics: undefined});
+        dataHtml = rawDataHtml ? `<details class="data-collapse"><summary>Raw Data</summary>${rawDataHtml}</details>` : '';
+      }
+      const hintsId = job.jobId ? `hints-${job.jobId}` : `hints-${Date.now()}`;
+      let hintsInner = '';
+      if (job.hints && job.hints.length > 0) {
+        hintsInner = `<span class="hints-label">Next Steps</span>${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
+      }
+      const hintsHtml = `<div class="hints-row" id="${hintsId}">${hintsInner}</div>`;
+      bubbleContent = `<div class="message-bubble">${answerHtml}${confHtml}${metricsHtml}${dataHtml}${hintsHtml}</div>`;
+    }
+
+    div.innerHTML = `
+      <div class="message-meta">
+        <span class="agent-badge ${badgeClass}">${agentLabel}</span>
+        ${timeNow()}
+        ${job.completedAt ? '// ' + elapsed(job.createdAt, job.completedAt) : ''}
+      </div>
+      ${bubbleContent}
+    `;
+    msgs.appendChild(div);
+    // Wire up hint chip clicks
+    div.querySelectorAll('.hint-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const query = chip.getAttribute('data-hint');
+        if (query) {
+          document.getElementById('query-input').value = query;
+          document.getElementById('query-input').focus();
+          sendQuery();
+        }
+      });
+    });
+    scrollToBottom(msgs);
+  }
+
+  // Headings that render as collapsible sections
+  const COLLAPSIBLE_HEADINGS = new Set([
+    'key entities', 'next steps', 'recommended next steps', 'recommended actions', 'evidence',
+  ]);
+
+  function formatInline(s) {
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    s = s.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+    s = s.replace(/^[\s]*[-*]\s+(.+)$/gm, '<div class="md-li">• $1</div>');
+    s = s.replace(/^[\s]*(\d+)\.\s+(.+)$/gm, '<div class="md-li"><span class="md-num">$1.</span> $2</div>');
+    s = s.replace(/\n/g, '<br>');
+    s = s.replace(/(<\/div>)<br>/g, '$1');
+    s = s.replace(/(<\/pre>)<br>/g, '$1');
+    // IOC highlights
+    s = s.replace(/\b(\d{1,3}(?:\.\d{1,3}){3})\b/g, '<span class="highlight-ip">$1</span>');
+    s = s.replace(/\b([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?)\b/g, (m, d) => /^\d/.test(d) ? m : `<span class="highlight-domain">${d}</span>`);
+    s = s.replace(/(?:TCP|UDP|port)\/?(\d{2,5})/gi, (m, p) => m.replace(p, `<span class="highlight-port">${p}</span>`));
+    s = s.replace(/\b([0-9a-fA-F]{32,64})\b/g, '<span class="highlight-hash">$1</span>');
+    return s;
+  }
+
+  function renderSections(text) {
+    // Split on ## headings so we can wrap select sections in <details>
+    const sections = [];
+    const re = /^##\s+(.+?)\s*$/gm;
+    let lastEnd = 0;
+    let lastHeading = null;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      sections.push({ heading: lastHeading, body: text.slice(lastEnd, m.index) });
+      lastHeading = m[1];
+      lastEnd = m.index + m[0].length;
+    }
+    sections.push({ heading: lastHeading, body: text.slice(lastEnd) });
+
+    let out = '';
+    for (const sec of sections) {
+      const body = formatInline(escHtml(sec.body.replace(/^\n+|\n+$/g, '')));
+      if (!sec.heading) {
+        if (body.trim()) out += body;
+        continue;
+      }
+      const collapsible = COLLAPSIBLE_HEADINGS.has(sec.heading.toLowerCase().trim());
+      const safeHeading = escHtml(sec.heading);
+      if (collapsible) {
+        out += `<details class="answer-section"><summary class="md-header md-collapsible">${safeHeading}</summary>${body}</details>`;
+      } else {
+        out += `<strong class="md-header">${safeHeading}</strong>${body}`;
+      }
+    }
+    return out;
+  }
+
+  function formatAnswer(text) {
+    if (!text) return '';
+    const parts = text.split(/(```[\s\S]*?```)/g);
+    let out = '';
+    for (const part of parts) {
+      if (part.startsWith('```')) {
+        const inner = part.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
+        out += `<pre class="code-block">${escHtml(inner)}</pre>`;
+      } else {
+        out += renderSections(part);
+      }
+    }
+    return out;
+  }
+
+  function renderThousandEyesData(data) {
+    const alertCount = data.active_alert_count ?? 0;
+    const testCount  = data.test_count ?? 0;
+    const hasBgp     = !!data.has_bgp_data;
+    const hasResults = !!data.has_test_results;
+    const alertColor = alertCount > 0 ? 'color:var(--accent-red);text-shadow:0 0 10px rgba(255,48,80,0.4)' : '';
+    return `
+      <div class="te-summary">
+        <div class="te-stat"><div class="te-stat-value" style="${alertColor}">${alertCount}</div><div class="te-stat-label">Active Alerts</div></div>
+        <div class="te-stat"><div class="te-stat-value">${testCount}</div><div class="te-stat-label">Tests Checked</div></div>
+        <div class="te-stat">
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:center;margin-top:4px;">
+            <span class="te-flag ${hasBgp?'':'inactive'}">${hasBgp?'✓':'–'} BGP Data</span>
+            <span class="te-flag ${hasResults?'':'inactive'}">${hasResults?'✓':'–'} Perf Results</span>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderData(data) {
+    if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'object') {
+      const keys = Object.keys(data[0]).slice(0, 6);
+      let html = '<div class="data-table-wrap"><table class="data-table"><thead><tr>';
+      keys.forEach(k => { html += `<th>${escHtml(k)}</th>`; });
+      html += '</tr></thead><tbody>';
+      data.slice(0, 20).forEach(row => {
+        html += '<tr>';
+        keys.forEach(k => { const v = row[k] !== undefined ? String(row[k]) : ''; html += `<td>${escHtml(v.slice(0,80))}</td>`; });
+        html += '</tr>';
+      });
+      return html + '</tbody></table></div>';
+    }
+    if (typeof data === 'object') return `<pre class="code-block">${escHtml(JSON.stringify(data, null, 2))}</pre>`;
+    return '';
+  }
+
+  // ========== Utilities ==========
+  function escHtml(str) { return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function timeNow() { return new Date().toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit' }); }
+  function elapsed(start, end) { const ms = new Date(end) - new Date(start); return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`; }
+  function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
+
+  async function checkApiHealth() {
+    try {
+      const resp = await fetch('/health', { signal: AbortSignal.timeout(3000) });
+      const dot = document.getElementById('api-dot');
+      const lbl = document.getElementById('api-label');
+      if (resp.ok) { dot.className = 'status-dot online'; lbl.textContent = 'API ONLINE'; }
+      else { dot.className = 'status-dot offline'; lbl.textContent = 'API ERROR'; }
+    } catch (_) { document.getElementById('api-dot').className = 'status-dot offline'; document.getElementById('api-label').textContent = 'API DOWN'; }
+  }
+
+  // ========== Boot ==========
+  connectWS();
+  loadInitialAlerts();
+  applyMobileAlertMode();
+  // Real alerts now trickle from the Athena-backed cache via WebSocket.
+  // Demo ticker is kept as a fallback only if the server feed is silent.
+  setTimeout(() => {
+    const feed = document.getElementById('alerts-feed');
+    if (feed && feed.querySelector('.empty-feed')) startDemoAlertTicker();
+  }, 20000);
+  checkApiHealth();
+  setInterval(checkApiHealth, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,547 @@
+"""
+ThousandEyes Analyst Agent — port 8004
+
+Queries the ThousandEyes API v7 for network monitoring telemetry and
+synthesises a concise NetOps summary with per-test health classification.
+
+Strategy:
+  1. Pull all configured tests (paginated).
+  2. Fetch latest results for each in parallel (batched).
+  3. Classify each test green / yellow / red against thresholds.
+  4. Build an aggregated summary object for the LLM — not the raw JSON.
+  5. LLM synthesises a short "everything good except X, Y, Z" style answer.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import httpx
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+_SHARED = str(Path(__file__).resolve().parents[2] / "shared")
+if _SHARED not in sys.path:
+    sys.path.insert(0, _SHARED)
+
+from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
+from telemetry import init_telemetry, get_tracer, get_meter, instrument_fastapi_app  # noqa: E402
+
+init_telemetry(service_name="bhnocgentic-thousandeyes-analyst")
+
+_meter = get_meter()
+_request_counter  = _meter.create_counter("bhnoc.thousandeyes_analyst.requests", description="Total thousandeyes-analyst requests")
+_request_duration = _meter.create_histogram("bhnoc.thousandeyes_analyst.duration_ms", unit="ms", description="ThousandEyes analyst request latency")
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("thousandeyes-analyst")
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+TE_BEARER_TOKEN = os.getenv("THOUSANDEYES_BEARER_TOKEN", "")
+TE_BASE_URL     = os.getenv("THOUSANDEYES_BASE_URL", "https://api.thousandeyes.com/v7")
+# Pin to a specific account group. Default to BH ASIA (2094085) — the tokens
+# we use often have access to multiple account groups (BlackHat default,
+# BH ASIA, BH USA, BH Europe) and tests are partitioned by conference.
+TE_ACCOUNT_GROUP = os.getenv("THOUSANDEYES_ACCOUNT_GROUP", "2094085")
+TE_TIMEOUT      = 20.0
+TE_FETCH_CONCURRENCY = 8  # parallel result fetches
+
+
+def _te_params(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Default query params — always includes aid when configured."""
+    p: dict[str, Any] = {}
+    if TE_ACCOUNT_GROUP:
+        p["aid"] = TE_ACCOUNT_GROUP
+    if extra:
+        p.update(extra)
+    return p
+
+# Health thresholds.
+# Tests run 600+ probes per hour; a single failed probe is ~0.15% unavailability.
+# Use bands so a transient blip doesn't flip a test to red.
+LATENCY_YELLOW_MS   = 150
+LATENCY_RED_MS      = 300
+LOSS_YELLOW_PCT     = 2.0
+LOSS_RED_PCT        = 5.0
+JITTER_YELLOW_MS    = 30
+JITTER_RED_MS       = 75
+RESPONSE_YELLOW_MS  = 2000  # HTTP response-time
+RESPONSE_RED_MS     = 5000
+AVAILABILITY_YELLOW = 99.0  # below this = yellow
+AVAILABILITY_RED    = 90.0  # below this = red (real outage)
+
+
+# ---------------------------------------------------------------------------
+# ThousandEyes REST API v7 helpers
+# ---------------------------------------------------------------------------
+
+def _te_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {TE_BEARER_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+async def te_get(client: httpx.AsyncClient, path: str, params: dict[str, Any] | None = None) -> Any:
+    """GET helper that raises on error but returns parsed JSON on success.
+    Auto-injects `aid=<account group>` when configured."""
+    full_params = _te_params(params)
+    resp = await client.get(f"{TE_BASE_URL}{path}", headers=_te_headers(), params=full_params)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def fetch_alerts(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    try:
+        data = await te_get(client, "/alerts", params={"state": "active"})
+        return data.get("alerts") or data.get("items") or []
+    except Exception as exc:
+        logger.warning("fetch_alerts failed: %s", exc)
+        return []
+
+
+async def fetch_all_tests(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Fetch every ENABLED test across all types in the configured account
+    group. Tests with `enabled=False` never produce results so we skip them
+    to avoid wasting result-fetch budget on noise."""
+    try:
+        data = await te_get(client, "/tests")
+        tests = data.get("tests") or data.get("items") or []
+        cursor = data.get("_links", {}).get("next", {}).get("href")
+        loops = 0
+        while cursor and loops < 5:
+            path = cursor.split(TE_BASE_URL, 1)[-1]
+            if not path.startswith("/"):
+                path = "/" + path.lstrip("/")
+            nd = await te_get(client, path)
+            nt = nd.get("tests") or nd.get("items") or []
+            tests.extend(nt)
+            cursor = nd.get("_links", {}).get("next", {}).get("href")
+            loops += 1
+        # Only enabled tests run; disabled tests return empty results forever
+        return [t for t in tests if t.get("enabled", True)]
+    except Exception as exc:
+        logger.warning("fetch_all_tests failed: %s", exc)
+        return []
+
+
+async def fetch_latest_results(client: httpx.AsyncClient, test_id: str | int, test_type: str) -> dict[str, Any]:
+    """Pull the most-recent results for a single test. Picks the right
+    layer endpoint based on test type. Returns {} on any error so
+    aggregation continues for remaining tests."""
+    t = (test_type or "").lower()
+    candidates: list[str] = []
+    if "http" in t or "web" in t or "page-load" in t:
+        candidates.append(f"/test-results/{test_id}/http-server")
+        candidates.append(f"/test-results/{test_id}/network")
+    elif "dns" in t:
+        if "trace" in t:
+            candidates.append(f"/test-results/{test_id}/dns-trace")
+        else:
+            candidates.append(f"/test-results/{test_id}/dns-server")
+    elif "bgp" in t:
+        candidates.append(f"/test-results/{test_id}/bgp")
+    elif "sip" in t:
+        candidates.append(f"/test-results/{test_id}/sip-server")
+    elif "voice" in t or "rtp" in t:
+        candidates.append(f"/test-results/{test_id}/voice")
+    elif "ftp" in t:
+        candidates.append(f"/test-results/{test_id}/ftp-server")
+    elif "transactions" in t or "web-transactions" in t:
+        candidates.append(f"/test-results/{test_id}/web-transactions")
+    else:
+        # agent-to-agent, agent-to-server, network, network-path
+        candidates.append(f"/test-results/{test_id}/network")
+
+    for path in candidates:
+        try:
+            data = await te_get(client, path, params={"window": "1h"})
+            if data and data.get("results"):
+                data["_layer"] = path.rsplit("/", 1)[-1]
+                return data
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 400):
+                continue
+            logger.debug("fetch_latest_results %s failed: %s", path, exc)
+            continue
+        except Exception as exc:
+            logger.debug("fetch_latest_results %s failed: %s", path, exc)
+            continue
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Aggregation + health classification
+# ---------------------------------------------------------------------------
+
+def _safe_num(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _aggregate_metric(samples: list[dict[str, Any]], key: str) -> float | None:
+    """Average a numeric metric across per-agent samples."""
+    values = [n for n in (_safe_num(s.get(key)) for s in samples) if n is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def _classify(latency: float | None, loss: float | None, jitter: float | None,
+              response: float | None, availability: float | None) -> str:
+    """Return 'red', 'yellow', or 'green'."""
+    # Red conditions
+    if availability is not None and availability < AVAILABILITY_RED:
+        return "red"
+    if loss is not None and loss >= LOSS_RED_PCT:
+        return "red"
+    if latency is not None and latency >= LATENCY_RED_MS:
+        return "red"
+    if jitter is not None and jitter >= JITTER_RED_MS:
+        return "red"
+    if response is not None and response >= RESPONSE_RED_MS:
+        return "red"
+    # Yellow conditions
+    if (availability is not None and availability < AVAILABILITY_YELLOW) or \
+       (loss is not None and loss >= LOSS_YELLOW_PCT) or \
+       (latency is not None and latency >= LATENCY_YELLOW_MS) or \
+       (jitter is not None and jitter >= JITTER_YELLOW_MS) or \
+       (response is not None and response >= RESPONSE_YELLOW_MS):
+        return "yellow"
+    return "green"
+
+
+def _extract_metrics(test: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Turn a raw test + latest result into a flat health record.
+
+    v7 result shape: {startDate, endDate, test, results: [per-sample], _links}
+    Each per-sample has: agent, roundId, avgLatency, loss, jitter, responseTime,
+    totalTime, availability, errorType, statusCode, ...
+    """
+    name   = test.get("testName") or test.get("name") or f"test-{test.get('testId')}"
+    t_id   = test.get("testId") or test.get("id")
+    t_type = test.get("type", "")
+    target = test.get("server") or test.get("url") or test.get("domain") or test.get("prefix") or ""
+
+    # v7 puts per-agent samples directly in `results`
+    samples = result.get("results") or []
+    if isinstance(samples, dict):
+        samples = [samples]
+
+    latency      = _aggregate_metric(samples, "avgLatency")  \
+                   or _aggregate_metric(samples, "serverLatency")  \
+                   or _aggregate_metric(samples, "latency")
+    loss         = _aggregate_metric(samples, "loss")  \
+                   or _aggregate_metric(samples, "packetLoss")
+    jitter       = _aggregate_metric(samples, "jitter")
+    response     = _aggregate_metric(samples, "responseTime")  \
+                   or _aggregate_metric(samples, "totalTime")
+
+    # Availability per sample:
+    #   - errorType: v7 returns the literal string "None" when no error (NOT a
+    #     nullable field!). Treat "None"/""/missing as "no error".
+    #   - responseCode: http-server layer uses this (not statusCode). Network
+    #     layer has no response code at all — treat as OK if no errorType.
+    def _sample_ok(s: dict[str, Any]) -> bool:
+        et = str(s.get("errorType") or "").strip()
+        if et and et.lower() != "none":
+            return False
+        code = s.get("responseCode") or s.get("statusCode")
+        if code is None:
+            return True  # layer has no HTTP code (network/a2a/dns) → errorType was enough
+        try:
+            return 200 <= int(code) < 400
+        except (TypeError, ValueError):
+            return True
+
+    if samples:
+        ok = sum(1 for s in samples if _sample_ok(s))
+        availability = round(100.0 * ok / len(samples), 2)
+    else:
+        availability = None
+
+    status = _classify(latency, loss, jitter, response, availability)
+
+    return {
+        "name": name,
+        "id": t_id,
+        "type": t_type,
+        "target": target,
+        "status": status,
+        "latency_ms": latency,
+        "loss_pct": loss,
+        "jitter_ms": jitter,
+        "response_ms": response,
+        "availability_pct": availability,
+        "agent_count": len(samples),
+        "layer": result.get("_layer"),
+    }
+
+
+async def gather_te_context(query: str) -> dict[str, Any]:
+    """Top-level: pull tests + alerts + latest per-test results in parallel,
+    classify every test, return an aggregated summary the LLM can reason over."""
+    if not TE_BEARER_TOKEN:
+        return {"error": "THOUSANDEYES_BEARER_TOKEN not set",
+                "healthy": True, "total_tests": 0}
+
+    tracer = get_tracer()
+    async with httpx.AsyncClient(timeout=TE_TIMEOUT) as client:
+        with tracer.start_as_current_span("te.fetch_tests_and_alerts"):
+            tests, alerts = await asyncio.gather(
+                fetch_all_tests(client),
+                fetch_alerts(client),
+            )
+
+        if not tests:
+            return {
+                "total_tests": 0,
+                "active_alert_count": len(alerts),
+                "active_alerts": alerts[:10],
+                "note": "no tests configured",
+            }
+
+        # Fan out with bounded concurrency
+        sem = asyncio.Semaphore(TE_FETCH_CONCURRENCY)
+
+        async def _one(t: dict[str, Any]) -> dict[str, Any] | None:
+            t_id = t.get("testId") or t.get("id")
+            if not t_id:
+                return None
+            async with sem:
+                try:
+                    r = await fetch_latest_results(client, t_id, t.get("type", ""))
+                except Exception as exc:
+                    logger.warning("result fetch failed for test %s: %s", t_id, exc)
+                    r = {}
+            return _extract_metrics(t, r)
+
+        with tracer.start_as_current_span("te.fetch_all_results") as r_span:
+            per_test = [rec for rec in await asyncio.gather(*[_one(t) for t in tests]) if rec]
+            r_span.set_attribute("tests.processed", len(per_test))
+
+    # Roll up
+    green  = [r for r in per_test if r["status"] == "green"]
+    yellow = [r for r in per_test if r["status"] == "yellow"]
+    red    = [r for r in per_test if r["status"] == "red"]
+
+    # Keep the LLM context compact — only include detailed rows for degraded tests
+    degraded = sorted(yellow + red, key=lambda r: (r["status"] != "red", r["name"]))
+
+    return {
+        "total_tests": len(per_test),
+        "green_count": len(green),
+        "yellow_count": len(yellow),
+        "red_count": len(red),
+        "active_alert_count": len(alerts),
+        "active_alerts": [
+            {
+                "alertId":   a.get("alertId") or a.get("id"),
+                "testName":  a.get("testName") or a.get("name"),
+                "ruleName":  a.get("ruleName") or a.get("rule"),
+                "type":      a.get("type") or a.get("alertType"),
+                "severity":  a.get("severity"),
+                "active":    a.get("active", True),
+                "dateStart": a.get("dateStart") or a.get("startDate"),
+            }
+            for a in alerts[:10]
+        ],
+        "degraded_tests": degraded,
+        "healthy_sample": [r["name"] for r in green[:15]],  # so LLM can say "including X, Y, Z"
+    }
+
+
+# ---------------------------------------------------------------------------
+# LLM analysis
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = (
+    "You are a NetOps analyst at Black Hat Asia 2026 SOC. You work from network "
+    "monitoring telemetry (synthetic tests, active alerts, BGP paths, latency, "
+    "packet loss, jitter, response time, availability).\n\n"
+    "The context JSON contains a pre-computed health roll-up — it is authoritative. "
+    "Use these fields and nothing else:\n"
+    "  total_tests / green_count / yellow_count / red_count\n"
+    "  active_alerts  (list with testName, ruleName, severity)\n"
+    "  degraded_tests (list of tests with non-green status, with metrics)\n"
+    "  healthy_sample (names of green tests you may cite to illustrate 'everything else is fine')\n\n"
+    "STYLE — FOLLOW EXACTLY:\n"
+    "- Active voice. No hedging.\n"
+    "- NEVER say 'ThousandEyes' or name any vendor. Say 'network monitoring', "
+    "'synthetic tests', or 'probe telemetry'.\n"
+    "- Skip 'Based on', 'It appears', 'The data shows'.\n"
+    "- Lead with the verdict: 'All N tests healthy' or 'N healthy, M degraded, K failing'.\n"
+    "- Name degraded tests by their exact testName from degraded_tests.\n"
+    "- Cite the single worst metric per test inline: 'GCP Status Asia (latency 240 ms)'.\n"
+    "- Keep each bullet to one line.\n\n"
+    "FORMAT (use these three headers only):\n"
+    "## Answer\n"
+    "1–2 sentences. Lead with overall status (e.g., 'All systems green' or "
+    "'Everything healthy except latency on A, B, and C').\n\n"
+    "## Evidence\n"
+    "If any degraded_tests: one line per test with name + worst metric + target.\n"
+    "If any active_alerts: one line per alert with testName + ruleName + severity.\n"
+    "If fully green: cite total_tests count + sample names from healthy_sample + "
+    "'no active alerts'.\n\n"
+    "## Next Steps\n"
+    "Numbered imperatives scoped to the actual degraded tests, e.g.:\n"
+    "  'Escalate the GCP Asia CDN path — 240 ms vs 80 ms baseline'\n"
+    "  'Watch Umbrella DNS — response time 2.1 s, within yellow threshold'\n"
+    "If everything is green, two bullets: 'Continue passive monitoring' and one "
+    "concrete forward-looking check.\n\n"
+    "End with: ```json\n{\"confidence\": 0.XX}\n```\n"
+    "Confidence: 0.9 when rollup has real tests + current metrics; 0.6 when rollup is "
+    "present but degraded details thin; < 0.3 only when the monitoring feed itself "
+    "is unavailable (error field set in context).\n"
+    "NEVER invent tests, metrics, or alert names not present in the context."
+)
+
+
+async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
+    # Keep LLM context tight — degraded_tests may be big, truncate to 20
+    compact = dict(context)
+    if isinstance(compact.get("degraded_tests"), list):
+        compact["degraded_tests"] = compact["degraded_tests"][:20]
+    context_str = json.dumps(compact, default=str)[:8000]
+
+    user_content = (
+        f"**Analyst Query:** {query[:1000]}\n\n"
+        f"**Network monitoring summary:**\n```json\n{context_str}\n```"
+    )
+
+    try:
+        answer = await llm_complete(
+            system_prompt=SYSTEM_PROMPT,
+            user_content=user_content,
+            max_tokens=2000,
+            temperature=0.1,
+            thinking_budget=0,
+        )
+    except RuntimeError:
+        return (
+            f"LLM not configured. Monitoring context: {json.dumps(compact, default=str)[:500]}",
+            0.3,
+        )
+
+    confidence = 0.7
+    m = re.search(r'```json\s*\{[^}]*"confidence"\s*:\s*([0-9.]+)[^}]*\}\s*```', answer)
+    if m:
+        try:
+            confidence = max(0.0, min(1.0, float(m.group(1))))
+        except ValueError:
+            pass
+
+    return answer, confidence
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
+app = FastAPI(title="BHNOCgentic ThousandEyes Analyst", version="0.2.0")
+instrument_fastapi_app(app)
+
+
+class AnalyzeRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=5000)
+
+
+class AnalyzeResponse(BaseModel):
+    answer:     str
+    confidence: float
+    agent_used: str = "thousandeyes-analyst"
+    data:       Any = None
+
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
+    tracer = get_tracer()
+    with tracer.start_as_current_span("thousandeyes_analyst.analyze") as span:
+        span.set_attribute("query.length", len(req.query))
+        span.set_attribute("query.text", req.query[:500])
+
+        start = time.monotonic()
+        logger.info("analyze query_len=%d", len(req.query))
+
+        with tracer.start_as_current_span("thousandeyes_analyst.gather_context") as ctx_span:
+            context = await gather_te_context(req.query)
+            ctx_span.set_attribute("context.total_tests", context.get("total_tests", 0))
+            ctx_span.set_attribute("context.alert_count", context.get("active_alert_count", 0))
+            ctx_span.set_attribute("context.red_count", context.get("red_count", 0))
+            ctx_span.set_attribute("context.yellow_count", context.get("yellow_count", 0))
+
+        answer, confidence = await llm_analyze(req.query, context)
+
+        elapsed = time.monotonic() - start
+        elapsed_ms = round(elapsed * 1000, 1)
+        span.set_attribute("response.confidence", confidence)
+        span.set_attribute("response.elapsed_ms", elapsed_ms)
+        span.set_attribute("response.length", len(answer))
+        span.set_attribute("response.text", (answer or "")[:2000])
+        _request_counter.add(1)
+        _request_duration.record(elapsed_ms)
+        logger.info(
+            "analyze done elapsed=%.2fs tests=%d green=%d yellow=%d red=%d alerts=%d",
+            elapsed,
+            context.get("total_tests", 0),
+            context.get("green_count", 0),
+            context.get("yellow_count", 0),
+            context.get("red_count", 0),
+            context.get("active_alert_count", 0),
+        )
+
+        llm_metrics = get_last_llm_metrics()
+        summary_data: dict[str, Any] = {
+            "total_tests":        context.get("total_tests", 0),
+            "green_count":        context.get("green_count", 0),
+            "yellow_count":       context.get("yellow_count", 0),
+            "red_count":          context.get("red_count", 0),
+            "active_alert_count": context.get("active_alert_count", 0),
+            "degraded_test_names": [t["name"] for t in (context.get("degraded_tests") or [])],
+            "llm_metrics":        llm_metrics,
+        }
+        if context.get("error"):
+            summary_data["error"] = context["error"]
+
+        return AnalyzeResponse(
+            answer=answer,
+            confidence=confidence,
+            data=summary_data,
+        )
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok", "agent": "thousandeyes-analyst"}
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8004, log_level="info")

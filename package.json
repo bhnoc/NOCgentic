@@ -1,0 +1,12 @@
+{
+  "name": "bh-noc-agentic",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "npm run dev --workspace=packages/web-server",
+    "build": "npm run build --workspaces",
+    "test": "npm test --workspaces",
+    "lint": "eslint packages/*/src/**/*.ts"
+  }
+}

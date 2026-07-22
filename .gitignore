@@ -1,0 +1,39 @@
+### Runtime / build artifacts
+node_modules/
+dist/
+*.pyc
+__pycache__/
+.pytest_cache/
+venv/
+.venv/
+
+### Secrets & credentials — NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*
+*secret*
+config/local.*
+
+### Infrastructure logs (contain account IDs, ARNs, org metadata)
+infrastructure/scripts/*.log
+
+### Backups (may contain TLS keys, raw data)
+backups/
+
+### Telemetry exports
+trace-export-*.csv
+trace-export-*.jsonl
+
+### OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+### Private notes
+PRIVATE_NOTES.md
+ubuntu-mirror.txt
