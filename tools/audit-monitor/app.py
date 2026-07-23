@@ -388,10 +388,14 @@ if STATIC_DIR.exists():
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8001")
 
 
+ADMIN_TOKEN = os.getenv("ADMIN_BEARER_TOKEN", "")
+
+
 @app.get("/admin/killswitch")
 async def admin_get_killswitch() -> Any:
+    headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"} if ADMIN_TOKEN else {}
     async with httpx.AsyncClient(timeout=5) as client:
-        r = await client.get(f"{ORCHESTRATOR_URL}/admin/killswitch")
+        r = await client.get(f"{ORCHESTRATOR_URL}/admin/killswitch", headers=headers)
         r.raise_for_status()
         return r.json()
 
@@ -399,8 +403,9 @@ async def admin_get_killswitch() -> Any:
 @app.post("/admin/killswitch/athena")
 async def admin_set_athena(request: Request) -> Any:
     body = await request.json()
+    headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"} if ADMIN_TOKEN else {}
     async with httpx.AsyncClient(timeout=5) as client:
-        r = await client.post(f"{ORCHESTRATOR_URL}/admin/killswitch/athena", json=body)
+        r = await client.post(f"{ORCHESTRATOR_URL}/admin/killswitch/athena", json=body, headers=headers)
         r.raise_for_status()
         return r.json()
 

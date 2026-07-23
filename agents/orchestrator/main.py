@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
 
 # Make agents/shared importable
@@ -65,6 +65,19 @@ THOUSANDEYES_ANALYST_URL = os.getenv("THOUSANDEYES_ANALYST_URL", "http://localho
 ATHENA_HUNTER_URL        = os.getenv("ATHENA_HUNTER_URL",        "http://localhost:8005")
 
 MAX_QUERY_LEN = 5000
+
+ADMIN_TOKEN = os.getenv("ADMIN_BEARER_TOKEN", "")
+
+
+async def require_admin_token(authorization: str = Header("")) -> None:
+    """Dependency that rejects requests without a valid admin bearer token."""
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="Admin endpoints disabled (no token configured)")
+    if not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    import secrets as _secrets
+    if not _secrets.compare_digest(authorization.split(" ", 1)[1].strip(), ADMIN_TOKEN):
+        raise HTTPException(status_code=403, detail="Invalid admin token")
 
 # ---------------------------------------------------------------------------
 # Security: sanitize before sending to LLM
@@ -679,12 +692,12 @@ class KillSwitchBody(BaseModel):
     killed: bool
 
 
-@app.get("/admin/killswitch")
+@app.get("/admin/killswitch", dependencies=[Depends(require_admin_token)])
 async def get_kill_switches() -> dict[str, bool]:
     return dict(_kill_switches)
 
 
-@app.post("/admin/killswitch/athena")
+@app.post("/admin/killswitch/athena", dependencies=[Depends(require_admin_token)])
 async def set_athena_kill(body: KillSwitchBody) -> dict[str, bool]:
     _kill_switches["athena_hunter"] = bool(body.killed)
     logger.warning("ADMIN kill-switch: athena_hunter=%s", _kill_switches["athena_hunter"])

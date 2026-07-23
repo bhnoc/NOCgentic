@@ -16,8 +16,17 @@ interface ClientInfo {
   referer?: string;
 }
 
-// In-memory job store (for demo)
+// In-memory job store (for demo). Evicts oldest entries when cap is reached.
+const JOB_STORE_MAX = 500;
 export const jobStore = new Map<string, AgentResponse>();
+
+function jobStoreSet(id: string, job: AgentResponse): void {
+  jobStore.set(id, job);
+  if (jobStore.size > JOB_STORE_MAX) {
+    const oldest = jobStore.keys().next().value;
+    if (oldest) jobStore.delete(oldest);
+  }
+}
 
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? 'http://localhost:8001';
 
@@ -53,7 +62,7 @@ export function registerChatRoutes(server: FastifyInstance) {
       status: 'pending',
       createdAt: new Date().toISOString(),
     };
-    jobStore.set(jobId, job);
+    jobStoreSet(jobId, job);
 
     server.log.info(
       { jobId, clientIp: client.ip, session: client.session_id, ua: client.user_agent?.slice(0, 60) },
@@ -92,7 +101,7 @@ async function dispatchToOrchestrator(jobId: string, query: string, client?: Cli
 
   // Update to running
   job.status = 'running';
-  jobStore.set(jobId, job);
+  jobStoreSet(jobId, job);
 
   try {
     const resp = await fetch(`${ORCHESTRATOR_URL}/query`, {
@@ -132,7 +141,7 @@ async function dispatchToOrchestrator(jobId: string, query: string, client?: Cli
     job.completedAt = new Date().toISOString();
   }
 
-  jobStore.set(jobId, job);
+  jobStoreSet(jobId, job);
 }
 
 async function pollForHints(jobId: string): Promise<void> {
@@ -148,7 +157,7 @@ async function pollForHints(jobId: string): Promise<void> {
         const job = jobStore.get(jobId);
         if (job) {
           job.hints = data.hints;
-          jobStore.set(jobId, job);
+          jobStoreSet(jobId, job);
         }
         return;
       }
