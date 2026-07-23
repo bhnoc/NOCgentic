@@ -207,6 +207,52 @@ Between conferences, dev-only. All protocols:
 
 ---
 
+## OS patching (host security updates + kernel)
+
+Patch the box's OS/apps periodically (116 security updates were pending at first patch,
+2026-07-23). The stack survives a reboot on its own — **all 8 containers are
+`unless-stopped` and both runners + `postcog` are `enabled` on boot** — so a *soft reboot*
+(`systemctl reboot`, NOT stop/start) is safe and **keeps the public IP** (no DNS re-point).
+
+Procedure (validated 2026-07-23, Ubuntu 24.04, ~10 min total):
+```bash
+# 0. Rollback insurance: no-reboot backup AMI (from your laptop)
+AWS_PROFILE=VirtualPOC-users aws ec2 create-image --instance-id i-0430224b1ac82701e \
+  --region us-west-2 --no-reboot --name "aing-prepatch-$(date +%F)" \
+  --description "backup before OS patch" --query ImageId --output text
+
+# 1. Baseline health so you can compare after (want HTTP 200)
+ssh ubuntu@aing.bhnoc.com 'curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/health -H "Host: aing.bhnoc.com"'
+
+# 2. Non-interactive full upgrade — KEEP existing configs (confold), don't clobber
+#    nginx/docker/ssh confs; needrestart auto-restarts services but "No containers
+#    need to be restarted" (docker daemon restart doesn't bounce running containers).
+ssh ubuntu@aing.bhnoc.com '
+  export DEBIAN_FRONTEND=noninteractive
+  sudo apt-get update -qq
+  sudo apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" dist-upgrade
+  sudo apt-get -y autoremove   # prunes old kernels'
+
+# 3. If /var/run/reboot-required exists (kernel/apparmor/libc bump) → SOFT reboot
+ssh ubuntu@aing.bhnoc.com 'sudo systemctl reboot'
+# wait ~45s, SSH comes back on the SAME IP; containers + runners auto-start.
+
+# 4. Verify: kernel bumped, no reboot flag, 8 containers up, 3 services active, /health 200
+ssh ubuntu@aing.bhnoc.com '
+  uname -r; [ -f /var/run/reboot-required ] && echo REBOOT-STILL-NEEDED || echo clean
+  cd /opt/bhasia/app && sudo docker compose -f docker-compose.agents.yml ps
+  systemctl is-active actions.runner.bhnoc-NOCgentic.aing-nocgentic.service actions.runner.bhnoc-PostCog.aing-postcog.service postcog
+  curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/health -H "Host: aing.bhnoc.com"'
+```
+Then run the **query smoke tests** below — a reboot re-reads the frozen `.env.s3` creds, so
+if they'd expired the agents would fail Athena (they were still valid at the 2026-07-23 patch;
+refresh if needed). Delete the backup AMI + its snapshot once you're confident.
+
+> **`--force-confold` matters:** without it, a dpkg config prompt on a live box either hangs
+> the non-interactive run or silently overwrites a hand-tuned conf (nginx, sshd). Keep old.
+
+---
+
 ## Health checks & troubleshooting
 
 ```bash
@@ -226,6 +272,8 @@ curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: aing
 | `InsufficientInstanceCapacity` | No GPU capacity in region | Retry loop, or resize to CPU type |
 | nginx serving old cert after renew | Not reloaded | `docker exec app-nginx-1 nginx -s reload` |
 | Agent 500 after a Gemini model change | Model rejects `thinkingBudget=0` | See "Changing the Gemini model" below |
+| athena-hunter answers "Athena syntax error / mismatched input 'LIMIT'" | Generated SQL **truncated** — on flash-lite `thinking_budget=0`→`-1` (dynamic) and thinking shares `max_output_tokens`; at 1024 the SQL got cut off mid-statement | Fixed 2026-07-23: `generate_sql` uses `max_tokens=2048`. If it recurs, bump further / check `llm.response_length` in the span |
+| athena-hunter returns **0 rows** but SQL runs clean, alert-triage still finds data | Generated `dt = 'today'` as a **literal string** (partitions are `dt='YYYY-MM-DD'`), OR the demo data aged out of today's partition | Fixed 2026-07-23: token→real-date substitution in `generate_sql`. If alert-triage (today+yesterday window) has data but single-day queries don't → **re-date the slice to today** (see below) |
 
 ## Routine when bringing it back after downtime
 
@@ -245,6 +293,15 @@ The conference logs are frozen in the past (BH Asia = April 2026). Between event
 dashboard's "last 24h" views look empty. Fix: copy a **contiguous window** of a real
 capture day and shift its timestamps to **today**, so the app queries "today" and sees
 live-looking traffic. Driver: **`scripts/redate_slice.py`** (in this repo).
+
+> ⚠️ **The seeded slice goes stale every midnight UTC.** It's pinned to a fixed `DST_DT`,
+> so once the UTC date rolls over, single-day `dt = 'today'` queries return **0 rows** (the
+> data now sits in *yesterday's* partition). Tell-tale: `alert-triage` still answers
+> (it queries a today+yesterday window) but `athena-hunter`'s single-day queries come back
+> empty though the SQL runs clean. **Fix = re-run the driver with `DST_DT` = today.** Bump
+> `DST_DT` **and** `SHIFT_S`/`SHIFT_D` together (shift = days from `SRC_DT` 2026-04-24 to
+> today × 86400). On 2026-07-23 that was 90 days / 7_776_000 s. For a live multi-day demo,
+> consider a cron that re-dates daily rather than doing it by hand.
 
 ### How the data is laid out (know this before touching it)
 - Athena DB `blackhat_pope_logs`, workgroup `blackhat-pope-dev`, region `us-west-2`. The
