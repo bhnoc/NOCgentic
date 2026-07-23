@@ -68,20 +68,42 @@ Fix or ignore these — they predate the current infra:
 ## Source control & deploy flow
 
 - **Repo:** `bhnoc/NOCgentic` (private, GitHub). Local clone: `blackhat/NOCgentic`.
-  A remote runner **deploys from `main`** (or will shortly). The durable way to ship a
-  change is: edit locally → commit → push `main`, and let the runner redeploy. The
-  `scripts/deploy-agents.sh` rsync path (Path A below) is the manual/urgent fallback.
+- **CI auto-deploy is live** (as of 2026-07-22): every push to `main` triggers
+  `.github/workflows/deploy.yml`, which runs on a **self-hosted runner** on the AING box
+  (label `nocgentic`). The runner polls GitHub *outbound*, so no inbound ports are opened.
+  This is a **separate runner** from PostCog's (`postcog` label, `bhnoc/PostCog`) — one
+  runner binds to one repo — but both live on the same box.
+- The deploy step runs `ops/deploy.sh`: it rsyncs the git checkout into `/opt/bhasia/app`
+  **preserving** `.env`, `.env.s3`, `node_modules/`, `venv/`, `*.log`, `.git/`, then
+  refreshes IMDS creds into `.env.s3` and runs `docker compose ... up -d --build
+  --remove-orphans`, then health-checks `https://127.0.0.1/health`. It **refuses to deploy
+  if `.env.s3` is absent** — the box's `.env.s3` is authoritative and not in git.
+- **The normal deploy is now just `git push origin main`.** Watch it with
+  `gh run watch <id>` or `gh run list --branch main`.
 - **Test before pushing to `main`** — main is the deploy branch. For LLM/model changes you
   can test the real module in a version-matched venv without a container rebuild (see the
   Gemini section in [[../ops/skill.md]]).
 - The box (`/opt/bhasia/app`) was originally an **untracked** copy that drifted from git.
   If you hand-edit on the box, mirror it back into the repo or it's lost on next deploy.
 
+### Runner health
+```bash
+gh api /repos/bhnoc/NOCgentic/actions/runners --jq '.runners[]|{name,status,labels:[.labels[].name]}'
+# on the box: sudo /home/ubuntu/actions-runner-nocgentic/svc.sh status
+#   systemd unit: actions.runner.bhnoc-NOCgentic.aing-nocgentic.service (runs as ubuntu, enabled on boot)
+```
+If the runner is offline, deploys queue until it's back:
+`ssh ubuntu@aing.bhnoc.com 'sudo systemctl restart actions.runner.bhnoc-NOCgentic.aing-nocgentic.service'`.
+Re-register with a fresh token (they expire):
+`gh api -X POST /repos/bhnoc/NOCgentic/actions/runners/registration-token --jq .token`.
+
 ---
 
-## Path A — Redeploy code to the existing instance (common case)
+## Path A — Redeploy code to the existing instance (manual fallback)
 
-Run from your **local machine** in the repo root (the code lives locally; the box is a target).
+**Preferred: just `git push origin main`** and let the runner deploy (above). Use this only
+when the runner is down or you need to deploy off-main. Run from your **local machine** in
+the repo root (the code lives locally; the box is a target).
 
 ```bash
 # Needs the SSH key and the current IP (NOT the script default).
@@ -230,9 +252,24 @@ copy-paste smoke-test loop and good default queries.
 
 - [ ] Instance running, IP known
 - [ ] `aing.bhnoc.com` DNS points at current IP (Cloudflare)
-- [ ] Code synced to `/opt/bhasia/app` (with correct `--ec2-ip`)
+- [ ] Code synced to `/opt/bhasia/app` (runner on push, or `--ec2-ip` for manual)
 - [ ] `.env.s3` present + `refresh-env-creds.sh` run (creds not expired)
 - [ ] Valid TLS cert for `aing.bhnoc.com`
+- [ ] Self-hosted runner `aing-nocgentic` shows `online` (`gh api …/actions/runners`)
 - [ ] `docker compose ... up -d --build` succeeded, all services up
 - [ ] `https://.../health` returns 200 from an allow-listed IP
 - [ ] Cost note: if GPU instance, remember it bills ~$3+/hr — stop when idle
+
+## CI auto-deploy — how it's wired (2026-07-22)
+- `.github/workflows/deploy.yml`: `on: push [main]` + `workflow_dispatch`,
+  `runs-on: [self-hosted, nocgentic]`, `concurrency: deploy-nocgentic` (no racing deploys).
+- `ops/deploy.sh`: rsync `--delete` from the runner checkout → `/opt/bhasia/app`, excluding
+  `.env .env.* node_modules/ venv/ .venv/ dist/ *.log *.pid .git/ __pycache__` (keeps
+  `.env.example`). Then refresh IMDS creds into `.env.s3`, `docker compose -f
+  docker-compose.agents.yml --env-file .env.s3 up -d --build --remove-orphans`, prune
+  dangling images, and poll `https://127.0.0.1/health` (12×5s). Refuses to deploy if
+  `.env.s3` is missing.
+- Runner: `/home/ubuntu/actions-runner-nocgentic`, systemd unit
+  `actions.runner.bhnoc-NOCgentic.aing-nocgentic.service`, runs as `ubuntu` (in the `docker`
+  group + passwordless sudo). Registered with label `nocgentic`. **Distinct** from the
+  `postcog` runner at `/home/ubuntu/actions-runner` — same box, different repo.

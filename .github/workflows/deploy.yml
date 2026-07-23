@@ -1,0 +1,27 @@
+name: deploy
+
+# Auto-deploy NOCgentic on every push to main. Runs on the self-hosted runner
+# installed on the AING EC2 box (label `nocgentic`), which polls GitHub outbound
+# — no inbound ports opened. This is a SEPARATE runner from PostCog's (`postcog`
+# label); one runner binds to one repo. Both live on the same box.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never let two deploys race the same box.
+concurrency:
+  group: deploy-nocgentic
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, nocgentic]
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Sync source + rebuild the compose stack
+        run: bash ops/deploy.sh
+        env:
+          APP_DIR: /opt/bhasia/app

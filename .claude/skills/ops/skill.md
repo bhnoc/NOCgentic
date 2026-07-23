@@ -118,6 +118,31 @@ sudo docker exec app-nginx-1 nginx -t && sudo docker exec app-nginx-1 nginx -s r
 
 ---
 
+## Deploy a change
+
+**CI auto-deploy is live** (2026-07-22). Just `git push origin main` — a self-hosted
+runner on the box (label `nocgentic`) picks up `.github/workflows/deploy.yml`, rsyncs the
+checkout into `/opt/bhasia/app` (preserving `.env`/`.env.s3`/`node_modules`/logs), refreshes
+IMDS creds into `.env.s3`, rebuilds the compose stack, and health-checks `/health`.
+Watch it: `gh run watch <id>` / `gh run list --branch main`.
+
+### Runner health
+```bash
+gh api /repos/bhnoc/NOCgentic/actions/runners --jq '.runners[]|{name,status}'   # want online
+ssh ubuntu@aing.bhnoc.com 'sudo /home/ubuntu/actions-runner-nocgentic/svc.sh status'
+# systemd unit on the box: actions.runner.bhnoc-NOCgentic.aing-nocgentic.service (runs as ubuntu)
+# NOTE: distinct from PostCog's runner (/home/ubuntu/actions-runner, label `postcog`).
+```
+Offline runner → deploys queue until it's back. Restart it:
+`ssh ubuntu@aing.bhnoc.com 'sudo systemctl restart actions.runner.bhnoc-NOCgentic.aing-nocgentic.service'`.
+Re-register (token expires): `gh api -X POST /repos/bhnoc/NOCgentic/actions/runners/registration-token --jq .token`.
+
+### Manual fallback (runner down / off-main deploy)
+From your local machine: `./scripts/deploy-agents.sh --ssh-key ~/.ssh/blackhat --ec2-ip <IP>`
+(see [[../deploy/skill.md]] Path A). `ops/deploy.sh` is also safe to run by hand on the box.
+
+---
+
 ## The Docker stack
 
 ```bash
