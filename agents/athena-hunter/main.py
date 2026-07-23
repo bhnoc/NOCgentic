@@ -324,9 +324,15 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
 
         try:
             raw = await llm_complete(
+                # 2048, not 1024: on flash-lite thinking_budget=0 is clamped to -1
+                # (dynamic thinking), and thinking tokens share max_output_tokens.
+                # At 1024 the model spent the budget thinking and the SQL was
+                # truncated mid-statement (e.g. "... ORDER BY x DESC LIMIT" with no
+                # number, "... WHERE dt=... AND (" with no predicate) → Athena
+                # "mismatched input 'LIMIT'". 2048 leaves room for both.
                 system_prompt=SQL_GEN_PROMPT,
                 user_content=user_content,
-                max_tokens=1024,
+                max_tokens=2048,
                 temperature=0.0,
                 thinking_budget=0,
             )
@@ -344,9 +350,26 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
             logger.warning("No SQL parsed from LLM, using fallback")
             return _fallback_queries(query, iocs, today)
 
+        # Substitute literal partition tokens the model emits (the prompt uses
+        # TODAY/YESTERDAY placeholders, and the model often echoes the lowercase
+        # 'today'/'yesterday' from the user content) with real YYYY-MM-DD dates.
+        # Athena partitions are dt='2026-07-23', so a literal dt='today' matches
+        # zero rows. Word-boundary + quote-aware so we only touch the date literal.
+        _token_dates = {
+            "today": today,
+            "yesterday": _yesterday,
+            "7_days_ago": _week_ago,
+            "30_days_ago": _month_ago,
+        }
+        def _sub_tokens(s: str) -> str:
+            for tok, real in _token_dates.items():
+                s = re.sub(rf"(?i)'{tok}'", f"'{real}'", s)
+            return s
+
         # Inject date partition if missing
         validated = []
         for sql in queries[:3]:
+            sql = _sub_tokens(sql)
             if "dt" not in sql.lower():
                 # Try to add dt filter
                 if "WHERE" in sql.upper():
