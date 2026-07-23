@@ -219,7 +219,7 @@ curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: aing
 The conference logs are frozen in the past (BH Asia = April 2026). Between events the
 dashboard's "last 24h" views look empty. Fix: copy a **contiguous window** of a real
 capture day and shift its timestamps to **today**, so the app queries "today" and sees
-live-looking traffic. Driver: **`blackhat/redate_slice.py`**.
+live-looking traffic. Driver: **`scripts/redate_slice.py`** (in this repo).
 
 ### How the data is laid out (know this before touching it)
 - Athena DB `blackhat_pope_logs`, workgroup `blackhat-pope-dev`, region `us-west-2`. The
@@ -240,9 +240,9 @@ live-looking traffic. Driver: **`blackhat/redate_slice.py`**.
 
 ### Run it
 ```bash
-cd /Users/landbeforetime/Documents/dev/blackhat
-AWS_PROFILE=VirtualPOC-users python3 redate_slice.py            # all physical tables
-AWS_PROFILE=VirtualPOC-users python3 redate_slice.py notice conn dns   # subset (test)
+cd /Users/landbeforetime/Documents/dev/blackhat/NOCgentic
+AWS_PROFILE=VirtualPOC-users python3 scripts/redate_slice.py            # all physical tables
+AWS_PROFILE=VirtualPOC-users python3 scripts/redate_slice.py notice conn dns   # subset (test)
 ```
 Edit the constants at the top for a new run: `SRC_DT`, `DST_DT`, `SHIFT_S`
 (= days×86400), `SHIFT_D` (days as string), `WIN_FROM`/`WIN_TO`. It's **idempotent** —

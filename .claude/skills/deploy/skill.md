@@ -204,8 +204,8 @@ because the capture data is frozen in the past. Seed a re-dated slice so the app
 live — full procedure (driver, sizing, verification) is in [[../ops/skill.md]] under
 "Seeding a re-dated demo day". TL;DR:
 ```bash
-cd /Users/landbeforetime/Documents/dev/blackhat
-AWS_PROFILE=VirtualPOC-users python3 redate_slice.py
+cd /Users/landbeforetime/Documents/dev/blackhat/NOCgentic
+AWS_PROFILE=VirtualPOC-users python3 scripts/redate_slice.py
 ```
 
 ## Public endpoints (once up)
