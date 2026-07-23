@@ -197,10 +197,11 @@ aws ec2 revoke-security-group-ingress --region $R --group-id $SG \
 Find your own IP: `curl -s https://checkip.amazonaws.com`.
 **Never revoke the CIDR you're SSH'd in from** without a fallback (SSM/console).
 
-### Current dev allow-list (2026-07-22)
+### Current dev allow-list (2026-07-23)
 Between conferences, dev-only. All protocols:
 - `136.59.5.6/32` — James
 - `208.93.179.62/32` — Spicer
+- `136.38.201.241/32` — Spicer2 (added 2026-07-23)
 
 (Removed at lockdown: `165.173.10.53/32` BlackHatAsia, `165.173.10.48/28`,
 `86.48.10.243/32` "Spicer2", `71.229.186.132/32`. Re-add if needed.)
