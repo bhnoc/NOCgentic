@@ -21,6 +21,35 @@ export const jobStore = new Map<string, AgentResponse>();
 // Owner session id (bh_sid cookie) per job, so a job is only readable by its creator.
 export const jobOwners = new Map<string, string>();
 
+// Eviction: without a TTL both maps grow unbounded (one entry per query, forever),
+// so a long conference run slowly leaks memory. A job is only useful until its
+// result is polled, which happens within seconds. Evict entries older than the TTL
+// on a periodic sweep, and evict jobStore + jobOwners together so they never drift.
+const JOB_TTL_MS = 60 * 60 * 1000;       // 1h: generous vs the seconds-long poll window
+const JOB_SWEEP_MS = 5 * 60 * 1000;      // sweep every 5 min
+
+export function evictStaleJobs(now = Date.now()): number {
+  let removed = 0;
+  for (const [id, job] of jobStore) {
+    const created = job.createdAt ? Date.parse(job.createdAt) : NaN;
+    // Drop entries past the TTL, and any with an unparseable/missing timestamp.
+    if (!Number.isFinite(created) || now - created > JOB_TTL_MS) {
+      jobStore.delete(id);
+      jobOwners.delete(id);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+let _jobSweep: ReturnType<typeof setInterval> | undefined;
+export function startJobEviction(): void {
+  if (_jobSweep) return;
+  _jobSweep = setInterval(() => evictStaleJobs(), JOB_SWEEP_MS);
+  // Don't keep the process alive just for the sweep timer.
+  if (typeof _jobSweep.unref === 'function') _jobSweep.unref();
+}
+
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? 'http://localhost:8001';
 
 function extractClient(request: FastifyRequest): ClientInfo {
@@ -50,6 +79,9 @@ export function jobOwnedByRequester(jobId: string, request: FastifyRequest): boo
 }
 
 export function registerChatRoutes(server: FastifyInstance) {
+  // Start the periodic job-eviction sweep (bounds jobStore/jobOwners growth).
+  startJobEviction();
+
   // Submit a query → returns job ID
   server.post('/api/v1/chat', async (request, reply) => {
     const parseResult = QuerySchema.safeParse(request.body);

@@ -481,6 +481,10 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
         f"<<<UNTRUSTED_TELEMETRY\n```json\n{context_str}\n```\n>>>"
     )
 
+    # model= is intentionally omitted: llm_complete defaults to GEMINI_MODEL
+    # (gemini-3.5-flash-lite since sweep 3), which the thinking_budget=0->-1 clamp
+    # covers. Catch broadly, not just RuntimeError: a provider 429/5xx/timeout must
+    # degrade gracefully here, not surface as an unhandled 500 (spec-104/spec-6 class).
     try:
         answer = await llm_complete(
             system_prompt=SYSTEM_PROMPT,
@@ -489,9 +493,11 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
             temperature=0.1,
             thinking_budget=0,
         )
-    except RuntimeError:
+    except Exception as exc:
+        logger.warning("thousandeyes LLM call failed (%s): %s", type(exc).__name__, exc)
         return (
-            f"LLM not configured. Monitoring context: {json.dumps(compact, default=str)[:500]}",
+            f"Network analysis is temporarily unavailable. Monitoring context: "
+            f"{json.dumps(compact, default=str)[:500]}",
             0.3,
         )
 
