@@ -41,5 +41,3 @@ ubuntu-mirror.txt
 ### rapid-prototype scratch (findings, secrets, harness) — never commit
 temp/
 
-### qa sweep scratch — never commit
-qa/

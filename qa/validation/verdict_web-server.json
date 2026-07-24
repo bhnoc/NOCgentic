@@ -1,0 +1,18 @@
+[
+  {
+    "id": "web-4",
+    "verdict": "CONFIRMED",
+    "real_severity": "medium",
+    "evidence": "packages/web-server/src/api/chat.ts:20 `export const jobStore = new Map<string, AgentResponse>();`. Full-file grep of chat.ts shows only jobStore.set (lines 56,95,135,151) and jobStore.get (72,90,148) — NO jobStore.delete, no TTL, no size cap, no LRU, no periodic sweep anywhere. Every POST /api/v1/chat calls jobStore.set(jobId, job) (line 56) with a fresh uuid, so entries accumulate for the process lifetime. Completed/errored jobs are never pruned (dispatchToOrchestrator mutates in place and re-sets, line 135). Dynamic proof against nocgentic-web-qa (:3001): POSTed 5 jobs, all 5 GET /api/v1/chat/:id returned the stored job (even in status 'error'), a random uuid returned 404 — confirming real retained storage keyed by submission. Each retained AgentResponse holds answer + arbitrary `data` blob (line 121), so growth per completed job is non-trivial. Severity is medium not high: a 120/min per-IP rate limit caps single-source growth, entries are small until completed, and a container bounce fully recovers. Over a multi-day conference with many sessions it is a slow memory leak / eventual-OOM risk, not an instant DoS.",
+    "fix": "Add TTL-based eviction: on job completion set completedAt (already present) and run a setInterval sweep (e.g. every 60s) deleting entries whose completedAt is older than ~10min; also cap Map size (e.g. 10k) with oldest-first eviction as a hard backstop. Minimal: a lazy sweep at the top of the POST handler that drops entries with completedAt older than TTL.",
+    "fix_risk": "low"
+  },
+  {
+    "id": "web-7",
+    "verdict": "CONFIRMED",
+    "real_severity": "low",
+    "evidence": "Regex bug reproduced exactly. packages/agent-sdk/src/llm/client.ts:78 `.replace(/\\b(?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.\\d{1,3}\\.\\d{1,3}\\b/g, '[INTERNAL-IP]')`. The 10/8 alternative is bare `10` then the shared `\\.\\d{1,3}\\.\\d{1,3}` matches only TWO more octets = 3 total, leaking octet 4. node repl on the verbatim regex: '10.220.150.42' -> '[INTERNAL-IP].42'; '10.5.6.7' -> '[INTERNAL-IP].7'; '10.0.0.1' -> '[INTERNAL-IP].1'; the 172.16-31 and 192.168 branches are 4-octet and redact fully ('172.16.4.9'->'[INTERNAL-IP]', '192.168.1.100'->'[INTERNAL-IP]'); '8.8.8.8' correctly untouched. HOWEVER real severity is LOW because this TS client is DEAD CODE: grep across the repo (excluding node_modules/dist/.d.ts) shows LLMClient is only referenced at its definition (client.ts:20) and re-exported by packages/agent-sdk/src/index.ts:1 — NO web-server, agent, or other module imports @bhnoc/agent-sdk or LLMClient; web-server/package.json has no agent-sdk dependency. The actual OpenRouter path is the Python agents/shared/llm_client.py (llm_complete), which sends system_prompt/user_content straight to the model (lines 273-280) with NO IP redaction at all — so this buggy TS regex never runs in production and never leaks anything (the leak the finding describes cannot occur because the code isn't wired in). Note for triage: the live path performing zero sanitization is a separate, arguably worse concern, but out of scope for web-7.",
+    "fix": "Since it is unused, safest is to delete the dead agent-sdk LLMClient (or wire Python sanitization properly). If keeping the TS code, fix the branch to full 4-octet: /\\b(?:10(?:\\.\\d{1,3}){3}|172\\.(?:1[6-9]|2\\d|3[01])(?:\\.\\d{1,3}){2}|192\\.168(?:\\.\\d{1,3}){2})\\b/g.",
+    "fix_risk": "low"
+  }
+]

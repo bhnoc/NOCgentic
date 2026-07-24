@@ -1,0 +1,42 @@
+[
+  {
+    "id": "spec-111",
+    "verdict": "CONFIRMED",
+    "real_severity": "medium",
+    "evidence": "threat-hunter is orphaned. orchestrator/main.py defines call_threat_hunter (line 604) but grep shows it is NEVER invoked anywhere (only the def exists). The dispatch block (lines 766-859) routes only to: refused, thousandeyes_analyst (call_thousandeyes_analyst), alert_triage (call_alert_triage), and the else->athena_hunter (call_athena_hunter). VALID_INTENTS (line 344) = {alert_triage, thousandeyes_analyst, athena_hunter, refused} — no threat_hunter. Line 360-363 explicitly remaps any legacy intent=='threat_hunter' -> 'athena_hunter'. The threat-hunter container is still built/run in docker-compose.agents.yml and THREAT_HUNTER_URL is set, but no code path reaches it (only /health). DYNAMIC CONFIRMATION vs live app: query 'Are there any SSH brute force attempts today?' (a textbook threat-hunt) returned agentUsed='athena-hunter' with two Athena SQL queries executed — never threat-hunter. Conclusion: agents/threat-hunter/main.py is dead code in prod; every threat-hunter-internal finding is a latent/dead-code issue, not a live defect.",
+    "fix": "Either (a) delete the threat-hunter service from docker-compose.agents.yml and the agents/threat-hunter directory to stop building/running a dead container, or (b) if it is meant to be the IOC-specialist, wire it back: add a 'threat_hunter' intent to VALID_INTENTS + CLASSIFY_SYSTEM_PROMPT and dispatch to call_threat_hunter for hash/IP/domain IOC queries. Given athena-hunter already covers IOC hunts via SQL, (a) is the minimal choice.",
+    "fix_risk": "low"
+  },
+  {
+    "id": "spec-102",
+    "verdict": "PARTIAL",
+    "real_severity": "low",
+    "evidence": "Code fact TRUE: threat-hunter/main.py:232-238 calls llm_complete with thinking_budget=0 and NO model= arg. llm_client.py: model resolves to GEMINI_MODEL (line 160), the flash-lite 0->-1 clamp only fires when 'flash-lite' in model_name (line 174). HOWEVER the two claimed harms do not materialize in prod: (1) threat-hunter is ORPHANED (see spec-111) — this llm_analyze never runs in prod. (2) Even if it ran, prod pins GEMINI_MODEL=gemini-3.5-flash-lite in docker-compose.agents.yml (line 41), NOT the code default gemini-3.1-pro-preview (llm_client.py:141). So the model would be flash-lite (cheap) and the 0->-1 clamp WOULD fire (no 400). Proven dynamically on the sibling call: the live thousandeyes-analyst response reported model=gemini-3.5-flash-lite, thinking_tokens=0, finish_reason=stop (success, no INVALID_ARGUMENT). So '25x cost' and '400 INVALID_ARGUMENT' are both refuted for prod. The remaining real issue is only a latent footgun: if GEMINI_MODEL is ever unset/set to a pro model, this call (were it live) would break — but it isn't live.",
+    "fix": "If keeping threat-hunter at all, pin model=\"gemini-3.5-flash-lite\" in the llm_complete call (line 232) to match alert-triage and be robust to GEMINI_MODEL changes. Better: fix the shared llm_client.py:141 default to a flash-lite model so the code default matches the deployed default. Otherwise dead code — resolve via spec-111 deletion.",
+    "fix_risk": "low"
+  },
+  {
+    "id": "spec-103",
+    "verdict": "PARTIAL",
+    "real_severity": "low",
+    "evidence": "Routing: thousandeyes-analyst IS live-routed — dynamic query 'How is the network doing? any packet loss/latency/BGP issues on uplinks' returned agentUsed='thousandeyes-analyst'. Code fact TRUE: thousandeyes-analyst/main.py:436-442 calls llm_complete with thinking_budget=0 and NO model=. But the claimed harms are REFUTED in prod for the same reason as spec-102: prod GEMINI_MODEL=gemini-3.5-flash-lite (docker-compose.agents.yml:102), so (a) it is NOT pro-preview (no 25x cost) and (b) the flash-lite 0->-1 clamp fires so thinking_budget is never sent as 0 (no 400). PROVEN DYNAMICALLY: that live thousandeyes response's llm_metrics = {\"model\":\"gemini-3.5-flash-lite\",\"thinking_tokens\":0,\"finish_reason\":\"stop\"} — succeeded, flash-lite, no error. Only residual is the latent footgun: relies on the compose env override; if GEMINI_MODEL were pointed at a non-flash-lite model this path would 400 and the RuntimeError-only except would not catch the resulting error.",
+    "fix": "Pin model=\"gemini-3.5-flash-lite\" in the llm_complete call (line 436), and/or fix llm_client.py:141 GEMINI_MODEL default to a flash-lite model so code and deploy defaults agree. Low urgency since prod env already forces flash-lite.",
+    "fix_risk": "low"
+  },
+  {
+    "id": "spec-108",
+    "verdict": "CONFIRMED",
+    "real_severity": "low",
+    "evidence": "Code does exactly as claimed. threat-hunter/main.py:169-176: on any md5/sha256 IOC it calls query_log_type('files', time_range={hours:48}, max_events=100) then Python-filters those <=100 newest rows for fe.get('md5')/fe.get('sha256') in the requested set. It never pushes the hash into a WHERE filter, so a matching file event older than the newest ~100 rows is a guaranteed false negative on a busy feed. REAL SEVERITY DROPS TO LOW because threat-hunter is ORPHANED (spec-111) — this code path never runs in prod. In prod, hash/IOC hunts route to athena-hunter, which (per the live SSH-query trace) generates targeted Athena SQL with WHERE/LIKE filters rather than sampling recent rows. So the broken client-side match ships but is never executed.",
+    "fix": "Dead code — resolve by deleting threat-hunter (spec-111). If retained, push the hash to the data layer: issue an Athena query WHERE md5 IN (...) OR sha256 IN (...) over the files table (as athena-hunter already does), instead of query_log_type + client-side filter.",
+    "fix_risk": "low"
+  },
+  {
+    "id": "spec-109",
+    "verdict": "CONFIRMED",
+    "real_severity": "high",
+    "evidence": "Confirmed in a LIVE-routed agent. thousandeyes-analyst/main.py: fetch_latest_results returns {} on 404/400/timeout/exhausted candidates (lines 175-189). _extract_metrics then gets samples = result.get('results') or [] = [] (line 250); with empty samples, availability=None (lines 280-284) and _aggregate_metric returns None for latency/loss/jitter/response (empty values list, line 208). _classify(None,None,None,None,None): no red branch triggers (all None-guarded), no yellow branch triggers, so it falls through to 'return green' (line 234). That record (agent_count=0) is then bucketed into green (line 347), counted in green_count, and its name added to healthy_sample (line 373) that the LLM is told it may cite as 'everything else is fine'. So a test whose results can't be fetched or measured is reported as healthy — a false all-clear. This is a genuine correctness bug in an agent that IS reachable in prod (dynamic: network query routed to thousandeyes-analyst and returned 'All 30 synthetic tests fully operational ... zero packet loss'). Whether any of those 30 were actually unmeasured cannot be observed from outside, but the classification logic is definitively wrong.",
+    "fix": "In _extract_metrics, when samples is empty (or all metrics are None), assign status='unknown' (or 'stale') instead of letting _classify default to green. In gather_te_context add an unknown_count / unknown_tests bucket, keep those out of green_count and healthy_sample, and add 'unknown_tests' to the LLM context + SYSTEM_PROMPT so the rollup surfaces 'N unmeasurable' rather than folding them into healthy.",
+    "fix_risk": "low"
+  }
+]

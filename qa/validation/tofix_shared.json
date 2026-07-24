@@ -1,0 +1,54 @@
+[
+  {
+    "id": "sh-104",
+    "surface": "shared",
+    "file": "agents/shared/s3_tools.py",
+    "line": 199,
+    "category": "correctness/data-loss",
+    "severity": "high",
+    "confidence": "high",
+    "summary": "_list_log_files breaks out of pagination after the FIRST max_files keys (lines 199-207). S3 list_objects_v2 returns keys in lexicographic ASCENDING order, and filenames embed the timestamp, so the first max_files keys are the OLDEST files of the day. The subsequent keys.sort(reverse=True) only reorders that already-oldest slice, then returns keys[:max_files]. Net effect: despite the 'Most recent files first' comment, every S3-backed query analyzes the oldest logs and never sees the most recent activity.",
+    "code": "if len(keys) >= max_files:\n    break            # captures first (oldest) N keys during ascending pagination\n...\nkeys.sort(reverse=True)   # line 210 \u2014 only reorders the stale oldest slice\nreturn keys[:max_files]",
+    "scenario": "investigate_ip / query_flows / query_alerts run mid-conference: the current-day prefix holds hundreds of files, listing returns morning files first, the break fires at max_files=25 well before the afternoon/evening files, so a live attack happening now produces zero hits \u2014 the agent reports 'no recent activity'.",
+    "suggested_fix": "Paginate the ENTIRE prefix, sort all collected keys descending, THEN slice [:max_files]; or use a reverse-ordered listing / StartAfter based on the current hour so the newest files are selected."
+  },
+  {
+    "id": "sh-105",
+    "surface": "shared",
+    "file": "agents/shared/athena_client.py",
+    "line": 62,
+    "category": "security/sql-injection",
+    "severity": "high",
+    "confidence": "high",
+    "summary": "sanitize_sql is a keyword blocklist that only rejects DROP/DELETE/INSERT/UPDATE/ALTER/CREATE/TRUNCATE/MERGE and requires the string to start with SELECT. It does NOT stop UNION SELECT, stacked subqueries, boolean/CTE injection, or comment tricks. execute_custom_sql passes LLM-generated SQL straight through, so a prompt-injected or crafted query can UNION in other tables (e.g. information_schema, cross-tenant tables) while still passing the filter.",
+    "code": "_RE_DANGEROUS = re.compile(r\"\\b(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|TRUNCATE|MERGE)\\b\", re.IGNORECASE)\n# 'SELECT x FROM conn UNION SELECT ... FROM information_schema.columns' passes",
+    "scenario": "An attacker's log content prompt-injects the analyzer agent into calling execute_custom_sql with 'SELECT uid FROM conn WHERE 1=0 UNION SELECT table_name, 1,... FROM information_schema.tables' \u2014 starts with SELECT, no blocked keyword, exfiltrates schema/other-table data.",
+    "suggested_fix": "Move from a blocklist to an allowlist: parse the statement (single statement only), require a single SELECT with no UNION/INTO/comment sequences, restrict FROM targets to a known table set, and prefer parameterized/prepared execution where Athena supports it."
+  },
+  {
+    "id": "sh-108",
+    "surface": "shared",
+    "file": "agents/shared/s3_tools.py",
+    "line": 293,
+    "category": "async/event-loop-blocking",
+    "severity": "high",
+    "confidence": "high",
+    "summary": "Every public s3_tools function is declared 'async def' but performs synchronous blocking work with no await/asyncio.to_thread: _load_zeek_events calls s3.get_object(...).read() (network) and gzip.decompress + full TSV parsing (CPU) inline (lines 293-298). Unlike athena_client which wraps boto3 in asyncio.to_thread, these block the event loop for the entire duration of downloading and parsing many .log.gz files. investigate_ip runs ~5 such loads (up to 30/20/15 files each) sequentially, stalling every other coroutine (FastAPI request handling, WebSocket pushes) for seconds.",
+    "code": "resp = s3.get_object(Bucket=S3_BUCKET, Key=key)   # blocking network I/O on the loop\nraw = resp[\"Body\"].read()\n... = _parse_zeek_tsv(raw)                          # blocking gzip+parse CPU on the loop",
+    "scenario": "Two concurrent investigate_ip requests hit the agent; because the S3 downloads/gzip run on the event loop, requests serialize and the web-server's WebSocket job_update heartbeats stall, surfacing as the UI 'stuck on Processing query' symptom and timeouts under load.",
+    "suggested_fix": "Wrap the blocking body in asyncio.to_thread (or run the whole _load_zeek_events in a thread), matching athena_client's pattern; ideally fetch/parse the per-key files concurrently with asyncio.gather over to_thread calls."
+  },
+  {
+    "id": "sh-110",
+    "surface": "shared",
+    "file": "agents/shared/telemetry.py",
+    "line": 115,
+    "category": "security/pii-leak",
+    "severity": "high",
+    "confidence": "medium",
+    "summary": "The sweep-1 redacting SpanProcessor only scrubs span._attributes (on_end iterates attrs). It does NOT touch span EVENTS or their attributes. S3SpanExporter serializes every event's attributes (s3_span_exporter.py lines 66-73) and the OTLP exporter ships them too. Several OTel GenAI conventions (and LangSmith emissions) record prompts/completions as span EVENTS (e.g. gen_ai.content.prompt / message events) rather than top-level attributes, so raw prompts/completions/PII can bypass redaction and land in Manifold and the permanent S3 archive. The redactor also ignores span names.",
+    "code": "for key in list(attrs.keys()):\n    val = attrs[key]\n    if isinstance(val, str) and _is_sensitive_attr(key):\n        attrs[key] = _redact(val)\n# span.events[*].attributes never inspected",
+    "scenario": "A LangSmith LLM span stores the prompt (containing an internal 10.x IP or an analyst's PII note) as a span event body; the redacting processor leaves events untouched; the S3 exporter writes the raw event to s3://blackhat-pope-dev-logs/.../aing-trace/ and OTLP forwards it to the external Manifold endpoint.",
+    "suggested_fix": "In the redacting processor also iterate span.events and redact each event's string attributes (and consider redacting span.name); confirm which fields LangSmith/GenAI instrumentation actually populates and cover both attributes and events."
+  }
+]

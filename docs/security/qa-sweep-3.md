@@ -60,6 +60,12 @@ Lesson, now baked into the `/qa` command: judge the fix as hard as the finding, 
 ## Verified (clean-state)
 7 containers healthy after rebuild; smoke 5/5; acid 5/5 (cookie-carrying). Per-fix live checks: IDOR owner 200 / foreign 404; WS foreign-origin 1008 close; `bh_sid` HttpOnly; CSP + security headers present; all three agents answer.
 
-## Still deferred (by design, low value)
-- **web-4:** jobStore has no eviction/TTL. Slow memory growth over a long run, recovered by a container bounce. Candidate for a sweep 4 if you want it airtight for a multi-day event.
-- **sanitize_sql residual:** a comment-less `OR 1=1` still parses. It sits behind the LLM and read-only single-DB Athena creds, so the blast radius is cross-table disclosure within `blackhat_pope_logs`, not writes.
+## Backlog closed to 100% (follow-up commit `e602a01`)
+A cross-check of all 48 unique findings against what was actually fixed turned up 4 still open, now closed:
+- **web-4:** jobStore and jobOwners are evicted on a 5-minute sweep (1h TTL), both maps cleaned together so they can't drift. The eviction timer is unref'd. Boundary logic unit-tested; the deployed container runs it.
+- **spec-103:** thousandeyes-analyst's `llm_complete` now catches broadly, so a provider 429/5xx/timeout degrades gracefully instead of a 500. The model-omit half was already safe once sh-102 made the default flash-lite.
+- **to-109:** `redate_slice` hard-refuses two catastrophic cases before any delete: `DST_DT == SRC_DT` (would wipe the source partition) and a non-demo bucket.
+- **to-111:** moot. It lived in `seed-opensearch.py`, removed in sweep 3.
+
+## Accepted residual (by design)
+- **sanitize_sql:** a comment-less `OR 1=1` still parses. It sits behind the LLM and read-only single-DB Athena creds, so the blast radius is cross-table disclosure within `blackhat_pope_logs`, not writes. Fully closing it needs a real SQL parser or parameterized inputs, which is a design change, not a bug fix.
