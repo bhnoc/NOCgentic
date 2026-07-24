@@ -1,0 +1,10 @@
+[
+  {
+    "id": "cfg-1",
+    "verdict": "REFUTED",
+    "real_severity": "low",
+    "evidence": "Direct check on live container: boto3 Session().get_credentials().method == 'iam-role', has_creds True. Containers DO get working creds via EC2 instance role (IMDSv2, boto3 handles the token). The .env.s3 AWS_* injection is unused/redundant (theater), NOT broken. App works (acid 5/5). Reclassify: misleading refresh-env-creds ritual + contradictory docs, not a broken-app critical.",
+    "fix": "Remove/deprecate refresh-env-creds.sh + the AWS_* injection; document that containers use IMDS instance role. Reconcile CLAUDE.md gotcha #2, deploy skill, compose.",
+    "fix_risk": "low"
+  }
+]

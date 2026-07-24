@@ -1,0 +1,28 @@
+{
+  "findings": [
+    {
+      "id": "cc-1",
+      "verdict": "CONFIRMED",
+      "real_severity": "high",
+      "evidence": "The alert-feed path is fully independent of the kill-switch. alertCache.refresh() (packages/web-server/src/services/alertCache.ts:127-128) fetches directly from ATHENA_HUNTER_URL ('http://athena-hunter:8005', line 3) via `${ATHENA_HUNTER_URL}/alerts/recent`, never routing through the orchestrator. The web-server broadcast loop (packages/web-server/src/index.ts:121-138 trickleNext -> alertCache.dequeue) pushes those alerts over the WS 'alert_feed' channel, and /api/v1/alerts/recent (packages/web-server/src/api/chat.ts:133-136) serves alertCache.recentEmitted(20). The kill-switch is an in-memory dict in a DIFFERENT process: agents/orchestrator/main.py:673 `_kill_switches: dict[str, bool] = {\"athena_hunter\": False}`, flipped at main.py:698-703, and consulted ONLY on the /query intent path (main.py:841 `if _kill_switches.get(\"athena_hunter\")`). alertCache.ts contains zero references to any kill-switch, orchestrator URL, or admin state. Live confirmation: GET https://aing.bhnoc.com/api/v1/alerts/recent returned 20 live Athena-derived alerts (real conference IPs 192.168.128-131.x, 10.220.x, timestamps 2026-07-24 ~02:xx) with no gating. Impact: after an operator hits the emergency stop, interactive chat serves the cover response but the sidebar keeps broadcasting real Athena alerts (IPs, cert/DNS/UA detections) to every connected client and the REST endpoint. This is the exact opposite of what 'kill athena' promises, so it is a real security/operational gap, not cosmetic.",
+      "fix": "Have the feed consult the same kill state. Minimal: web-server polls the orchestrator's GET /admin/killswitch (already exists, main.py:692) on a short interval, and short-circuit both trickleNext (skip dequeue/broadcast) and /api/v1/alerts/recent to return [] when athena_hunter is killed. Alternatively gate athena-hunter's own /alerts/recent behind the same switch so the source stops serving. Do NOT rely on the orchestrator's in-memory dict alone — it must be reachable from the web-server process (shared store or the admin GET).",
+      "fix_risk": "low"
+    },
+    {
+      "id": "lo-1",
+      "verdict": "CONFIRMED",
+      "real_severity": "high",
+      "evidence": "SAME UNDERLYING BUG AS cc-2 (see note). alertCache.dequeue() (alertCache.ts:87-108) masks restricted subnets on srcIp/dstIp via maskIp->scrubString (lines 91-96) and on description via scrubString (line 102), but copies the composite id verbatim: line 98 `id: raw.id`. scrubString (lines 19-28) is never applied to id. The id is built upstream as `alert_name|orig_h|ts`. Live proof: GET https://aing.bhnoc.com/api/v1/alerts/recent returned an alert with `\"id\":\"File Hosting Service Domain Domain in DNS Lookup (files .pythonhosted .org)|10.220.199.121|2026-07-24 02:59:47\"` while the SAME record's `\"srcIp\":\"10.220.69.121\"` was masked (octet 199 -> decoy 69). Octet 199 is in RESTRICTED_OCTETS (line 14). This id reaches the DOM (data-id) and the raw JSON, leaking the true restricted-subnet host that was deliberately masked everywhere else. (Note: this snapshot did not contain the hunter's exact .153.11 example, and one alert had `10.220.198.30` in its id — octet 198 is NOT restricted, so that one is legitimately unmasked and is not evidence.)",
+      "fix": "Run the id through the same scrubber before emitting: in dequeue(), set `id: scrubString(raw.id) ?? raw.id` (line 98). scrubString already handles the pipe-delimited IP in-place. Keep timestamps/names untouched — only the embedded 10.220.<restricted> octet is rewritten to the .69 decoy, matching srcIp behavior. Verify id uniqueness is preserved (multiple restricted hosts collapsing to .69 is acceptable given ts is part of the key).",
+      "fix_risk": "low"
+    },
+    {
+      "id": "cc-2",
+      "verdict": "CONFIRMED",
+      "real_severity": "high",
+      "evidence": "DUPLICATE of lo-1 — same root cause: alertCache.ts:98 `id: raw.id` bypasses the scrubString sanitizer that is applied to srcIp/dstIp/description (lines 91-102). Restricted octets in RESTRICTED_OCTETS={12,13,14,15,150,152,153,154,199} (line 14) leak raw in the id string. Live evidence identical to lo-1: `\"id\":\"...|10.220.199.121|2026-07-24 02:59:47\"` with masked `\"srcIp\":\"10.220.69.121\"` from https://aing.bhnoc.com/api/v1/alerts/recent. lo-1 and cc-2 are the SAME bug and should be tracked as one.",
+      "fix": "Same single fix as lo-1: apply scrubString to raw.id at alertCache.ts:98. One-line change resolves both lo-1 and cc-2.",
+      "fix_risk": "low"
+    }
+  ]
+}

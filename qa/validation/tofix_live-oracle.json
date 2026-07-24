@@ -1,0 +1,41 @@
+[
+  {
+    "id": "lo-1",
+    "surface": "live-oracle",
+    "file": "packages/web-server/src/services/alertFeed (best guess) \u2014 IP masking applied to srcIp/dstIp but not to the composite id string",
+    "line": 0,
+    "category": "security",
+    "severity": "high",
+    "confidence": "high",
+    "summary": "Restricted-subnet IP masking is bypassed in the alert `id` field: raw internal IPs on restricted subnets leak while srcIp is correctly masked to .69.",
+    "code": "GET https://aing.bhnoc.com/api/v1/alerts/recent",
+    "scenario": "In /api/v1/alerts/recent, one alert has \"id\":\"Potential SSH Scan|10.220.153.11|2026-07-24 02:01:02\" but \"srcIp\":\"10.220.69.11\" (masked). Another has \"id\":\"PyCurl Suspicious User Agent Outbound|10.220.199.121|...\" with \"srcIp\":\"10.220.69.121\". 10.220.153.x and 10.220.199.x are in the restricted set that must be masked to .69. The masking function is applied to srcIp/dstIp but NOT to the composite id string, so the true internal IP leaks in every alert id. This is the exact zone-masking control the orchestrator is supposed to enforce.",
+    "suggested_fix": "Apply the same IP-masking transform to any IP embedded in the alert `id`/key string (or build the id from already-masked fields), not just the srcIp/dstIp columns."
+  },
+  {
+    "id": "lo-2",
+    "surface": "live-oracle",
+    "file": "runtime (alert-triage agent answer synthesis vs. structured data)",
+    "line": 0,
+    "category": "correctness",
+    "severity": "high",
+    "confidence": "high",
+    "summary": "alert-triage NL answer contradicts its own structured severity_breakdown, and the same question gives inconsistent answers across two runs.",
+    "code": "POST /api/v1/chat {\"query\":\"How many alerts in the last 24 hours by severity?\"}",
+    "scenario": "Run 1 answer: 'Total alert volume reaches 150 events ... consisting entirely of severity 2 informational notifications.' But the same job's data.severity_breakdown is {critical:0, high:0, medium:95, low:55, informational:0} \u2014 i.e. NOT informational at all, and mostly medium. The prose flatly contradicts the structured data it was given. Run 2 of the identical query correctly said '150 alerts ... 0 critical, 0 high, and 95 medium'. Same query, two contradictory answers (one wrong), both returned with high confidence (0.85 / 0.9).",
+    "suggested_fix": "Constrain the triage answer template to render severity counts directly from severity_breakdown rather than free-form LLM prose, or add a post-generation validation step that rejects answers whose stated severities don't match the structured breakdown."
+  },
+  {
+    "id": "lo-3",
+    "surface": "live-oracle",
+    "file": "runtime (thousandeyes-analyst agent \u2014 prompt/token budget + answer extraction)",
+    "line": 0,
+    "category": "quality",
+    "severity": "high",
+    "confidence": "high",
+    "summary": "thousandeyes-analyst leaks the model's internal scratchpad/chain-of-thought into the user-facing answer, truncates at max_tokens, and states a self-contradictory summary.",
+    "code": "POST /api/v1/chat {\"query\":\"How is the network doing, any packet loss or latency issues?\"}",
+    "scenario": "The user-facing answer literally begins with model reasoning: 'internal Internal \", \"Google DNS \", \"Internal Umbrella DNS\", ... (Note: there are duplicates in the JSON list, let's list the distinct ones or just state the count/sample). Let's write out the response cleanly.## Answer\\n0 healthy, 0 degraded, 0 failing +' \u2014 then cuts off. llm_metrics.finish_reason is 'max_tokens' (output_tokens 1995 hit the cap). So (a) the model's private scratchpad leaked to the user, (b) the answer is truncated mid-sentence, and (c) it reports '0 healthy, 0 degraded, 0 failing' while data shows total_tests=30, unknown_count=30 \u2014 every test is 'unknown', not '0 of everything'. Confidence 0.7 despite an unusable answer.",
+    "suggested_fix": "Raise/adjust the thousandeyes agent max output token budget so it doesn't truncate, strip any pre-'## Answer' preamble before returning, and map unknown_count into the summary instead of implying all-zero/all-healthy."
+  }
+]

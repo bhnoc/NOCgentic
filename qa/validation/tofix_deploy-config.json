@@ -1,0 +1,15 @@
+[
+  {
+    "id": "cfg-2",
+    "surface": "deploy-config",
+    "file": ".env.example",
+    "line": 1,
+    "category": "config",
+    "severity": "high",
+    "confidence": "high",
+    "summary": ".env.example describes the abandoned OpenSearch architecture and is missing every variable the current Athena stack needs (GEMINI_API_KEY, LLM_PROVIDER, GEMINI_MODEL, ADMIN_BEARER_TOKEN, AUDIT_*, THOUSANDEYES_BEARER_TOKEN, ATHENA_*, OTEL_*). deploy.sh explicitly points the operator here to seed the env file.",
+    "code": "ops/deploy.sh:48  echo \"!! $APP_DIR/$ENV_FILE is missing. Seed it once (see .env.example); refusing to deploy.\"   # but .env.example only lists OPENSEARCH_API_URL/KEY, PORT, RATE_LIMIT, agent URLs",
+    "scenario": "A fresh-box operator following deploy.sh's instruction seeds .env.s3 from .env.example, gets an OpenSearch config with no LLM key, no Athena settings, no bearer tokens. The stack boots (containers start) but every LLM call fails (no GEMINI_API_KEY), Athena defaults may or may not match, killswitch/audit are dead \u2014 'boots but broken.'",
+    "suggested_fix": "Rewrite .env.example to enumerate the real current vars (LLM, ATHENA_*, S3/TRACE_S3_*, OTEL_*, AUDIT_*, ADMIN_BEARER_TOKEN, THOUSANDEYES_*) or point deploy.sh at the deploy-skill's env list instead."
+  }
+]

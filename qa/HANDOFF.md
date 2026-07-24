@@ -89,3 +89,36 @@ Verified: 7 containers healthy, smoke 5/5, acid 5/5, eviction in deployed dist, 
 - sanitize_sql comment-less `OR 1=1` parses: defense-in-depth behind the LLM + read-only single-DB Athena creds.
   Not a discrete finding; would need a real SQL parser or parameterized inputs to fully close. Documented, accepted.
 No open findings at any severity. 3 sweeps converged.
+
+## Sweep 4 — IN PROGRESS (2026-07-24)
+Backlog closed 100% going in. Sweep 4 targets bug CLASSES sweeps 1-3 didn't systematically hunt
+(per the expanded /qa playbook), since per-file logic is already clean. 4 hunters:
+- deploy-config (cfg-): env-var-read vs deploy-provided drift, boots-but-broken, new-var wiring
+  (ADMIN_BEARER_TOKEN/ALLOWED_ORIGIN), stranded published-port refs after the expose: change.
+- contracts-concurrency (cc-): half-built producer/consumer handshakes, check-then-act + RMW races
+  on shared in-memory state (kill_switches, jobStore, alertCache, audit subscribers/last_seen_key).
+- quality-lies (ql-): vacuous confidence/health/score passes (confidence fallbacks, thousandeyes unknown,
+  capped-sample-as-total, backwards thresholds).
+- live-oracle (lo-): drive the running app, check REAL answers (correctness, IP-mask leaks, injection
+  guardrail, empty-result handling) not just 200s.
+Baseline: main @ 7893496, smoke 5/5.
+
+## Sweep 4 — COMPLETE (2026-07-24, deployed @ d5ce853)
+Hunted the classes sweeps 1-3 skipped (deploy-config, contracts, concurrency, quality-lies, live-oracle).
+31 findings; 1 flagged-critical REFUTED (cfg-1: containers use IMDS instance role, verified iam-role — the
+.env.s3 AWS injection is theater not broken). 7 highs + 4 mediums fixed. Writeup: docs/security/qa-sweep-4.md.
+Verified clean-state: smoke 5/5, acid 5/5, no restricted IP in alert id (was leaking .199.121), TE scratchpad
+stripped + real confidence, web-server has ADMIN_BEARER_TOKEN for kill-switch.
+
+Key fixes: cc-1 (kill-switch now freezes the alert feed, fail-safe), lo-1 (IP-in-id leak scrubbed),
+ql-1/2/3 (confidence LOW-sentinel on parse miss, not fake-high), ql-4 (dead TE feed reads unavailable not
+all-clear), lo-2 (normalized severity into triage prompt), lo-3 (scratchpad strip + max_tokens 4096),
+cfg-2 (.env.example rewritten to live Athena stack), ql-7/8/9 + cc-3.
+
+Deferred (low, by-design): refresh-env-creds ritual redundant (cfg-1), config-doc mismatches (cfg-3..8),
+SSE edge cases (cc-4/5). sanitize_sql OR-1=1 residual (from sweep 2) still stands.
+TE prose sometimes omits unknown-count clause (LLM noncompliance, structured data is correct) — residual.
+
+## OPS ISSUE (not sweep-caused): SSH to box with ~/.ssh/blackhat started refusing (Permission denied publickey)
+mid-sweep despite working earlier + unchanged key. CI runner (own auth) unaffected; verified all via HTTPS.
+Check box authorized_keys/sshd when convenient.

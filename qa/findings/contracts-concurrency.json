@@ -1,0 +1,67 @@
+[
+  {
+    "id": "cc-1",
+    "surface": "contracts-concurrency",
+    "file": "packages/web-server/src/services/alertCache.ts",
+    "line": 127,
+    "category": "contract",
+    "severity": "high",
+    "confidence": "high",
+    "summary": "The athena_hunter kill-switch does NOT stop the live alert-feed sidebar. The kill-switch is only read on the orchestrator's /query athena_hunter branch (orchestrator/main.py:841). But the web-server's alertCache calls athena-hunter's /alerts/recent DIRECTLY (bypassing the orchestrator entirely), and nothing in packages/web-server/* is aware of the kill-switch (grep for kill/admin in web-server src returns nothing).",
+    "code": "const url = `${ATHENA_HUNTER_URL}/alerts/recent?hours=${LOOKBACK_HOURS}&limit=${MAX_ALERTS}`;\nconst resp = await fetch(url, { signal: AbortSignal.timeout(60000) });",
+    "scenario": "During a live incident an operator hits 'KILL ATHENA' in the audit-monitor UI (the button whose tooltip promises 'stop routing user queries to the Athena agent'). Interactive /query calls now serve the cover response. But the 30-min alertCache refresh loop keeps hitting athena-hunter /alerts/recent, and the server-side trickle timer (index.ts:121) keeps broadcasting real Athena-derived alerts to every connected WebSocket client. The operator believes Athena data flow to users is stopped; the entire sidebar feed contradicts that. If Athena is killed *because* it is leaking bad/sensitive data, that data keeps flowing to all tabs.",
+    "suggested_fix": "Route the alert-feed refresh through the orchestrator (so it honors the kill-switch), or have alertCache poll the orchestrator's /admin/killswitch and pause dequeue/broadcast when athena_hunter is killed. At minimum the kill-switch semantics must cover both the interactive path and the feed path, since both read the same agent."
+  },
+  {
+    "id": "cc-2",
+    "surface": "contracts-concurrency",
+    "file": "packages/web-server/src/services/alertCache.ts",
+    "line": 98,
+    "category": "contract",
+    "severity": "medium",
+    "confidence": "high",
+    "summary": "Restricted-subnet source IP leaks through the alert `id` field, defeating the restricted-range sanitizer. alertCache.dequeue() scrubs srcIp, dstIp, and description, but copies `id: raw.id` verbatim. athena-hunter builds that id as f\"{alert_name}|{orig_h}|{ts_raw}\" (athena-hunter/main.py:801-805), embedding orig_h (the raw source IP). The frontend then writes it to the DOM as card.dataset.id (static/index.html:1177).",
+    "code": "const alert: Alert = {\n  id: raw.id,   // <-- unscrubbed; contains orig_h e.g. \"ET SCAN|10.220.150.5|2026-...\"\n  ...\n  description: scrubString(raw.description) ?? raw.description,\n  ...(srcIp ? { srcIp } : {}),\n  ...(dstIp ? { dstIp } : {}),\n};",
+    "scenario": "An alert originates from a restricted subnet (e.g. 10.220.150.5). srcIp is masked to 10.220.69.5 and description is scrubbed, but the alert's id string still contains '10.220.150.5' and is emitted to the client in the WS payload and rendered into the alert card's data-id attribute. Anyone inspecting the DOM (or the raw WS/`/api/v1/alerts/recent` JSON) recovers the true restricted IP the filter was meant to hide.",
+    "suggested_fix": "Run scrubString over raw.id in dequeue() (and in recentEmitted output), or stop embedding orig_h in the id on the athena-hunter side (use a hash/uid instead). The sanitizer contract must cover every field that carries orig_h, not just srcIp/dstIp/description."
+  },
+  {
+    "id": "cc-3",
+    "surface": "contracts-concurrency",
+    "file": "tools/audit-monitor/app.py",
+    "line": 243,
+    "category": "concurrency",
+    "severity": "medium",
+    "confidence": "medium",
+    "summary": "audit-monitor's poll cursor (last_seen_key) can skip S3 keys permanently on a partial fetch failure. _poll_once advances last_seen_key[sp] to `key` only after a key is fully fetched/parsed, but processes keys in list order and swallows per-key exceptions. If an earlier key throws on get_object/gzip while a later key in the same batch succeeds, the cursor jumps past the failed key and it is never re-listed.",
+    "code": "for obj in resp.get(\"Contents\") or []:\n    key = obj[\"Key\"]\n    try:\n        body = await asyncio.to_thread(lambda k=key: s3.get_object(...)[\"Body\"].read())\n        ...\n        last_seen_key[sp] = key   # advanced even though an EARLIER key may have failed\n    except Exception as exc:\n        log.warning(\"failed to fetch/parse %s: %s\", key, exc)",
+    "scenario": "Batch returns keys [A, B, C] for a service prefix. get_object(A) throws a transient ThrottlingException (caught, logged). B and C succeed, so last_seen_key = C. Next poll lists StartAfter=C, so A's spans are dropped from the audit trail forever — a gap in the 'permanent record of every agent interaction' with no error surfaced to the operator.",
+    "suggested_fix": "Only advance last_seen_key to the highest CONTIGUOUS successfully-processed key; stop advancing past the first failure in a batch (break, or track the last key with no preceding failure) so the failed key is retried next cycle."
+  },
+  {
+    "id": "cc-4",
+    "surface": "contracts-concurrency",
+    "file": "tools/audit-monitor/app.py",
+    "line": 458,
+    "category": "concurrency",
+    "severity": "low",
+    "confidence": "medium",
+    "summary": "SSE /api/stream registers the subscriber queue BEFORE snapshotting recent_events, so a span appended in that window is delivered twice. subscribers.append(q) runs synchronously in stream() (line 458); the recent_events snapshot happens later, inside gen() (line 462), after the ASGI server begins iterating the generator. Any poll_loop append between those two points lands in both the snapshot and the queue.",
+    "code": "subscribers.append(q)          # line 458 — queue is live now\n\nasync def gen():\n    recent_snapshot = list(recent_events)   # line 462 — taken later\n    if recent_snapshot:\n        yield f\"event: snapshot ...\"\n    while True:\n        ev = await q.get()   # same event may already be in the snapshot",
+    "scenario": "Client connects. Between subscribers.append(q) and the snapshot, poll_loop's _poll_once appends event E to recent_events AND does q.put_nowait(E). The client receives E once in the `snapshot` event and again as a `span` event → duplicate span in the live view (unless the frontend dedups by span_id, which is not guaranteed).",
+    "suggested_fix": "Snapshot recent_events and append the subscriber queue atomically (no await between them), e.g. take the snapshot immediately before subscribers.append(q) in stream(), or dedup by span_id on the client. Registering before snapshotting guarantees no loss but must be paired with client-side dedup."
+  },
+  {
+    "id": "cc-5",
+    "surface": "contracts-concurrency",
+    "file": "tools/audit-monitor/app.py",
+    "line": 241,
+    "category": "resource",
+    "severity": "low",
+    "confidence": "high",
+    "summary": "SSE live spans are silently dropped for a slow/backed-up client. Each subscriber queue is maxsize=500 and _poll_once does put_nowait with `except asyncio.QueueFull: pass` — no catch-up, no backpressure. (Note: the queue itself is NOT leaked — gen()'s finally block removes it on disconnect/CancelledError — but for an idle feed that removal is deferred until the next span forces a failed yield.)",
+    "code": "for q in list(subscribers):\n    try:\n        q.put_nowait(event)\n    except asyncio.QueueFull:\n        pass   # event vanishes from this client's live view, silently",
+    "scenario": "A browser tab with the audit view is throttled/backgrounded and drains its EventSource slowly. Its queue fills to 500; every subsequent span is dropped for that client with no gap indicator. The operator watching that tab sees an incomplete audit stream and has no way to know spans were skipped. Separately, if the feed is idle, a disconnected client's gen() blocks in `await q.get()` and its queue is only removed when the next span triggers a failed yield.",
+    "suggested_fix": "On QueueFull, either close the SSE connection (forcing the client to reconnect and re-snapshot) or emit a `gap`/`dropped` sentinel event so the client can refetch /api/recent. Consider a heartbeat so idle-stream disconnects are detected and queues cleaned promptly."
+  }
+]
