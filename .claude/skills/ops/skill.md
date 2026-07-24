@@ -126,6 +126,19 @@ checkout into `/opt/bhasia/app` (preserving `.env`/`.env.s3`/`node_modules`/logs
 IMDS creds into `.env.s3`, rebuilds the compose stack, and health-checks `/health`.
 Watch it: `gh run watch <id>` / `gh run list --branch main`.
 
+> ⚠️ **Two deploy gotchas (learned 2026-07-24, cost an hour):**
+> 1. **`nginx/nginx-ssl.conf` edits need `--force-recreate nginx`, NOT a reload.** The
+>    config is bind-mounted (`./nginx/nginx-ssl.conf:/etc/nginx/nginx.conf:ro`). rsync
+>    replaces the file via write-then-rename → new inode; the running container's mount
+>    still points at the OLD inode, so `nginx -s reload` re-reads stale config and silently
+>    no-ops. Fix: `sudo docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d
+>    --force-recreate nginx`, then confirm with `docker exec app-nginx-1 sha256sum
+>    /etc/nginx/nginx.conf` == host file's sha. (Same inode-cache family as gotcha #1 in CLAUDE.md.)
+> 2. **`gh run list --limit 1` can return a CACHED/older run.** When watching a specific
+>    deploy, match on `headSha`: `gh run list --branch main --json databaseId,headSha
+>    --jq '.[]|select(.headSha|startswith("<sha>"))|.databaseId'`. Otherwise you'll "verify"
+>    against a stale run (old container uptimes) and think your deploy didn't land.
+
 ### Runner health
 ```bash
 gh api /repos/bhnoc/NOCgentic/actions/runners --jq '.runners[]|{name,status}'   # want online
