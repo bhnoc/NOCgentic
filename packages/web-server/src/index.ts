@@ -43,6 +43,15 @@ async function main() {
   await server.register(fastifyRateLimit, {
     max: 120,
     timeWindow: '1 minute',
+    // Key on nginx's X-Real-IP, which nginx sets to $remote_addr and OVERWRITES
+    // on every request (nginx-ssl.conf). trustProxy makes request.ip come from the
+    // client-appendable left-most X-Forwarded-For, so a fresh XFF per request would
+    // otherwise mint a new bucket and bypass the limit entirely. X-Real-IP can't be
+    // spoofed past the edge. Fall back to request.ip only if the header is absent.
+    keyGenerator: (req) => {
+      const realIp = req.headers['x-real-ip'];
+      return (Array.isArray(realIp) ? realIp[0] : realIp) || req.ip;
+    },
     allowList: (req) => {
       // Exempt health checks and GET polling endpoints from rate limiting
       if (req.url === '/health') return true;

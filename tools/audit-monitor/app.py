@@ -19,7 +19,7 @@ Environment:
     AUDIT_LOOKBACK        — default: 300 (initial lookback seconds)
     AUDIT_ROOT_PATH       — default: ""  (set to /bh/1337/thetraces when behind nginx)
     AUDIT_BEARER_TOKEN    — shared secret (required, no default — server refuses to start if missing)
-    AUDIT_COOKIE_SECRET   — HMAC key for cookie signing (default: derived from bearer token)
+    AUDIT_COOKIE_SECRET   — HMAC key for cookie signing (default: ephemeral per-process random secret)
     AUDIT_COOKIE_TTL      — cookie lifetime in seconds (default: 86400 = 24h)
     AWS_PROFILE           — forwarded to boto3 if set
 """
@@ -71,9 +71,6 @@ ROOT_PATH = os.getenv("AUDIT_ROOT_PATH", "").rstrip("/")
 
 BEARER_TOKEN    = os.getenv("AUDIT_BEARER_TOKEN", "")
 COOKIE_TTL      = int(os.getenv("AUDIT_COOKIE_TTL", "86400"))
-_cookie_secret  = os.getenv("AUDIT_COOKIE_SECRET") or (
-    hashlib.sha256(BEARER_TOKEN.encode()).hexdigest() if BEARER_TOKEN else ""
-)
 COOKIE_NAME = "bh_audit"
 
 BASE_DIR = Path(__file__).parent
@@ -84,6 +81,19 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] audit-monitor: %(message)s",
 )
 log = logging.getLogger("audit-monitor")
+
+# Cookie signing secret. SAFE-BY-DEFAULT: never empty, and never derived from
+# the bearer token (a blank bearer used to yield "" here, making the HMAC
+# forgeable — fail-OPEN). Use the configured secret if present, otherwise mint
+# a strong ephemeral per-process secret so cookies remain unforgeable even when
+# unconfigured.
+_cookie_secret = os.getenv("AUDIT_COOKIE_SECRET") or ""
+if not _cookie_secret:
+    _cookie_secret = secrets.token_urlsafe(32)
+    log.warning(
+        "no AUDIT_COOKIE_SECRET set — using ephemeral per-process secret; "
+        "sessions won't survive restart"
+    )
 
 
 def _s3():
@@ -396,8 +406,22 @@ async def admin_get_killswitch() -> Any:
         return r.json()
 
 
+def _has_valid_bearer(request: Request) -> bool:
+    """True only for a valid Bearer *header* — not a session cookie."""
+    auth_hdr = request.headers.get("authorization", "")
+    if not auth_hdr.lower().startswith("bearer "):
+        return False
+    token = auth_hdr.split(" ", 1)[1].strip()
+    return bool(BEARER_TOKEN) and secrets.compare_digest(token, BEARER_TOKEN)
+
+
 @app.post("/admin/killswitch/athena")
 async def admin_set_athena(request: Request) -> Any:
+    # Defence-in-depth: this state-changing admin route requires a valid Bearer
+    # HEADER, not just the viewer's session cookie. A stolen/forged cookie (or a
+    # logged-in operator's browser) cannot flip the kill-switch on its own.
+    if not _has_valid_bearer(request):
+        return JSONResponse({"error": "bearer token required"}, status_code=401)
     body = await request.json()
     async with httpx.AsyncClient(timeout=5) as client:
         r = await client.post(f"{ORCHESTRATOR_URL}/admin/killswitch/athena", json=body)
@@ -454,7 +478,10 @@ async def stream():
 @app.on_event("startup")
 async def _startup() -> None:
     if not BEARER_TOKEN:
-        log.error("AUDIT_BEARER_TOKEN is not set — every request will 401.")
+        log.warning(
+            "AUDIT_BEARER_TOKEN unset — trace viewer is LOCKED (deny-all). "
+            "Set AUDIT_BEARER_TOKEN + AUDIT_COOKIE_SECRET to enable."
+        )
     await preload()
     asyncio.create_task(poll_loop())
 

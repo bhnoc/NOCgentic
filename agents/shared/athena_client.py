@@ -77,7 +77,11 @@ def sanitize_sql(sql: str) -> str:
 
 def sanitize_value(val: str) -> str:
     """Escape a value for use in SQL strings (prevent injection)."""
-    return val.replace("'", "''").replace("\\", "\\\\")[:500]
+    # Truncate the RAW input BEFORE escaping. Escaping first and slicing after
+    # can chop a doubled '' back to a lone trailing ' at the 500-char boundary,
+    # breaking out of the '...' SQL literal (injection). Truncate, then escape.
+    val = val[:500]
+    return val.replace("'", "''").replace("\\", "\\\\")
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +142,9 @@ async def execute_query(
         WorkGroup=ATHENA_WORKGROUP,
     )
     query_id = response["QueryExecutionId"]
-    logger.info("Athena query started: id=%s sql=%s", query_id, sql[:200])
+    # Do NOT log the raw SQL body at INFO — query strings embed sanitized values
+    # (internal IPs, domains) that would leak to the OTLP/S3 log archive.
+    logger.info("Athena query started: id=%s", query_id)
 
     # Poll for completion
     elapsed = 0.0

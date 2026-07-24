@@ -37,3 +37,6 @@ Thumbs.db
 ### Private notes
 PRIVATE_NOTES.md
 ubuntu-mirror.txt
+
+### rapid-prototype scratch (findings, secrets, harness) — never commit
+temp/

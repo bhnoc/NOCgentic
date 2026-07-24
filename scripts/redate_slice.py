@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Re-date a live traffic slice from dt=2026-04-24 -> dt=2026-07-23 (today), +90 days.
+Re-date a live traffic slice from dt=2026-04-24 -> dt=2026-07-24 (today), +91 days.
 
 Takes a contiguous 3-hour window (00:00-03:00) of the genuinely-live 04-24 traffic
 and INSERTs it back into the same tables under a new dt partition, with the two
 time columns shifted so the app sees "today":
-  - ts          (epoch double)  += 7_689_600   (89 days in seconds)
-  - ts_datetime (string)        += interval '89' day
+  - ts          (epoch double)  += SHIFT_S seconds
+  - ts_datetime (string)        += interval 'SHIFT_D' day
 
-INSERT INTO writes parquet into s3://.../<table>/dt=2026-07-22/ and auto-registers
+INSERT INTO writes parquet into s3://.../<table>/dt=<DST_DT>/ and auto-registers
 the partition. Views (alerts, uid_lookup, fuid_lookup) light up automatically.
 
-Idempotent: drops any existing dt=2026-07-22 partition (Glue + S3) before inserting.
+Idempotent: drops any existing dt=<DST_DT> partition (Glue + S3) before inserting.
 """
 import boto3, time, sys
 
@@ -21,9 +21,9 @@ WG       = "blackhat-pope-dev"
 BUCKET   = "blackhat-pope-parquet"
 
 SRC_DT   = "2026-04-24"
-DST_DT   = "2026-07-23"
-SHIFT_S  = 7_776_000          # 90 days in seconds
-SHIFT_D  = "90"               # days, for interval literal
+DST_DT   = "2026-07-24"
+SHIFT_S  = 7_862_400          # 91 days in seconds
+SHIFT_D  = "91"               # days, for interval literal
 WIN_FROM = f"{SRC_DT} 00:00:00"
 WIN_TO   = f"{SRC_DT} 03:00:00"
 

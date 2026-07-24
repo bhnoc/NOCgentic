@@ -121,7 +121,7 @@ def classify_iocs(iocs: list[str]) -> dict[str, list[str]]:
                 classified["ips"].append(ioc)
         elif _RE_UID.fullmatch(ioc):
             classified["uids"].append(ioc)
-        elif _RE_DOMAIN.search(ioc):
+        elif _RE_DOMAIN.fullmatch(ioc):
             classified["domains"].append(ioc)
     return classified
 
@@ -293,15 +293,22 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
         span.set_attribute("query.length", len(query))
         span.set_attribute("query.text", query[:500])
 
+        # Sanitize every IOC before interpolating into the prompt (mirrors what
+        # _fallback_queries does) — defense-in-depth against injection via a
+        # quote-bearing IOC that slipped through classification.
         ioc_ctx = ""
         if iocs["ips"]:
-            ioc_ctx += f"IPs to investigate: {', '.join(iocs['ips'][:5])}\n"
+            _ips = [sanitize_value(v) for v in iocs["ips"][:5]]
+            ioc_ctx += f"IPs to investigate: {', '.join(_ips)}\n"
         if iocs["domains"]:
-            ioc_ctx += f"Domains: {', '.join(iocs['domains'][:5])}\n"
+            _domains = [sanitize_value(v) for v in iocs["domains"][:5]]
+            ioc_ctx += f"Domains: {', '.join(_domains)}\n"
         if iocs["uids"]:
-            ioc_ctx += f"UIDs: {', '.join(iocs['uids'][:3])}\n"
+            _uids = [sanitize_value(v) for v in iocs["uids"][:3]]
+            ioc_ctx += f"UIDs: {', '.join(_uids)}\n"
         if iocs["md5s"] or iocs["sha256s"]:
-            ioc_ctx += f"Hashes: {', '.join((iocs['md5s'] + iocs['sha256s'])[:3])}\n"
+            _hashes = [sanitize_value(v) for v in (iocs["md5s"] + iocs["sha256s"])[:3]]
+            ioc_ctx += f"Hashes: {', '.join(_hashes)}\n"
 
         from datetime import datetime as _dt, timedelta as _td
         _today = _dt.strptime(today, "%Y-%m-%d")
@@ -360,6 +367,12 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
             "yesterday": _yesterday,
             "7_days_ago": _week_ago,
             "30_days_ago": _month_ago,
+            # The prompt advertises `dt >= 'START_DATE'` / `dt >= 'START'` for
+            # multi-day ranges but never defined the literal, so it survived
+            # substitution and matched zero partitions. Resolve to the 7-day
+            # default the user_content advertises.
+            "start_date": _week_ago,
+            "start": _week_ago,
         }
         def _sub_tokens(s: str) -> str:
             for tok, real in _token_dates.items():
@@ -380,8 +393,18 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
                         count=1,
                     )
                 else:
-                    sql = sql.rstrip().rstrip(";")
-                    sql += f" WHERE dt = '{today}'"
+                    # No WHERE: insert the partition predicate BEFORE the first
+                    # GROUP BY / ORDER BY / HAVING / LIMIT clause, else append.
+                    # Appending blindly produced invalid SQL like
+                    # "... GROUP BY x WHERE dt='...'".
+                    body = sql.rstrip().rstrip(";")
+                    m = re.search(r"(?i)\s+(GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b", body)
+                    if m:
+                        sql = (
+                            f"{body[:m.start()]} WHERE dt = '{today}'{body[m.start():]}"
+                        )
+                    else:
+                        sql = f"{body} WHERE dt = '{today}'"
             if "LIMIT" not in sql.upper():
                 sql = sql.rstrip().rstrip(";") + " LIMIT 200"
             validated.append(sql)

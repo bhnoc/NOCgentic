@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,109 @@ logger = logging.getLogger(__name__)
 _tracer = None
 _meter = None
 _initialized = False
+
+
+# ---------------------------------------------------------------------------
+# Redaction — scrub PII / internal IPs / secrets before anything leaves the
+# process. The per-agent sanitize() only runs on the LLM *input* string; raw
+# prompts, completions, span attributes and logged SQL still reach the external
+# OTLP endpoint (Manifold), the permanent S3 archive, and the console. Redact
+# at the export boundary so nothing sensitive is shipped. Patterns mirror the
+# per-agent sanitize() (see agents/*/main.py).
+# ---------------------------------------------------------------------------
+
+_RE_INTERNAL_IP = re.compile(
+    r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
+)
+_RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
+_RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
+_RE_API_KEY = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
+_RE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
+
+# Span attribute keys that may carry sensitive free text (LLM prompts/
+# completions, HTTP bodies, raw SQL). Matched case-insensitively by substring.
+_SENSITIVE_ATTR_HINTS = (
+    "gen_ai.prompt",
+    "gen_ai.completion",
+    "prompt",
+    "completion",
+    "http.request.body",
+    "http.response.body",
+    "db.statement",
+    "sql",
+)
+
+
+def _redact(text: str) -> str:
+    """Scrub internal IPs, secrets, passwords and API keys from free text."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = _RE_INTERNAL_IP.sub("[INTERNAL-IP]", text)
+    text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
+    text = _RE_PASSWORD.sub("password: [REDACTED]", text)
+    text = _RE_API_KEY.sub("api_key: [REDACTED]", text)
+    text = _RE_BEARER.sub("bearer [REDACTED]", text)
+    return text
+
+
+def _is_sensitive_attr(key: str) -> bool:
+    k = key.lower()
+    return any(hint in k for hint in _SENSITIVE_ATTR_HINTS)
+
+
+class _RedactingLogFilter(logging.Filter):
+    """Redact sensitive text from log records before they hit any handler.
+
+    Attached to the OTLP LoggingHandler so raw SQL / internal IPs in log lines
+    (e.g. athena_client "Athena query started") never reach Manifold. Mutates
+    the already-formatted message so downstream handlers emit the scrubbed form.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+            redacted = _redact(msg)
+            if redacted != msg:
+                record.msg = redacted
+                record.args = None
+        except Exception:  # never drop a log line because redaction blew up
+            pass
+        return True
+
+
+def _make_redacting_span_processor():
+    """Return a SpanProcessor that scrubs sensitive span attributes on_end.
+
+    Registered BEFORE the exporting BatchSpanProcessors so its in-place
+    mutation of the (mutable) span attribute map is seen by the OTLP, S3 and
+    console exporters. Defensive: any failure is swallowed so telemetry keeps
+    flowing — we redact, we never drop spans.
+    """
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    class _RedactingSpanProcessor(SpanProcessor):
+        def on_start(self, span, parent_context=None):  # noqa: D401
+            pass
+
+        def on_end(self, span) -> None:
+            try:
+                attrs = getattr(span, "_attributes", None)
+                if not attrs:
+                    return
+                for key in list(attrs.keys()):
+                    val = attrs[key]
+                    if isinstance(val, str) and _is_sensitive_attr(key):
+                        attrs[key] = _redact(val)
+            except Exception:
+                pass
+
+        def shutdown(self) -> None:
+            pass
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            return True
+
+    return _RedactingSpanProcessor()
 
 
 def _normalize_endpoint(endpoint: str) -> str:
@@ -109,6 +213,15 @@ def init_telemetry(service_name: str | None = None) -> None:
             trace_provider = TracerProvider(resource=resource)
     else:
         trace_provider = TracerProvider(resource=resource)
+
+    # Redacting processor MUST be registered first: processors fire in
+    # registration order, and it mutates the span's attribute map in place so
+    # every downstream exporter (OTLP/Manifold, S3 archive, console) sees the
+    # scrubbed prompts/completions/SQL rather than the raw values.
+    try:
+        trace_provider.add_span_processor(_make_redacting_span_processor())
+    except Exception as exc:
+        logger.warning("Redacting span processor failed to initialise: %s", exc)
 
     # OTLP exporter → Manifold
     trace_provider.add_span_processor(
@@ -220,6 +333,9 @@ def _setup_log_export(
     # Attach to root logger — captures all INFO+ logs from all modules.
     # Logs are automatically tagged with the active trace_id and span_id.
     handler = LoggingHandler(level=log_level, logger_provider=log_provider)
+    # Redact internal IPs / secrets / raw SQL from log records before they are
+    # shipped to Manifold's /v1/logs endpoint.
+    handler.addFilter(_RedactingLogFilter())
     logging.getLogger().addHandler(handler)
 
 

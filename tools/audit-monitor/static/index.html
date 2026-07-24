@@ -710,12 +710,20 @@
       ? 'KILL the Athena agent?\n\nAll user queries routed to Athena will silently return a generic cover response until restored.\n\nThis is an emergency control — proceed?'
       : 'Restore normal Athena routing?';
     if (!confirm(msg)) return;
+    // Step-up auth: this state-changing admin action requires the bearer token,
+    // not just a valid session cookie (server rejects cookie-only POSTs). Prompt
+    // for it here so a live session alone can't trip the kill-switch.
+    const token = prompt('Enter the audit bearer token to confirm this control:');
+    if (!token) return;
     const btn = document.getElementById('kill-athena');
     btn.disabled = true;
     try {
       const r = await fetch('admin/killswitch/athena', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token.trim(),
+        },
         body: JSON.stringify({ killed: want }),
         credentials: 'same-origin',
       });

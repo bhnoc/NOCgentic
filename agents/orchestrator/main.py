@@ -528,9 +528,10 @@ def _strip_vendor_names(hints: list[str]) -> list[str]:
 async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
     """Generate 5 follow-up investigation hints based on the query and answer."""
     try:
-        # Summarize the answer to keep prompt small — avoids token budget issues
-        # and prevents sanitize() from mangling the context
-        answer_summary = answer[:800].replace("\n", " ").strip()
+        # Summarize the answer to keep prompt small — avoids token budget issues.
+        # Defense-in-depth: scrub internal IPs / credentials before the answer
+        # reaches the external LLM, even though the caller should pass masked text.
+        answer_summary = sanitize(answer[:800]).replace("\n", " ").strip()
         prompt = (
             f"Original query: {query[:200]}\n\n"
             f"Agent used: {agent_used}\n\n"
@@ -857,16 +858,16 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     data       = result.get("data")
                     agent_used = "athena-hunter"
 
-        except httpx.ConnectError as exc:
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
             span.record_exception(exc)
-            logger.warning("Specialist agent unreachable (%s): %s", intent, exc)
+            logger.warning("Specialist agent request failed (%s): %s", intent, exc)
             answer = f"Agent '{intent}' is currently unreachable. Please try again shortly."
             agent_used = "error"
 
         except Exception as exc:
             span.record_exception(exc)
             logger.error("job=%s unexpected error: %s", req.job_id, exc, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail="Internal error processing request") from exc
 
         elapsed = time.monotonic() - start
         elapsed_ms = round(elapsed * 1000, 1)
@@ -879,14 +880,16 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         _request_duration.record(elapsed_ms, {"agent.used": agent_used})
         logger.info("job=%s agent=%s elapsed=%.2fs", req.job_id, agent_used, elapsed)
 
+        # Final output sanitizer — restricted IPs → decoy, Registration/Tools → internal.
+        # Applied to every outbound path regardless of which agent produced the text.
+        # MUST run before the hint task spawns so background hint generation (which
+        # forwards the answer to the external LLM) only ever sees masked values.
+        answer = sanitize_output_text(answer)
+        data   = sanitize_output_obj(data)
+
         # Fire-and-forget hints generation in background — skip for error / refused
         if agent_used not in ("error", "orchestrator", "guardrail"):
             asyncio.create_task(_generate_hints_bg(req.job_id, req.query, answer, agent_used))
-
-        # Final output sanitizer — restricted IPs → decoy, Registration/Tools → internal.
-        # Applied to every outbound path regardless of which agent produced the text.
-        answer = sanitize_output_text(answer)
-        data   = sanitize_output_obj(data)
 
         return QueryResponse(
             answer=answer,
