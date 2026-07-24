@@ -138,10 +138,16 @@ async def fetch_alerts(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         return []
 
 
-async def fetch_all_tests(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+async def fetch_all_tests(client: httpx.AsyncClient) -> list[dict[str, Any]] | None:
     """Fetch every ENABLED test across all types in the configured account
     group. Tests with `enabled=False` never produce results so we skip them
-    to avoid wasting result-fetch budget on noise."""
+    to avoid wasting result-fetch budget on noise.
+
+    Returns a (possibly empty) list on a SUCCESSFUL fetch. An empty list means
+    the account group genuinely has zero tests configured. Returns None when the
+    inventory fetch itself FAILED (auth 401/expiry, 403 wrong account group, 5xx,
+    network/timeout). Callers MUST distinguish these: None is a dead monitoring
+    feed, not an all-clear. Do NOT collapse it back to []."""
     try:
         data = await te_get(client, "/tests")
         tests = data.get("tests") or data.get("items") or []
@@ -159,8 +165,10 @@ async def fetch_all_tests(client: httpx.AsyncClient) -> list[dict[str, Any]]:
         # Only enabled tests run; disabled tests return empty results forever
         return [t for t in tests if t.get("enabled", True)]
     except Exception as exc:
-        logger.warning("fetch_all_tests failed: %s", exc)
-        return []
+        # Signal FAILURE (not "0 tests") so the roll-up reports monitoring
+        # unavailable rather than a false all-clear on a dead feed.
+        logger.warning("fetch_all_tests failed (%s): %s", type(exc).__name__, exc)
+        return None
 
 
 async def fetch_latest_results(client: httpx.AsyncClient, test_id: str | int, test_type: str) -> dict[str, Any]:
@@ -345,6 +353,18 @@ async def gather_te_context(query: str) -> dict[str, Any]:
                 fetch_alerts(client),
             )
 
+        if tests is None:
+            # Inventory fetch FAILED (auth/403/5xx/network): the monitoring feed
+            # is dead. Mirror the blank-token path: monitoring_available=False and
+            # NEVER an all-clear. A dead feed must not read as "no tests configured".
+            return {
+                "error": "test inventory fetch failed (monitoring feed unavailable)",
+                "monitoring_available": False,
+                "total_tests": 0,
+                "active_alert_count": len(alerts),
+                "active_alerts": alerts[:10],
+            }
+
         if not tests:
             return {
                 "total_tests": 0,
@@ -489,7 +509,7 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
         answer = await llm_complete(
             system_prompt=SYSTEM_PROMPT,
             user_content=user_content,
-            max_tokens=2000,
+            max_tokens=4096,
             temperature=0.1,
             thinking_budget=0,
         )
@@ -501,13 +521,25 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
             0.3,
         )
 
-    confidence = 0.7
+    # Strip any pre-answer scratchpad: a thinking/verbose response can leak its
+    # reasoning ahead of the "## Answer" header. Cut everything before the first
+    # marker so the operator only sees the clean answer. Answers with no marker
+    # (fallback) are left untouched.
+    if "## Answer" in answer:
+        answer = answer[answer.index("## Answer"):]
+
+    # Default LOW (not 0.7/HIGH): a truncated/malformed answer whose confidence
+    # fence never matched must not report fake-high confidence. Only a successful
+    # parse promotes it. (ql-3, same class as ql-1.)
+    confidence = 0.3
     m = re.search(r'```json\s*\{[^}]*"confidence"\s*:\s*([0-9.]+)[^}]*\}\s*```', answer)
     if m:
         try:
             confidence = max(0.0, min(1.0, float(m.group(1))))
         except ValueError:
             pass
+    else:
+        logger.warning("confidence fence not found in answer; defaulting to low (0.3)")
 
     return answer, confidence
 

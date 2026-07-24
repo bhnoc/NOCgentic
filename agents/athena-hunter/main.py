@@ -522,6 +522,10 @@ async def gather_athena_context(
             "sql_queries": sql_queries,
             "query_results": [],
             "total_rows": 0,
+            # True if any query returned exactly its LIMIT. The row counts are a
+            # LIMIT-capped SAMPLE, not a true total, so we must not present them
+            # as complete. See ql-9.
+            "capped": False,
             "total_bytes_scanned": 0,
             "total_query_time_ms": 0,
             "errors": [],
@@ -551,6 +555,13 @@ async def gather_athena_context(
                     ctx["total_rows"] += len(rows)
                     ctx["total_bytes_scanned"] += meta["data_scanned_bytes"]
                     ctx["total_query_time_ms"] += meta["execution_time_ms"]
+
+                    # Cap detection: if the query hit its LIMIT, len(rows) is a
+                    # sample floor, not a true count. Flag it so the answer says
+                    # "at least N (sampled)" rather than "N total".
+                    _lim = re.search(r"(?i)\bLIMIT\s+(\d+)", sql)
+                    if _lim and len(rows) >= int(_lim.group(1)):
+                        ctx["capped"] = True
 
                     logger.info(
                         "Athena query %d: %d rows, %dms, %.1fMB scanned",
@@ -625,9 +636,21 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
         context_str = results_str[:6000]
         span.set_attribute("context.length", len(context_str))
 
+        # When any query hit its LIMIT the row count is a capped sample, not a
+        # true total; label it honestly so the answer doesn't overstate volume
+        # as complete (ql-9).
+        _rows = context.get("total_rows", 0)
+        if context.get("capped"):
+            _rows_label = (
+                f"at least {_rows} rows (SAMPLED: one or more queries hit their "
+                f"LIMIT, true total is higher)"
+            )
+        else:
+            _rows_label = f"{_rows} total rows"
+
         user_content = (
             f"**Analyst Query:** {sanitize(query)}\n\n"
-            f"**Athena Query Results ({context.get('total_rows', 0)} total rows, "
+            f"**Athena Query Results ({_rows_label}, "
             f"{context.get('total_query_time_ms', 0)}ms total):**\n{context_str}"
         )
 
@@ -647,14 +670,18 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
                 0.3,
             )
 
-        # Extract confidence
-        confidence = 0.7
+        # Extract confidence. Default to a LOW sentinel on a miss: a truncated or
+        # malformed answer that never emitted the ```json{"confidence":..} block
+        # must not report fake-high confidence to the operator.
+        confidence = 0.3
         m = re.search(r'```json\s*\{[^}]*"confidence"\s*:\s*([0-9.]+)[^}]*\}\s*```', answer)
         if m:
             try:
                 confidence = max(0.0, min(1.0, float(m.group(1))))
             except ValueError:
-                pass
+                logger.warning("confidence value unparseable, using low default")
+        else:
+            logger.warning("no confidence block in LLM answer, using low default")
 
         return answer, confidence
 
@@ -718,6 +745,8 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             "ioc_counts": context.get("ioc_counts", {}),
             "sql_queries_executed": len(context.get("query_results", [])),
             "total_rows": context["total_rows"],
+            # True when total_rows is a LIMIT-capped sample, not a true total (ql-9).
+            "rows_capped": context.get("capped", False),
             "total_athena_time_ms": context["total_query_time_ms"],
             "total_data_scanned_mb": round(context["total_bytes_scanned"] / 1048576, 2),
             "query_details": [
@@ -753,10 +782,12 @@ def _normalize_severity(raw: str | None) -> str:
     s = str(raw).strip().lower()
     if s in _VALID_SEVERITIES:
         return s
-    # Suricata numeric severities: 1=critical, 2=high, 3=medium, 4+=low
+    # Suricata/Corelight numeric severities. Canonical mapping (source of truth
+    # is alert-triage._norm_sev / NUM_SEV): 1=high, 2=medium, 3=low, 4+=low.
+    # Kept identical so the same event isn't labeled differently across surfaces.
     try:
         n = int(s)
-        return {1: "critical", 2: "high", 3: "medium"}.get(n, "low")
+        return {1: "high", 2: "medium", 3: "low"}.get(n, "low")
     except ValueError:
         pass
     if s in {"crit", "severe"}:

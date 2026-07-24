@@ -118,6 +118,9 @@ services:
     environment:
       - ORCHESTRATOR_URL=http://orchestrator:8001
       - ATHENA_HUNTER_URL=http://athena-hunter:8005
+      # Lets the alert feed read the orchestrator kill-switch so "kill athena"
+      # also freezes the live feed, not just chat (QA sweep 4, cc-1).
+      - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
       - ALERT_REFRESH_MS=${ALERT_REFRESH_MS:-1800000}
       - ALERT_LOOKBACK_HOURS=${ALERT_LOOKBACK_HOURS:-24}
       - ALERT_MAX_FETCH=${ALERT_MAX_FETCH:-200}

@@ -73,10 +73,17 @@ SEVERITY_SCORE: dict[str, int] = {
     "critical":      5,
     "high":          4,
     "medium":        3,
+    # ql-7: a genuinely-unknown/unparseable severity must not sort to the very
+    # bottom and vanish from prioritized_alerts[:15]. Score it mid (== medium)
+    # so it stays visible for human review rather than being silently buried.
+    "unknown":       3,
     "low":           2,
     "informational": 1,
 }
 
+# CANONICAL SEVERITY MAPPING (source of truth; athena-hunter must align to this):
+#   Suricata/Corelight alert_severity numbers → word buckets:
+#     "1" → high, "2" → medium, "3" → low   (per Corelight/Suricata convention)
 # Suricata/Corelight store alert_severity as a VARCHAR number ("1"/"2"/"3");
 # the unified alerts.severity also carries non-word values. Normalize both to
 # the word buckets SEVERITY_SCORE / _severity_breakdown key off.
@@ -92,7 +99,12 @@ def _norm_sev(sev: Any) -> str:
     s = str(sev).strip().lower()
     if s in NUM_SEV:
         return NUM_SEV[s]
-    return _WORD_SEV.get(s, s)
+    s = _WORD_SEV.get(s, s)
+    # ql-7: keep an unrecognized/NULL/empty severity as an explicit "unknown"
+    # bucket (visible) instead of letting it fall through and collapse to "low".
+    if s not in SEVERITY_SCORE:
+        return "unknown"
+    return s
 
 # ---------------------------------------------------------------------------
 # Security helpers
@@ -391,11 +403,20 @@ def correlate_alerts_with_flows(
     for alert in alerts:
         src = alert.get("id_orig_h") or alert.get("orig_h") or ""
         matched = flows_by_src.get(src, [])
-        enriched.append({
+        # lo-2: normalize the raw severity (numeric "1"/"2"/"3", word variants)
+        # to the same buckets _severity_breakdown uses, so the LLM prompt and
+        # the structured breakdown agree. Overwrite whichever field is present
+        # and expose a canonical "severity" the model can cite unambiguously.
+        norm_sev = _norm_sev(alert.get("severity", alert.get("alert_severity", "low")))
+        enriched_alert = {
             **alert,
+            "severity":         norm_sev,
             "triage_score":     score_alert(alert),
             "correlated_flows": matched[:3],
-        })
+        }
+        if "alert_severity" in alert:
+            enriched_alert["alert_severity"] = norm_sev
+        enriched.append(enriched_alert)
 
     enriched.sort(key=lambda a: a["triage_score"], reverse=True)
     return enriched
@@ -547,13 +568,19 @@ async def llm_triage(
             0.3,
         )
 
-    confidence = 0.75
+    # ql-1: default to a LOW/neutral sentinel. A truncated or malformed answer
+    # that never emits the ```json{"confidence":..}``` trailer means we cannot
+    # trust it, so don't fake a high 0.75. Matches the prompt's own
+    # "confidence < 0.3 if data empty" guidance.
+    confidence = 0.3
     m = re.search(r'```json\s*\{[^}]*"confidence"\s*:\s*([0-9.]+)[^}]*\}\s*```', answer)
     if m:
         try:
             confidence = max(0.0, min(1.0, float(m.group(1))))
         except ValueError:
-            pass
+            logger.warning("llm_triage: confidence value unparseable, using low default 0.3")
+    else:
+        logger.warning("llm_triage: no confidence trailer in answer (truncated/malformed?), using low default 0.3")
 
     return answer, confidence
 
@@ -773,14 +800,15 @@ async def triage(req: TriageRequest) -> TriageResponse:
 
 def _severity_breakdown(alerts: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {
-        "critical": 0, "high": 0, "medium": 0, "low": 0, "informational": 0
+        "critical": 0, "high": 0, "medium": 0, "low": 0,
+        "informational": 0, "unknown": 0,
     }
     for a in alerts:
         sev = _norm_sev(a.get("severity", a.get("alert_severity", "low")))
         if sev in counts:
             counts[sev] += 1
         else:
-            counts["low"] += 1
+            counts["unknown"] += 1
     return counts
 
 

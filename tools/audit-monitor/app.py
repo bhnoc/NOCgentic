@@ -218,6 +218,13 @@ async def _poll_once(s3, service_prefixes: list[str]) -> None:
         except Exception as exc:
             log.warning("list_objects_v2 failed for %s: %s", sp, exc)
             continue
+        # Only advance the cursor past the highest CONTIGUOUS successfully-
+        # processed key. If a key fails mid-batch, stop advancing so the next
+        # poll retries it. Otherwise a later key's success would jump the cursor
+        # past the failure and permanently drop it from the "permanent" audit
+        # trail (cc-3). S3 lists keys in lexicographic order, so breaking on the
+        # first failure leaves the cursor at the last good key and the next poll
+        # re-lists from there.
         for obj in resp.get("Contents") or []:
             key = obj["Key"]
             try:
@@ -242,7 +249,8 @@ async def _poll_once(s3, service_prefixes: list[str]) -> None:
                             pass
                 last_seen_key[sp] = key
             except Exception as exc:
-                log.warning("failed to fetch/parse %s: %s", key, exc)
+                log.warning("failed to fetch/parse %s: %s; retrying next poll", key, exc)
+                break
 
 
 async def preload(timeout_s: float = 15.0) -> None:

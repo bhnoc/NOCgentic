@@ -1,7 +1,14 @@
 import { Alert } from '@bhnoc/shared';
 
 const ATHENA_HUNTER_URL = process.env.ATHENA_HUNTER_URL ?? 'http://athena-hunter:8005';
+// Kill-switch source: the orchestrator holds the authoritative in-memory switch.
+// ADMIN_BEARER_TOKEN must be added to the web-server service in docker-compose.
+const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? 'http://orchestrator:8001';
+const ADMIN_BEARER_TOKEN = process.env.ADMIN_BEARER_TOKEN ?? '';
 const REFRESH_INTERVAL_MS = parseInt(process.env.ALERT_REFRESH_MS ?? '1800000', 10); // 30 min
+// Kill-switch polled on its own short cycle so the emergency freeze is responsive
+// (the 30 min alert refresh would be far too slow for an emergency control).
+const KILL_POLL_MS = parseInt(process.env.KILL_POLL_MS ?? '15000', 10); // 15 s
 const LOOKBACK_HOURS = parseInt(process.env.ALERT_LOOKBACK_HOURS ?? '24', 10);
 const MAX_ALERTS = parseInt(process.env.ALERT_MAX_FETCH ?? '200', 10);
 const BOOT_RETRY_MS = 8000;
@@ -48,13 +55,19 @@ class AlertCache {
   private emitted: Alert[] = [];
   private lastRefreshAt: number = 0;
   private refreshTimer: NodeJS.Timeout | null = null;
+  private killTimer: NodeJS.Timeout | null = null;
   private running = false;
+  // When the orchestrator's athena_hunter kill-switch is on, freeze the feed.
+  // Fail SAFE: defaults to false so a killswitch check error never freezes the feed.
+  private athenaKilled = false;
 
   start(): void {
     if (this.running) return;
     this.running = true;
     void this.bootRefresh();
     this.refreshTimer = setInterval(() => void this.refresh(), REFRESH_INTERVAL_MS);
+    void this.refreshKillSwitch();
+    this.killTimer = setInterval(() => void this.refreshKillSwitch(), KILL_POLL_MS);
   }
 
   /** Initial refresh with retry in case athena-hunter isn't up yet. */
@@ -72,6 +85,10 @@ class AlertCache {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
     }
+    if (this.killTimer) {
+      clearInterval(this.killTimer);
+      this.killTimer = null;
+    }
   }
 
   /** Pace (ms between broadcasts) so queue drains evenly over refresh window. */
@@ -85,6 +102,9 @@ class AlertCache {
   /** Pull one alert off the queue for broadcast. Re-stamps timestamp to now.
    *  Sanitizes restricted subnets and zone names before anything reaches the UI. */
   dequeue(): Alert | null {
+    // Kill-switch: freeze the feed while athena_hunter is killed. Leaves the
+    // queue intact so it resumes where it left off once unkilled.
+    if (this.athenaKilled) return null;
     const raw = this.queue.shift();
     if (!raw) return null;
     // Mask restricted IPs on both src/dst, and scrub the description text.
@@ -95,7 +115,7 @@ class AlertCache {
     const srcIp = maskIp(raw.srcIp);
     const dstIp = maskIp(raw.dstIp);
     const alert: Alert = {
-      id: raw.id,
+      id: scrubString(raw.id) ?? raw.id,
       timestamp: new Date().toISOString(),
       severity: raw.severity,
       source: raw.source,
@@ -120,6 +140,37 @@ class AlertCache {
       lastRefreshAt: this.lastRefreshAt,
       pacingMs: this.pacingMs(),
     };
+  }
+
+  /** Poll the orchestrator's authoritative kill-switch and cache the athena
+   *  state. Fail SAFE: on any error, or when no admin token is configured,
+   *  leave athenaKilled false so the feed keeps working. */
+  private async refreshKillSwitch(): Promise<void> {
+    if (!ADMIN_BEARER_TOKEN) {
+      console.warn('[alertCache] ADMIN_BEARER_TOKEN unset; skipping kill-switch check (feed stays live)');
+      this.athenaKilled = false;
+      return;
+    }
+    try {
+      const resp = await fetch(`${ORCHESTRATOR_URL}/admin/killswitch`, {
+        headers: { Authorization: `Bearer ${ADMIN_BEARER_TOKEN}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!resp.ok) {
+        console.warn(`[alertCache] killswitch check returned ${resp.status}; feed stays live`);
+        this.athenaKilled = false;
+        return;
+      }
+      const data = (await resp.json()) as Record<string, boolean>;
+      const killed = data.athena_hunter === true;
+      if (killed !== this.athenaKilled) {
+        console.log(`[alertCache] athena kill-switch now ${killed ? 'ON (feed frozen)' : 'OFF (feed live)'}`);
+      }
+      this.athenaKilled = killed;
+    } catch (err) {
+      console.warn('[alertCache] killswitch check failed; feed stays live:', err instanceof Error ? err.message : err);
+      this.athenaKilled = false;
+    }
   }
 
   private async refresh(): Promise<boolean> {
