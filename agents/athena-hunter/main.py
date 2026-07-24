@@ -331,17 +331,20 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
 
         try:
             raw = await llm_complete(
-                # 2048, not 1024: on flash-lite thinking_budget=0 is clamped to -1
-                # (dynamic thinking), and thinking tokens share max_output_tokens.
-                # At 1024 the model spent the budget thinking and the SQL was
-                # truncated mid-statement (e.g. "... ORDER BY x DESC LIMIT" with no
-                # number, "... WHERE dt=... AND (" with no predicate) → Athena
-                # "mismatched input 'LIMIT'". 2048 leaves room for both.
+                # Truncation guard for SQL generation. On flash-lite, thinking_budget=0
+                # is clamped to -1 (UNBOUNDED dynamic thinking), and thinking tokens
+                # share max_output_tokens — so a long query (e.g. a multi-LIKE brute-force
+                # pattern) could still burn the budget thinking and truncate the SQL
+                # mid-literal ("... LIKE '%login LIMIT 200" with an unclosed quote) →
+                # Athena "mismatched input". Two-part fix: (1) a small FIXED thinking
+                # budget (512) instead of unbounded dynamic, so thinking can't starve
+                # output; (2) 4096 output tokens to match the synthesis call. This is a
+                # pure structured-output step — it needs little thinking, lots of room.
                 system_prompt=SQL_GEN_PROMPT,
                 user_content=user_content,
-                max_tokens=2048,
+                max_tokens=4096,
                 temperature=0.0,
-                thinking_budget=0,
+                thinking_budget=512,
             )
             span.set_attribute("llm.response_length", len(raw))
         except RuntimeError as exc:
