@@ -64,10 +64,41 @@ _RE_DANGEROUS = re.compile(
     re.IGNORECASE,
 )
 
+# UNION is rejected outright: the athena-hunter's generated query patterns
+# (single SELECT ... FROM <table> WHERE ... GROUP BY ... ORDER BY ... LIMIT,
+# optionally with JOINs/subqueries/CTEs) never legitimately need UNION, so any
+# UNION here is almost certainly UNION-based injection stitching a second SELECT.
+_RE_UNION = re.compile(r"\bUNION\b", re.IGNORECASE)
+
+# SQL comment sequences used to truncate/neutralize the rest of a query.
+_RE_COMMENT = re.compile(r"(--|/\*|\*/|#)")
+
 
 def sanitize_sql(sql: str) -> str:
-    """Strip dangerous DDL/DML statements — only allow SELECT queries."""
-    sql = sql.strip().rstrip(";")
+    """Validate and strip dangerous SQL — only allow a single SELECT query.
+
+    Defense-in-depth (the LLM sits in front of this, but do not rely on it):
+      * DDL/DML keyword blocklist (DROP/DELETE/INSERT/... — unchanged).
+      * Reject multiple statements: at most one optional trailing semicolon.
+      * Reject UNION / UNION ALL (see _RE_UNION above).
+      * Reject SQL comment sequences (--, /*, */, #) used to truncate queries.
+    Raises ValueError on any rejection; returns the cleaned SELECT on success.
+    All checks are case-insensitive and operate on the whole statement so inline
+    whitespace/comment obfuscation cannot slip a keyword past a prefix check.
+    """
+    sql = sql.strip()
+
+    # Allow exactly one optional trailing semicolon; anything after it (or an
+    # interior semicolon) means a second stacked statement -> reject.
+    if sql.endswith(";"):
+        sql = sql[:-1].rstrip()
+    if ";" in sql:
+        raise ValueError(f"Multiple SQL statements not allowed: {sql[:200]}")
+
+    if _RE_COMMENT.search(sql):
+        raise ValueError(f"SQL comment sequence not allowed: {sql[:200]}")
+    if _RE_UNION.search(sql):
+        raise ValueError(f"UNION not allowed: {sql[:200]}")
     if _RE_DANGEROUS.search(sql):
         raise ValueError(f"Dangerous SQL detected: {sql[:200]}")
     if not sql.upper().startswith("SELECT"):

@@ -280,10 +280,16 @@ def _extract_metrics(test: dict[str, Any], result: dict[str, Any]) -> dict[str, 
     if samples:
         ok = sum(1 for s in samples if _sample_ok(s))
         availability = round(100.0 * ok / len(samples), 2)
+        status = _classify(latency, loss, jitter, response, availability)
     else:
+        # No usable samples: fetch_latest_results returned {} (404/400/timeout/
+        # exhausted candidates) or the test produced no data. The test could NOT
+        # be measured — do NOT report it as healthy. UNKNOWN is a distinct third
+        # state so the roll-up can surface "monitoring is blind here" instead of
+        # inflating the green count into a false all-clear. It is NOT flipped to
+        # red/yellow either — an unmeasurable test is not a confirmed outage.
         availability = None
-
-    status = _classify(latency, loss, jitter, response, availability)
+        status = "unknown"
 
     return {
         "name": name,
@@ -344,9 +350,10 @@ async def gather_te_context(query: str) -> dict[str, Any]:
             r_span.set_attribute("tests.processed", len(per_test))
 
     # Roll up
-    green  = [r for r in per_test if r["status"] == "green"]
-    yellow = [r for r in per_test if r["status"] == "yellow"]
-    red    = [r for r in per_test if r["status"] == "red"]
+    green   = [r for r in per_test if r["status"] == "green"]
+    yellow  = [r for r in per_test if r["status"] == "yellow"]
+    red     = [r for r in per_test if r["status"] == "red"]
+    unknown = [r for r in per_test if r["status"] == "unknown"]
 
     # Keep the LLM context compact — only include detailed rows for degraded tests
     degraded = sorted(yellow + red, key=lambda r: (r["status"] != "red", r["name"]))
@@ -356,6 +363,11 @@ async def gather_te_context(query: str) -> dict[str, Any]:
         "green_count": len(green),
         "yellow_count": len(yellow),
         "red_count": len(red),
+        # Tests whose latest results could NOT be fetched/measured. NOT healthy,
+        # NOT a confirmed outage — monitoring is blind on these. Report them so
+        # the answer never implies all-clear when it isn't.
+        "unknown_count": len(unknown),
+        "unmeasured_tests": [r["name"] for r in unknown[:15]],
         "active_alert_count": len(alerts),
         "active_alerts": [
             {
@@ -384,16 +396,24 @@ SYSTEM_PROMPT = (
     "packet loss, jitter, response time, availability).\n\n"
     "The context JSON contains a pre-computed health roll-up — it is authoritative. "
     "Use these fields and nothing else:\n"
-    "  total_tests / green_count / yellow_count / red_count\n"
+    "  total_tests / green_count / yellow_count / red_count / unknown_count\n"
     "  active_alerts  (list with testName, ruleName, severity)\n"
     "  degraded_tests (list of tests with non-green status, with metrics)\n"
-    "  healthy_sample (names of green tests you may cite to illustrate 'everything else is fine')\n\n"
+    "  healthy_sample (names of green tests you may cite to illustrate 'everything else is fine')\n"
+    "  unmeasured_tests (names of tests whose latest results could NOT be fetched)\n\n"
+    "CRITICAL — UNMEASURED TESTS:\n"
+    "unknown_count is tests whose telemetry could NOT be retrieved. They are NOT "
+    "healthy and NOT confirmed failures — monitoring is BLIND on them. NEVER count "
+    "them as green or fold them into an 'all systems green' verdict. If unknown_count "
+    "> 0, state it explicitly, e.g. 'N healthy, M could not be measured'. Treat "
+    "'silence' as a gap to flag, not as health.\n\n"
     "STYLE — FOLLOW EXACTLY:\n"
     "- Active voice. No hedging.\n"
     "- NEVER say 'ThousandEyes' or name any vendor. Say 'network monitoring', "
     "'synthetic tests', or 'probe telemetry'.\n"
     "- Skip 'Based on', 'It appears', 'The data shows'.\n"
-    "- Lead with the verdict: 'All N tests healthy' or 'N healthy, M degraded, K failing'.\n"
+    "- Lead with the verdict: 'All N tests healthy' or 'N healthy, M degraded, K failing'. "
+    "If unknown_count > 0, append '+ U could not be measured' — never omit it.\n"
     "- Name degraded tests by their exact testName from degraded_tests.\n"
     "- Cite the single worst metric per test inline: 'GCP Status Asia (latency 240 ms)'.\n"
     "- Keep each bullet to one line.\n\n"
@@ -519,6 +539,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             "green_count":        context.get("green_count", 0),
             "yellow_count":       context.get("yellow_count", 0),
             "red_count":          context.get("red_count", 0),
+            "unknown_count":      context.get("unknown_count", 0),
             "active_alert_count": context.get("active_alert_count", 0),
             "degraded_test_names": [t["name"] for t in (context.get("degraded_tests") or [])],
             "llm_metrics":        llm_metrics,

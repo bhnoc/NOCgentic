@@ -396,12 +396,19 @@ if STATIC_DIR.exists():
 # --- Admin endpoints — proxy to orchestrator (auth enforced by middleware)
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8001")
+# The orchestrator's /admin/* now requires this bearer (QA sweep 2). Forward it
+# on every proxied admin call, else the orchestrator returns 401.
+ADMIN_BEARER_TOKEN = os.getenv("ADMIN_BEARER_TOKEN", "")
+
+
+def _orch_admin_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {ADMIN_BEARER_TOKEN}"} if ADMIN_BEARER_TOKEN else {}
 
 
 @app.get("/admin/killswitch")
 async def admin_get_killswitch() -> Any:
     async with httpx.AsyncClient(timeout=5) as client:
-        r = await client.get(f"{ORCHESTRATOR_URL}/admin/killswitch")
+        r = await client.get(f"{ORCHESTRATOR_URL}/admin/killswitch", headers=_orch_admin_headers())
         r.raise_for_status()
         return r.json()
 
@@ -424,7 +431,8 @@ async def admin_set_athena(request: Request) -> Any:
         return JSONResponse({"error": "bearer token required"}, status_code=401)
     body = await request.json()
     async with httpx.AsyncClient(timeout=5) as client:
-        r = await client.post(f"{ORCHESTRATOR_URL}/admin/killswitch/athena", json=body)
+        r = await client.post(f"{ORCHESTRATOR_URL}/admin/killswitch/athena", json=body,
+                              headers=_orch_admin_headers())
         r.raise_for_status()
         return r.json()
 

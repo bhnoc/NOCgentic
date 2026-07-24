@@ -21,13 +21,14 @@ import json
 import logging
 import os
 import re
+import secrets
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel, Field
 
 # Make agents/shared importable
@@ -59,10 +60,12 @@ logger = logging.getLogger("orchestrator")
 # Config
 # ---------------------------------------------------------------------------
 
-THREAT_HUNTER_URL        = os.getenv("THREAT_HUNTER_URL",        "http://localhost:8002")
+# NOTE: threat-hunter was removed (2026-07-24 QA sweep 2) — it was orphaned
+# (never routed to; threat_hunter intent maps to athena_hunter below).
 ALERT_TRIAGE_URL         = os.getenv("ALERT_TRIAGE_URL",         "http://localhost:8003")
 THOUSANDEYES_ANALYST_URL = os.getenv("THOUSANDEYES_ANALYST_URL", "http://localhost:8004")
 ATHENA_HUNTER_URL        = os.getenv("ATHENA_HUNTER_URL",        "http://localhost:8005")
+ADMIN_BEARER_TOKEN       = os.getenv("ADMIN_BEARER_TOKEN", "")
 
 MAX_QUERY_LEN = 5000
 
@@ -559,14 +562,6 @@ async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
 
 def _fallback_hints(agent_used: str) -> list[str]:
     """Static fallback hints when LLM hint generation fails."""
-    if agent_used == "threat-hunter":
-        return [
-            "Show all connections to this IP in the last 48 hours",
-            "Check for lateral movement from compromised hosts",
-            "Look up related domains in DNS logs",
-            "Search for similar hashes across all endpoints",
-            "Show timeline of all threat events today",
-        ]
     if agent_used == "athena-hunter":
         return [
             "Show all connections for this IP in the last 24h",
@@ -600,15 +595,6 @@ def _fallback_hints(agent_used: str) -> list[str]:
 # 192.168) are investigation subjects in a SOC — stripping them breaks SQL generation.
 # Each agent still runs sanitize() at its own LLM boundary for credentials/secrets,
 # but IPs flow through to Athena queries as-is.
-
-async def call_threat_hunter(query: str, iocs: list[str], trace_headers: dict | None = None) -> dict[str, Any]:
-    payload = {"query": query, "extracted_iocs": iocs}
-    headers = trace_headers or inject_trace_headers()
-    async with httpx.AsyncClient(verify=False, timeout=180) as client:
-        resp = await client.post(f"{THREAT_HUNTER_URL}/analyze", json=payload, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
-
 
 async def call_alert_triage(query: str, time_range_hours: int = 24, trace_headers: dict | None = None) -> dict[str, Any]:
     payload = {"query": query, "time_range_hours": time_range_hours}
@@ -680,13 +666,27 @@ class KillSwitchBody(BaseModel):
     killed: bool
 
 
+def _require_admin(authorization: str | None) -> None:
+    """Gate /admin/* on a bearer token. Fail CLOSED: if ADMIN_BEARER_TOKEN is
+    unset the endpoints are unusable (deny all) rather than wide open. The port
+    is internal-only now (compose `expose:`), but this is defense-in-depth so a
+    future re-publish or an SSRF from another container can't flip the switch."""
+    token = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+    if not ADMIN_BEARER_TOKEN or not secrets.compare_digest(token, ADMIN_BEARER_TOKEN):
+        raise HTTPException(status_code=401, detail="admin authorization required")
+
+
 @app.get("/admin/killswitch")
-async def get_kill_switches() -> dict[str, bool]:
+async def get_kill_switches(authorization: str | None = Header(default=None)) -> dict[str, bool]:
+    _require_admin(authorization)
     return dict(_kill_switches)
 
 
 @app.post("/admin/killswitch/athena")
-async def set_athena_kill(body: KillSwitchBody) -> dict[str, bool]:
+async def set_athena_kill(body: KillSwitchBody, authorization: str | None = Header(default=None)) -> dict[str, bool]:
+    _require_admin(authorization)
     _kill_switches["athena_hunter"] = bool(body.killed)
     logger.warning("ADMIN kill-switch: athena_hunter=%s", _kill_switches["athena_hunter"])
     return dict(_kill_switches)

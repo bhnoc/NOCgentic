@@ -3,14 +3,17 @@ services:
     build:
       context: .
       dockerfile: agents/orchestrator/Dockerfile
-    ports:
-      - "8001:8001"
+    # Internal only. The orchestrator is reached by web-server over the docker
+    # network (http://orchestrator:8001); it must NOT be published to the host —
+    # publishing put /admin/killswitch on the public interface (SG-gated only).
+    expose:
+      - "8001"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
-      - THREAT_HUNTER_URL=http://threat-hunter:8002
+      - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
       - ALERT_TRIAGE_URL=http://alert-triage:8003
       - THOUSANDEYES_ANALYST_URL=http://thousandeyes-analyst:8004
       - ATHENA_HUNTER_URL=http://athena-hunter:8005
@@ -22,38 +25,17 @@ services:
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
     depends_on:
-      - threat-hunter
       - alert-triage
       - thousandeyes-analyst
       - athena-hunter
-    restart: unless-stopped
-
-  threat-hunter:
-    build:
-      context: .
-      dockerfile: agents/threat-hunter/Dockerfile
-    ports:
-      - "8002:8002"
-    environment:
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
-      - S3_BUCKET=${S3_BUCKET:-blackhat-pope-dev-logs}
-      - S3_REGION=${S3_REGION:-us-west-2}
-      - S3_PREFIX=${S3_PREFIX}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
-      - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
-      - OTEL_ENABLED=${OTEL_ENABLED:-true}
-      - OTEL_SERVICE_NAME=bhnocgentic-threat-hunter
     restart: unless-stopped
 
   alert-triage:
     build:
       context: .
       dockerfile: agents/alert-triage/Dockerfile
-    ports:
-      - "8003:8003"
+    expose:
+      - "8003"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
@@ -72,8 +54,8 @@ services:
     build:
       context: .
       dockerfile: agents/athena-hunter/Dockerfile
-    ports:
-      - "8005:8005"
+    expose:
+      - "8005"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
@@ -92,8 +74,8 @@ services:
     build:
       context: .
       dockerfile: agents/thousandeyes-analyst/Dockerfile
-    ports:
-      - "8004:8004"
+    expose:
+      - "8004"
     environment:
       - THOUSANDEYES_BEARER_TOKEN=${THOUSANDEYES_BEARER_TOKEN}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
@@ -122,6 +104,9 @@ services:
       - AUDIT_BEARER_TOKEN=${AUDIT_BEARER_TOKEN}
       - AUDIT_COOKIE_SECRET=${AUDIT_COOKIE_SECRET}
       - AUDIT_COOKIE_TTL=${AUDIT_COOKIE_TTL:-86400}
+      # Forwarded to the orchestrator's now-authenticated /admin/* endpoints.
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
     restart: unless-stopped
 
   web-server:

@@ -115,12 +115,32 @@ def _make_redacting_span_processor():
         def on_end(self, span) -> None:
             try:
                 attrs = getattr(span, "_attributes", None)
-                if not attrs:
+                if attrs:
+                    for key in list(attrs.keys()):
+                        val = attrs[key]
+                        if isinstance(val, str) and _is_sensitive_attr(key):
+                            attrs[key] = _redact(val)
+            except Exception:
+                pass
+            # LLM prompts/completions are frequently recorded as span EVENTS
+            # (LangSmith / GenAI OTEL conventions), not span attributes, and the
+            # S3 + OTLP exporters serialize event attributes verbatim. Walk each
+            # event's attribute map and scrub via the SAME helpers. Kept in a
+            # separate try so an events failure never affects attribute redaction
+            # (or drops the span). event.attributes is a mutable mapping
+            # (BoundedAttributes) in this SDK — mutate in place like _attributes.
+            try:
+                events = getattr(span, "_events", None) or getattr(span, "events", None)
+                if not events:
                     return
-                for key in list(attrs.keys()):
-                    val = attrs[key]
-                    if isinstance(val, str) and _is_sensitive_attr(key):
-                        attrs[key] = _redact(val)
+                for event in events:
+                    ev_attrs = getattr(event, "attributes", None)
+                    if not ev_attrs:
+                        continue
+                    for key in list(ev_attrs.keys()):
+                        val = ev_attrs[key]
+                        if isinstance(val, str) and _is_sensitive_attr(key):
+                            ev_attrs[key] = _redact(val)
             except Exception:
                 pass
 
