@@ -1,4 +1,4 @@
-# NOCgentic Security & Correctness Sweep 1 — Findings & Remediation
+# NOCgentic Security and Correctness Sweep 1: Findings and Remediation
 
 **Date:** 2026-07-24
 **Scope:** Full codebase (agents, shared libs, web-server, audit-monitor, nginx) ahead of the Black Hat Asia conference deployment.

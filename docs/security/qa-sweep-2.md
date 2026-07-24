@@ -1,4 +1,4 @@
-# NOCgentic QA Sweep 2 — Findings & Remediation
+# NOCgentic QA Sweep 2: Findings and Remediation
 
 **Date:** 2026-07-24
 **Scope:** Full codebase, resuming from sweep 1. Cleared the sweep-1 deferred med/low backlog and re-hunted for anything missed.

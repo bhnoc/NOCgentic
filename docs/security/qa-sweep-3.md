@@ -1,4 +1,4 @@
-# NOCgentic QA Sweep 3 — Findings & Remediation
+# NOCgentic QA Sweep 3: Findings and Remediation
 
 **Date:** 2026-07-24
 **Scope:** The validated med/low backlog carried from sweeps 1 and 2, plus stale-doc cleanup after the sweep-2 threat-hunter removal.
