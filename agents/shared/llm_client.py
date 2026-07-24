@@ -25,7 +25,7 @@ Environment variables:
     LLM_PROVIDER       — "gemini" or "openrouter" (default: "gemini")
     GEMINI_API_KEY      — Google Gemini API key
     OPENROUTER_API_KEY  — OpenRouter API key
-    GEMINI_MODEL        — default: gemini-3.1-pro-preview
+    GEMINI_MODEL        default: gemini-3.5-flash-lite
     OPENROUTER_MODEL    — default: anthropic/claude-3-haiku
 """
 
@@ -138,7 +138,11 @@ def _record_metrics(
 LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
 
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
+# Default matches the deploy reality (docker-compose.agents.yml pins
+# gemini-3.5-flash-lite). Defaulting to the pro-preview would silently route
+# unset-env callers to the expensive/slow pro model AND skip the flash-lite
+# thinking_budget 0->-1 clamp below (400 INVALID_ARGUMENT risk).
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku")
@@ -301,6 +305,15 @@ async def llm_complete(
         fr = resp_meta.get("finish_reason", "stop")
         if isinstance(fr, str):
             finish_reason = fr.lower()
+
+    # A MAX_TOKENS / length finish means the model was cut off mid-answer and
+    # `result` is silently truncated. Surface it in logs so callers/operators
+    # can spot truncated completions (return type is unchanged).
+    if finish_reason in ("max_tokens", "length"):
+        logger.warning(
+            "LLM response truncated (finish_reason=%s, max_tokens=%d, output_tokens=%s) model=%s",
+            finish_reason, max_tokens, output_tok, model_name,
+        )
 
     _record_metrics(
         provider=provider_name, model=model_name, latency_ms=latency_ms,

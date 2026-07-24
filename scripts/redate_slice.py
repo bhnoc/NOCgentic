@@ -72,7 +72,7 @@ def columns(table):
 
 
 def clear_dst_partition(table):
-    """Drop dt=2026-07-22 partition (Glue) and delete its S3 objects, if present."""
+    """Drop the destination dt=<DST_DT> partition (Glue) and delete its S3 objects, if present."""
     # Glue partition
     try:
         glue.delete_partition(DatabaseName=DB, TableName=table, PartitionValues=[DST_DT])
@@ -132,6 +132,8 @@ def main():
         cols = columns(t)
         sql, has_win = build_insert(t, cols)
         print(f"[{i}/{len(tables)}] {t} (win={'y' if has_win else 'n'}) ... ", end="", flush=True)
+        # Destructive: this deletes the existing dt=<DST_DT> partition. If the
+        # INSERT below fails the partition is left EMPTY, so shout about it.
         clear_dst_partition(t)
         st, reason, scanned, qid = q(sql)
         total_scanned += scanned
@@ -141,8 +143,16 @@ def main():
         else:
             failed += 1
             print(f"{st}: {reason[:160]}")
+            print(f"    !! DATA LOSS: dt={DST_DT} for '{t}' was cleared but the INSERT "
+                  f"failed, so the partition is now EMPTY. Re-run for this table "
+                  f"(python {sys.argv[0]} {t}) before relying on the demo data.",
+                  file=sys.stderr)
     print(f"\nDone. ok={ok} failed={failed}  total scanned={total_scanned/1e9:.2f} GB "
           f"(~${total_scanned/1e12*5:.2f})")
+    if failed:
+        print(f"WARNING: {failed} table(s) failed to insert after their partition was "
+              f"cleared. Those partitions are empty until you re-run them.",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

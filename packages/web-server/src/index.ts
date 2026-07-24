@@ -5,7 +5,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyCookie from '@fastify/cookie';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
-import { registerChatRoutes, jobStore } from './api/chat';
+import { registerChatRoutes } from './api/chat';
 import { alertCache } from './services/alertCache';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
@@ -15,6 +15,23 @@ const wsClients = new Set<any>();
 
 const SESSION_COOKIE = 'bh_sid';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+const ALLOWED_WS_ORIGIN = process.env.ALLOWED_ORIGIN ?? 'https://aing.bhnoc.com';
+
+// Content-Security-Policy for the served UI. The page uses an inline <style>,
+// an inline <script>, and inline onclick handlers, so 'unsafe-inline' is
+// required for style-src and script-src (acceptable: the UI is first-party and
+// static). Google Fonts is the only external origin (stylesheet + font files).
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: https:",
+  "connect-src 'self' ws: wss:",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
 
 async function main() {
   // trustProxy honors X-Forwarded-For from nginx so request.ip is the real client.
@@ -30,13 +47,21 @@ async function main() {
       reply.setCookie(SESSION_COOKIE, sid, {
         path: '/',
         maxAge: SESSION_MAX_AGE,
-        httpOnly: false,  // readable so debug tooling can surface it if needed
+        httpOnly: true,   // not readable from JS; the client uses its own localStorage id
         sameSite: 'lax',
         secure: true,
       });
       // Make it available to handlers on this same request too.
       (req as unknown as { cookies: Record<string, string> }).cookies[SESSION_COOKIE] = sid;
     }
+  });
+
+  // Baseline security headers on every response (hand-rolled; no helmet dep).
+  server.addHook('onRequest', async (_req, reply) => {
+    reply.header('Content-Security-Policy', CSP);
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'no-referrer');
   });
 
   // Rate limiting: generous for demo, tight on POST (actual queries)
@@ -76,24 +101,18 @@ async function main() {
   // Chat API routes
   registerChatRoutes(server);
 
-  // WebSocket endpoint for real-time updates
-  server.get('/ws', { websocket: true }, (connection) => {
+  // WebSocket endpoint for real-time updates (server pushes the shared alert feed).
+  server.get('/ws', { websocket: true }, (connection, request) => {
+    // Reject cross-site WebSocket handshakes. Same-origin and cookie-less clients
+    // (curl, no Origin header) are allowed; a foreign Origin is closed with 1008.
+    const origin = request.headers.origin;
+    if (origin && origin !== ALLOWED_WS_ORIGIN) {
+      connection.socket.close(1008, 'origin not allowed');
+      return;
+    }
     wsClients.add(connection.socket);
-    connection.socket.on('message', (message: Buffer) => {
-      const text = message.toString();
-      try {
-        const msg = JSON.parse(text) as { type: string; jobId?: string };
-        if (msg.type === 'subscribe' && msg.jobId) {
-          // Client subscribes to job updates
-          const job = jobStore.get(msg.jobId);
-          if (job) {
-            connection.socket.send(JSON.stringify({ type: 'job_update', job }));
-          }
-        }
-      } catch {
-        // Ignore malformed messages
-      }
-    });
+    // Inbound messages are ignored: job results are delivered by HTTP polling,
+    // not over this socket. This endpoint is broadcast-only (alert feed).
     connection.socket.on('close', () => { wsClients.delete(connection.socket); });
   });
 

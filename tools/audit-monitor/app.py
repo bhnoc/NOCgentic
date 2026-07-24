@@ -439,6 +439,9 @@ async def admin_set_athena(request: Request) -> Any:
 
 @app.get("/api/recent")
 async def recent(limit: int = 200):
+    # limit<=0 would slice as list[-0:] == whole buffer, so treat it as empty.
+    if limit <= 0:
+        return {"events": [], "count": 0}
     items = list(recent_events)[-limit:]
     return {"events": items, "count": len(items)}
 

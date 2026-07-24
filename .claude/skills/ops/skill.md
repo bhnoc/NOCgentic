@@ -224,7 +224,7 @@ Between conferences, dev-only. All protocols:
 ## OS patching (host security updates + kernel)
 
 Patch the box's OS/apps periodically (116 security updates were pending at first patch,
-2026-07-23). The stack survives a reboot on its own — **all 8 containers are
+2026-07-23). The stack survives a reboot on its own: **all 7 containers are
 `unless-stopped` and both runners + `postcog` are `enabled` on boot** — so a *soft reboot*
 (`systemctl reboot`, NOT stop/start) is safe and **keeps the public IP** (no DNS re-point).
 
@@ -251,7 +251,7 @@ ssh ubuntu@aing.bhnoc.com '
 ssh ubuntu@aing.bhnoc.com 'sudo systemctl reboot'
 # wait ~45s, SSH comes back on the SAME IP; containers + runners auto-start.
 
-# 4. Verify: kernel bumped, no reboot flag, 8 containers up, 3 services active, /health 200
+# 4. Verify: kernel bumped, no reboot flag, 7 containers up, 3 services active, /health 200
 ssh ubuntu@aing.bhnoc.com '
   uname -r; [ -f /var/run/reboot-required ] && echo REBOOT-STILL-NEEDED || echo clean
   cd /opt/bhasia/app && sudo docker compose -f docker-compose.agents.yml ps
@@ -409,7 +409,7 @@ Good default queries to confirm the pipeline end-to-end:
 |-------|-----------|----------|
 | "How many alerts in the last 24 hours by severity?" | `alert-triage` | alerts view + date window |
 | "Top 5 source IPs by connection count in the last 24 hours?" | `athena-hunter` | conn NL→SQL on today's dt |
-| "Show DNS queries to suspicious domains today" | `threat-hunter` | dns table |
+| "Show DNS queries to suspicious domains today" | `athena-hunter` | dns table |
 
 **Known non-issue:** answers cap at `ALERT_MAX_FETCH` (200) alerts even when the raw table
 has more — that's the app config, not missing data.

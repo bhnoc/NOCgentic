@@ -42,7 +42,12 @@ _initialized = False
 _RE_INTERNAL_IP = re.compile(
     r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
 )
-_RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
+# Catch long base64-ish secret tokens (API keys, JWT segments, etc.) but NOT
+# pure-hex strings, which are almost always legitimate hash IOCs (MD5=32,
+# SHA-1=40, SHA-256=64 hex chars) that we want to keep in telemetry. The
+# negative lookahead skips only tokens that are ENTIRELY hex; a real base64
+# secret contains at least one non-hex char (g-z/G-Z, +, /) and is still caught.
+_RE_SECRET_TOKEN = re.compile(r"\b(?![A-Fa-f0-9]{40,}\b)[A-Za-z0-9+/]{40,}\b")
 _RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
 _RE_API_KEY = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
 _RE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")

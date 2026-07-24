@@ -21,15 +21,16 @@ How BHNOCgentic ships LLM and agent traces, metrics, and logs to **Manifold Secu
 
 ## 1. What goes to Manifold
 
-Five Python services emit OTel data to Manifold:
+Four Python services emit OTel data to Manifold:
 
 | Service name (`OTEL_SERVICE_NAME`) | What it spans |
 |---|---|
 | `bhnocgentic-orchestrator` | inbound `/api/v1/chat`, classification, agent dispatch, response sanitisation |
-| `bhnocgentic-threat-hunter` | S3-backed parallel hunter (secondary on `athena_hunter` intent) |
 | `bhnocgentic-alert-triage` | Athena-backed alert summarisation |
 | `bhnocgentic-athena-hunter` | NL → SQL generation, `execute_sql_*` per query, `gather_context` aggregation |
 | `bhnocgentic-thousandeyes-analyst` | TE v7 API calls, health classification |
+
+> `bhnocgentic-threat-hunter` was removed 2026-07-24 (QA sweep 2: orphaned; the orchestrator never routed to it). No S3 NDJSON agent runs anymore.
 
 For each, Manifold receives:
 
@@ -254,7 +255,7 @@ Other read endpoints:
 
 Single-page, retro-techno theme to match the public site, but admin-flavoured (orange/red/yellow accent vs. the public ice-blue).
 
-- **Five swim lanes**, one per service: `orchestrator`, `threat-hunter`, `alert-triage`, `athena-hunter`, `thousandeyes-analyst`. Lane headers show a live count badge and most-recent-event timestamp.
+- **One swim lane per service**: `orchestrator`, `alert-triage`, `athena-hunter`, `thousandeyes-analyst` (was five, incl. `threat-hunter`, removed 2026-07-24 QA sweep 2). Lane headers show a live count badge and the most-recent-event timestamp.
 - **Cards** are color-coded by `kind`:
   - **LLM** (yellow) — anything with `gen_ai.*` attrs or `langsmith.span.kind`
   - **athena** (purple) — names matching `athena.*` or `executequery`
@@ -346,16 +347,21 @@ on intent == "athena_hunter":
 ```
 config:
     ORCHESTRATOR_URL := env("ORCHESTRATOR_URL", "http://orchestrator:8001")
+    ADMIN_BEARER_TOKEN := env("ADMIN_BEARER_TOKEN")
 
 route GET /admin/killswitch:
     require authenticated session
     return GET ${ORCHESTRATOR_URL}/admin/killswitch
+        with header Authorization: Bearer ${ADMIN_BEARER_TOKEN}
 
 route POST /admin/killswitch/athena:
     require authenticated session
     body := parse JSON request
     return POST ${ORCHESTRATOR_URL}/admin/killswitch/athena with body
+        and header Authorization: Bearer ${ADMIN_BEARER_TOKEN}
 ```
+
+The orchestrator's `/admin/*` routes require that bearer token (2026-07-24 QA sweep 2); the audit-monitor proxy is the only caller and forwards it.
 
 **Browser UI** — pseudo-code:
 

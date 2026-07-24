@@ -32,10 +32,12 @@ The browser will open at `http://localhost:8787`.
 | `AUDIT_PORT` | `8787` | local HTTP port |
 | `AUDIT_POLL_S` | `2` | S3 poll cadence (seconds) |
 | `AUDIT_LOOKBACK` | `300` | initial history to pull (seconds) |
+| `ORCHESTRATOR_URL` | `http://orchestrator:8001` | orchestrator base URL for the admin/kill-switch proxy |
+| `ADMIN_BEARER_TOKEN` | n/a | bearer token forwarded on `/admin/*` calls to the orchestrator |
 
 ## What you see
 
-- One swim-lane per service: **orchestrator, threat-hunter, alert-triage, athena-hunter, thousandeyes-analyst**.
+- One swim-lane per service: **orchestrator, alert-triage, athena-hunter, thousandeyes-analyst**.
 - Spans appear newest-first, color-coded by kind (LLM=yellow, athena=purple, agent=cyan, tool=orange, http=green).
 - Click any card for full attributes — prompt/completion text is surfaced in a **LLM / GenAI** section when present.
 - Filter bar toggles per-kind visibility and a PAUSE checkbox.

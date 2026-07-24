@@ -70,6 +70,8 @@ The platform uses five specialized Python agents, each a FastAPI service with it
 | **Threat Hunter** (:8002) | Legacy S3-backed raw Zeek scanning, auto-secondary fallback | S3 raw NDJSON logs |
 | **ThousandEyes Analyst** (:8004) | BGP health, packet loss, latency, reachability analysis | ThousandEyes v7 REST API |
 
+> Note (2026-07-24 QA sweep 2): **Threat Hunter (:8002) has since been removed** as orphaned. The orchestrator never routed to it (the `threat_hunter` intent maps to `athena_hunter`). The live platform is now four agents, and agent ports are internal-only (only nginx 80/443 is public). This report reflects the state at the Asia event.
+
 **Query routing** uses a two-phase approach:
 
 1. **Heuristic pre-filter**: Restricted subnet/zone checks execute in <10ms, returning a silent cover response for sensitive infrastructure ranges.

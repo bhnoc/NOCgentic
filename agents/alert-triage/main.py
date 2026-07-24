@@ -473,7 +473,8 @@ def _apply_keyword_filter(events: list[dict], keywords: list[str]) -> list[dict]
         evt_str = json.dumps(evt, default=str).lower()
         if any(kw.lower() in evt_str for kw in keywords):
             matched.append(evt)
-    return matched if matched else events
+    # A filter that matches nothing returns nothing (not the full set).
+    return matched
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +535,15 @@ async def llm_triage(
     except RuntimeError as exc:
         return (
             f"LLM not configured. Triage data (truncated): {json.dumps(triage_data, default=str)[:500]}",
+            0.3,
+        )
+    except Exception as exc:
+        # Provider 429/5xx/timeout (httpx errors, etc.) land here. Degrade
+        # gracefully instead of returning a 500, but log it server-side.
+        logger.warning("llm_triage failed (%s): %s", type(exc).__name__, exc)
+        return (
+            f"LLM unavailable ({type(exc).__name__}). Triage data (truncated): "
+            f"{json.dumps(triage_data, default=str)[:500]}",
             0.3,
         )
 
@@ -684,6 +694,15 @@ async def triage(req: TriageRequest) -> TriageResponse:
         if keywords:
             all_alerts = _apply_keyword_filter(all_alerts, keywords)
             conn_flows = _apply_keyword_filter(conn_flows, keywords)
+
+        # Apply the parsed severity filter (e.g. "show only critical alerts").
+        # Normalize both sides via _norm_sev so numeric/word buckets match.
+        want_sev = _norm_sev(qf["severity"]) if qf.get("severity") else None
+        if want_sev:
+            all_alerts = [
+                a for a in all_alerts
+                if _norm_sev(a.get("severity", a.get("alert_severity", "low"))) == want_sev
+            ]
 
         enriched_alerts = correlate_alerts_with_flows(all_alerts, conn_flows)
 

@@ -28,13 +28,13 @@ Browser (static/index.html) ──HTTPS──┐
               │  ├─ guardrail filter (silent cover)
               │  └─ 4-intent router
               │
-   ┌──────────┼──────────────┬─────────────────────┐
-   ▼          ▼              ▼                     ▼
-alert-triage  thousandeyes   athena-hunter       threat-hunter
-   :8003      :8004           :8005 (primary)     :8002 (S3 fallback)
-     │         │                │                    │
-     │         │                ▼                    ▼
-     │         │           AWS Athena             S3 NDJSON
+   ┌──────────┼──────────────┐
+   ▼          ▼              ▼
+alert-triage  thousandeyes   athena-hunter
+   :8003      :8004           :8005 (primary)
+     │         │                │
+     │         │                ▼
+     │         │           AWS Athena
      │         │           (Parquet logs)
      └─────────┴────────────┐
                             ▼
@@ -44,7 +44,7 @@ alert-triage  thousandeyes   athena-hunter       threat-hunter
 
 ### Stack
 - **TypeScript** (Fastify web server + audit monitor UI)
-- **Python 3.11** (all five agents, FastAPI)
+- **Python 3.11** (all four agents, FastAPI)
 - **LangChain** + **LangSmith OTEL bridge** for LLM spans
 - **OpenTelemetry** → Manifold (`blackcap.app.manifoldsecurity.io`) for monitoring
 - **S3 span archive** at `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/` (NDJSON.gz, Hive partitions)
@@ -94,10 +94,11 @@ Internal `10.x`/`172.16/12`/`192.168` IPs are **not** stripped at the orchestrat
 | Agent | Port | Data source | Role |
 |---|---|---|---|
 | **orchestrator** | 8001 | — | Routing brain, guardrails, output sanitiser, trace headers |
-| **athena-hunter** | 8005 | AWS Athena (SQL) | Default — generates SQL from NL, explains results |
+| **athena-hunter** | 8005 | AWS Athena (SQL) | Default: generates SQL from NL, explains results |
 | **alert-triage** | 8003 | AWS Athena `alerts` | Prioritises active alerts, IDS feed |
-| **threat-hunter** | 8002 | S3 NDJSON (raw Zeek) | Legacy fallback, auto-secondary on `athena_hunter` intent |
 | **thousandeyes-analyst** | 8004 | ThousandEyes v7 API | BGP / latency / uplink health |
+
+Agent ports (8001-8005) are internal to the Docker network (`expose:`, not published to the host). Only nginx (80/443) is public.
 
 Each agent:
 - Initialises OTel at startup → Manifold traces, metrics, logs + S3 NDJSON span archive
@@ -127,7 +128,7 @@ Each agent:
 - **URL**: `https://aing.bhnoc.com/bh/1337/thetraces/`
 - **Auth**: bearer token → HTTPOnly signed cookie (HMAC(expiry))
 - **Data source**: polls `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/` every 2 s
-- **UI**: 5 swim-lanes (one per service), color-coded card kinds (LLM, athena, agent, tool, http). Cards show query/prompt/SQL preview (≤300 chars). Click-to-expand for full attributes including LLM prompt/completion.
+- **UI**: one swim-lane per service, color-coded card kinds (LLM, athena, agent, tool, http). Cards show query/prompt/SQL preview (≤300 chars). Click-to-expand for full attributes including LLM prompt/completion.
 - **Startup preload**: pulls last 5 min of spans so lanes are populated immediately.
 - **Raw admin view**: spans show **unredacted** queries, IPs, zone names — the restricted-range filter only touches end-user responses.
 
@@ -178,6 +179,7 @@ docker compose -f docker-compose.agents.yml up -d --build
 | `TRACE_S3_PREFIX` | `bh-asia-26/aing-trace` | |
 | `AUDIT_BEARER_TOKEN` | — | required for audit monitor |
 | `AUDIT_COOKIE_SECRET` | — | HMAC key for admin cookie |
+| `ADMIN_BEARER_TOKEN` | n/a | bearer token guarding the orchestrator `/admin/*` routes; audit monitor forwards it |
 | `ALERT_REFRESH_MS` | `1800000` | alert cache refresh cadence (30 min) |
 | `ALERT_LOOKBACK_HOURS` | `24` | initial Athena window for alert feed |
 | `THOUSANDEYES_BEARER_TOKEN` | — | optional; only needed for TE intent |
@@ -191,12 +193,10 @@ agents/
   orchestrator/       routing, classify, guardrails, output sanitiser
   alert-triage/       Athena-backed triage (Flash-Lite)
   athena-hunter/      SQL generation + analysis (primary hunt agent)
-  threat-hunter/      S3 raw-Zeek fallback
   thousandeyes-analyst/  TE REST API
   shared/
     llm_client.py     Gemini/OpenRouter unified client + metrics
     athena_client.py  SELECT-only SQL wrapper with date partitioning
-    s3_tools.py       raw Zeek TSV query helpers
     telemetry.py      OTel → Manifold + S3 span exporter
     s3_span_exporter.py  gzipped NDJSON span archive
 
@@ -212,7 +212,7 @@ infrastructure/
   scripts/            deploy-agents.sh, refresh-env-creds.sh, seed-s3.py
 
 nginx/                TLS + reverse proxy config
-docker-compose.agents.yml   full stack (8 containers)
+docker-compose.agents.yml   full stack (7 containers)
 docs/
   Athenaguide.md.md   schema / SQL reference
   DATA-SCHEMA.md      Corelight field reference

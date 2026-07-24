@@ -126,6 +126,8 @@ This file tracks periodic progress summaries for the AI-Powered SOC Platform pro
 8 Docker containers on EC2 `aing.bhnoc.com`:
 `orchestrator, athena-hunter, alert-triage, threat-hunter, thousandeyes-analyst, web-server, audit-monitor, nginx`.
 
+> Update 2026-07-24 (QA sweep 2): `threat-hunter` removed (orphaned; the orchestrator never routed to it, and the `threat_hunter` intent maps to `athena_hunter`). Stack is now 7 containers. Agent ports 8001-8005 are internal-only (`expose:`); only nginx 80/443 is public.
+
 ### Known limitations
 - `thousandeyes-analyst` has no live tests configured — returns honest "no active anomalies" for all probes.
 - `threat-hunter` (S3) runs as parallel secondary on `athena_hunter` intent but Athena is always primary.

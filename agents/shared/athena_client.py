@@ -35,6 +35,10 @@ ATHENA_DATABASE: str = os.getenv("ATHENA_DATABASE", "blackhat_pope_logs")
 ATHENA_WORKGROUP: str = os.getenv("ATHENA_WORKGROUP", "blackhat-pope-dev")
 ATHENA_REGION: str = os.getenv("ATHENA_REGION", os.getenv("S3_REGION", "us-west-2"))
 
+# Max rows accumulated by _fetch_results before we stop paginating. Hitting this
+# cap silently truncates the result set, so we log a WARNING when it triggers.
+MAX_RESULT_ROWS: int = 500
+
 def _get_athena():
     """Return a fresh boto3 Athena client on every call.
 
@@ -107,12 +111,37 @@ def sanitize_sql(sql: str) -> str:
 
 
 def sanitize_value(val: str) -> str:
-    """Escape a value for use in SQL strings (prevent injection)."""
+    """Escape a value for use in an EQUALITY SQL string literal (prevent injection).
+
+    NOTE: this deliberately does NOT escape the LIKE metacharacters % and _.
+    For equality (`col = '...'`) they are ordinary characters and escaping them
+    would break legit matches. For values interpolated into a LIKE pattern use
+    sanitize_like_value() (which escapes %/_/\\ and requires an ESCAPE clause).
+    """
     # Truncate the RAW input BEFORE escaping. Escaping first and slicing after
     # can chop a doubled '' back to a lone trailing ' at the 500-char boundary,
     # breaking out of the '...' SQL literal (injection). Truncate, then escape.
     val = val[:500]
     return val.replace("'", "''").replace("\\", "\\\\")
+
+
+def sanitize_like_value(val: str) -> str:
+    """Escape a value for interpolation into a LIKE pattern (prevent wildcard injection).
+
+    Unlike sanitize_value(), this also neutralizes the LIKE metacharacters % and _
+    so caller-supplied text cannot inject wildcards. Uses backslash as the escape
+    char, so the surrounding query MUST append `ESCAPE '\\'`, e.g.:
+
+        f"col LIKE '%{sanitize_like_value(v)}%' ESCAPE '\\'"
+
+    The literal `%`/`_` wildcards the caller adds around the value stay active;
+    only metacharacters *inside* the value are escaped.
+    """
+    val = val[:500]
+    # Escape backslash first (it's the ESCAPE char), then the LIKE wildcards,
+    # then finally the single-quote for the surrounding SQL string literal.
+    val = val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return val.replace("'", "''")
 
 
 # ---------------------------------------------------------------------------
@@ -127,15 +156,20 @@ def today_partition() -> str:
 def date_partitions(hours: int = 24) -> list[str]:
     """Return partition dates covering the last N hours — every day inclusive.
 
-    Previously only included the start and today; for a 7-day range that
-    missed the 5 days in between. Now walks day-by-day across the span.
+    Walks day-by-day from the actual window start (now - hours) to today so no
+    intermediate day is missed. The start day is derived from the real boundary
+    rather than ceil(hours/24) days back, which previously over-generated a
+    trailing extra partition (e.g. hours=1 near mid-day still emitted yesterday).
     """
     now = datetime.now(timezone.utc)
+    if hours <= 0:
+        return [now.strftime("%Y-%m-%d")]
+    start = now - timedelta(hours=hours)
     dates: set[str] = {now.strftime("%Y-%m-%d")}
-    if hours > 0:
-        span_days = hours // 24 + (1 if hours % 24 else 0)
-        for d in range(span_days + 1):
-            dates.add((now - timedelta(days=d)).strftime("%Y-%m-%d"))
+    cur = start
+    while cur <= now:
+        dates.add(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
     return sorted(dates)
 
 
@@ -254,7 +288,14 @@ async def _fetch_results(query_id: str) -> list[dict[str, str]]:
             rows.append(dict(zip(headers, values)))
 
         next_token = page.get("NextToken")
-        if not next_token or len(rows) >= 500:
+        if len(rows) >= MAX_RESULT_ROWS:
+            if next_token:
+                logger.warning(
+                    "Athena results truncated at %d rows (more pages available): id=%s",
+                    MAX_RESULT_ROWS, query_id,
+                )
+            break
+        if not next_token:
             break
 
     return rows
@@ -340,7 +381,7 @@ async def query_dns(
     dt = date_filter(hours)
     conditions = [dt]
     if domain:
-        conditions.append(f"query LIKE '%{sanitize_value(domain)}%'")
+        conditions.append(f"query LIKE '%{sanitize_like_value(domain)}%' ESCAPE '\\'")
     if client_ip:
         conditions.append(f"id_orig_h = '{sanitize_value(client_ip)}'")
     where = " AND ".join(conditions)
@@ -386,7 +427,7 @@ async def query_ssl(
     dt = date_filter(hours)
     conditions = [dt]
     if server_name:
-        conditions.append(f"server_name LIKE '%{sanitize_value(server_name)}%'")
+        conditions.append(f"server_name LIKE '%{sanitize_like_value(server_name)}%' ESCAPE '\\'")
     if ja3:
         conditions.append(f"ja3 = '{sanitize_value(ja3)}'")
     if ip:

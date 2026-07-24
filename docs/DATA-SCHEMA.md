@@ -315,7 +315,7 @@ The Corelight sensors tag traffic with the originating network segment. Known se
 | Agent | Primary Log Types | Use Case |
 |-------|-------------------|----------|
 | `alert-triage` | `suricata_corelight`, `conn` | IDS alerts + flow correlation |
-| `threat-hunter` | `conn`, `dns`, `ssl`, `suricata_corelight` | IOC enrichment + threat context |
+| `athena-hunter` | `conn`, `dns`, `ssl`, `suricata_corelight`, etc. | NL→SQL hunt, IOC enrichment + threat context |
 | `search_events` | Any (`conn`, `dns`, `http`, `ssl`, etc.) | Freeform keyword search |
 
 ---

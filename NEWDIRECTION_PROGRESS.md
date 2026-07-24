@@ -85,6 +85,8 @@ aws s3 ls s3://blackhat-pope-dev-logs/
 | web-server | 3000 (internal) | Fastify server, REST API, WebSocket |
 | nginx | 80 (public) | Reverse proxy, security headers |
 
+> Update 2026-07-24 (QA sweep 2): `threat-hunter` (8002) removed as orphaned. The stack later grew to add `athena-hunter`, `thousandeyes-analyst`, and `audit-monitor`; agent ports are now internal-only (`expose:`), with only nginx public. See `README.md` for the current service list.
+
 ---
 
 ## Files Changed (from OpenSearch baseline)

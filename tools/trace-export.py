@@ -14,8 +14,12 @@ Usage:
     python tools/trace-export.py --backup PATH     # specific backup dir
     python tools/trace-export.py --out FILE.csv
     python tools/trace-export.py --format jsonl    # JSONL instead of CSV
-    python tools/trace-export.py --include-filtered   # include restricted/cover rows (default: include)
     python tools/trace-export.py --only-filtered       # only rows that hit a filter
+    python tools/trace-export.py --raw                 # skip redaction (unmasked export)
+
+Sensitive fields (client IP, session, user agent, referer) plus internal IPs and
+secrets in prompts, responses and SQL are redacted by default. Pass --raw when you
+explicitly need an unmasked export.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import glob
 import gzip
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -34,6 +39,55 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKUPS_DIR = REPO_ROOT / "backups"
+
+
+# ---------------------------------------------------------------------------
+# Redaction. Same patterns the telemetry pipeline uses (kept inline so this
+# tool has no import dependency on the agents package).
+# ---------------------------------------------------------------------------
+_RE_INTERNAL_IP = re.compile(
+    r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
+)
+_RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
+_RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
+_RE_API_KEY = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
+_RE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
+
+# Free-text fields that may carry internal IPs or secrets.
+_REDACT_TEXT_FIELDS = ("query", "response", "classify_reasoning")
+# Identity fields masked wholesale, not pattern-scrubbed.
+_MASK_FIELDS = ("client_ip", "client_session", "client_user_agent", "client_referer")
+
+
+def redact_text(text):
+    """Scrub internal IPs, secrets, passwords, API keys and bearer tokens."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = _RE_INTERNAL_IP.sub("[INTERNAL-IP]", text)
+    text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
+    text = _RE_PASSWORD.sub("password: [REDACTED]", text)
+    text = _RE_API_KEY.sub("api_key: [REDACTED]", text)
+    text = _RE_BEARER.sub("bearer [REDACTED]", text)
+    return text
+
+
+def redact_row(row: dict) -> dict:
+    """Return a copy of a trace row with sensitive fields redacted."""
+    out = dict(row)
+    for f in _MASK_FIELDS:
+        if out.get(f):
+            out[f] = "[REDACTED]"
+    for f in _REDACT_TEXT_FIELDS:
+        if out.get(f):
+            out[f] = redact_text(out[f])
+    scrubbed_sql = []
+    for entry in out.get("sql_queries") or []:
+        e = dict(entry)
+        if e.get("sql"):
+            e["sql"] = redact_text(str(e["sql"]))
+        scrubbed_sql.append(e)
+    out["sql_queries"] = scrubbed_sql
+    return out
 
 
 def newest_backup() -> Path | None:
@@ -169,6 +223,8 @@ def main() -> int:
                     help="filter to a specific client session id (prefix match OK)")
     ap.add_argument("--by-session", action="store_true",
                     help="print a per-session summary to stderr then write the CSV")
+    ap.add_argument("--raw", action="store_true",
+                    help="skip redaction and export unmasked fields (default: redacted)")
     args = ap.parse_args()
 
     backup = args.backup or newest_backup()
@@ -222,6 +278,14 @@ def main() -> int:
                 f"intents={','.join(intents) or '-'}",
                 file=sys.stderr,
             )
+
+    # Redacted by default. The per-session summary above ran on raw rows (operator
+    # console only); the written export is masked unless --raw was passed.
+    if args.raw:
+        print("warning: --raw set, export will contain UNREDACTED IPs/sessions/prompts",
+              file=sys.stderr)
+    else:
+        rows = [redact_row(r) for r in rows]
 
     if args.out is None:
         ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")

@@ -18,6 +18,8 @@ interface ClientInfo {
 
 // In-memory job store (for demo)
 export const jobStore = new Map<string, AgentResponse>();
+// Owner session id (bh_sid cookie) per job, so a job is only readable by its creator.
+export const jobOwners = new Map<string, string>();
 
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? 'http://localhost:8001';
 
@@ -35,12 +37,26 @@ function extractClient(request: FastifyRequest): ClientInfo {
   };
 }
 
+/**
+ * True if the caller's bh_sid matches the job's recorded owner. Jobs created
+ * before any owner was recorded (no cookie) are treated as unowned and readable,
+ * so curl / cookie-less clients still work.
+ */
+export function jobOwnedByRequester(jobId: string, request: FastifyRequest): boolean {
+  const owner = jobOwners.get(jobId);
+  if (!owner) return true;
+  const sid = (request as unknown as { cookies?: Record<string, string> }).cookies?.['bh_sid'];
+  return sid === owner;
+}
+
 export function registerChatRoutes(server: FastifyInstance) {
   // Submit a query → returns job ID
   server.post('/api/v1/chat', async (request, reply) => {
     const parseResult = QuerySchema.safeParse(request.body);
     if (!parseResult.success) {
-      return reply.status(400).send({ error: 'Invalid query', details: parseResult.error.issues });
+      // Log the detail server-side; return a generic message so we don't leak schema internals.
+      request.log.warn({ issues: parseResult.error.issues }, 'chat query validation failed');
+      return reply.status(400).send({ error: 'Invalid query' });
     }
 
     const { query } = parseResult.data;
@@ -54,6 +70,9 @@ export function registerChatRoutes(server: FastifyInstance) {
       createdAt: new Date().toISOString(),
     };
     jobStore.set(jobId, job);
+    // Bind the job to its creator's session cookie so only they can poll it.
+    const ownerSid = (request as unknown as { cookies?: Record<string, string> }).cookies?.['bh_sid'];
+    if (ownerSid) jobOwners.set(jobId, ownerSid);
 
     server.log.info(
       { jobId, clientIp: client.ip, session: client.session_id, ua: client.user_agent?.slice(0, 60) },
@@ -70,7 +89,8 @@ export function registerChatRoutes(server: FastifyInstance) {
   server.get<{ Params: { id: string } }>('/api/v1/chat/:id', async (request, reply) => {
     const { id } = request.params;
     const job = jobStore.get(id);
-    if (!job) {
+    // 404 (not 403) on missing OR foreign job so we don't confirm a job id exists.
+    if (!job || !jobOwnedByRequester(id, request)) {
       return reply.status(404).send({ error: 'Job not found' });
     }
     return job;

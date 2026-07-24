@@ -23,12 +23,13 @@ An agentic NOC/SOC dashboard. Docker Compose stack at `/opt/bhasia/app` on the E
 |---------|------|------|
 | `nginx` | 80/443 | TLS termination + reverse proxy (only public entry) |
 | `web-server` | 3000 (internal) | Chat UI + alerts API (Node) |
-| `orchestrator` | 8001 | Routes questions to the specialist agents |
-| `threat-hunter` | 8002 | Threat hunting over logs |
-| `alert-triage` | 8003 | Alert triage (Athena) |
-| `thousandeyes-analyst` | 8004 | ThousandEyes network analysis |
-| `athena-hunter` | 8005 | NL→SQL over the Corelight Athena tables |
+| `orchestrator` | 8001 (internal) | Routes questions to the specialist agents |
+| `alert-triage` | 8003 (internal) | Alert triage (Athena) |
+| `thousandeyes-analyst` | 8004 (internal) | ThousandEyes network analysis |
+| `athena-hunter` | 8005 (internal) | NL→SQL over the Corelight Athena tables |
 | `audit-monitor` | 8787 (internal) | Token-gated trace viewer at `/bh/1337/thetraces/` |
+
+Agent ports (8001-8005) are `expose:`-only, not published to the host; nginx (80/443) is the only public entry.
 
 Backend data: **Athena** (`blackhat_pope_logs` DB, `blackhat-pope-dev` workgroup, `us-west-2`)
 over Corelight logs in S3 (`blackhat-pope-dev-logs`). LLM: **Gemini** by default

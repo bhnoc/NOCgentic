@@ -4,6 +4,13 @@
 **Region:** ap-southeast-1 (Singapore)
 **Last updated:** 2026-04-20
 
+> **Stale: historical design snapshot.** This describes the original OpenSearch-backed,
+> three-agent design (orchestrator + threat-hunter + alert-triage) in ap-southeast-1. The
+> platform has since moved to AWS Athena over S3 Parquet, added `athena-hunter` and
+> `thousandeyes-analyst`, and **removed `threat-hunter`** (2026-07-24 QA sweep 2: it was
+> orphaned; the orchestrator never routed to it). Agent ports are now internal-only; only
+> nginx (80/443) is public. For current reality see `README.md`. Kept for design history.
+
 ---
 
 ## 1. Purpose

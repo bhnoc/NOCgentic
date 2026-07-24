@@ -1152,7 +1152,7 @@
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'alert_feed' && Array.isArray(msg.alerts)) renderAlerts(msg.alerts);
-        else if (msg.type === 'job_update' && msg.job) handleJobUpdate(msg.job);
+        // Job results arrive via HTTP polling (pollJob), not over the socket.
       } catch (_) {}
     };
   }
@@ -1186,7 +1186,7 @@
           <span class="alert-time">${timeStr}</span>
         </div>
         <div class="alert-desc">${escHtml(a.description)}</div>
-        <div class="alert-src">${escHtml(a.source||'')}${a.srcIp?' // '+escHtml(a.srcIp):''}${a.dstPort?':'+a.dstPort:''}</div>
+        <div class="alert-src">${escHtml(a.source||'')}${a.srcIp?' // '+escHtml(a.srcIp):''}</div>
       `;
       feed.insertBefore(card, feed.firstChild);
       totalAlerts++;
@@ -1392,13 +1392,6 @@
         return;
       }
 
-      // WebSocket subscribe — best-effort, must never abort the poll flow.
-      try {
-        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type:'subscribe', jobId }));
-      } catch (wsErr) {
-        console.warn('[sendQuery] ws.send failed (non-fatal):', wsErr);
-      }
-
       try {
         pollJob(jobId, thinkingId, sendBtn);
         console.log('[sendQuery] pollJob scheduled for', jobId);
@@ -1499,36 +1492,8 @@
     }, 2000);
   }
 
-  // Jobs we've already rendered — de-duplicates WS job_update vs pollJob races.
+  // Jobs we've already rendered; guards against a double render within pollJob.
   const renderedJobs = new Set();
-
-  function handleJobUpdate(job) {
-    if (!job || !job.jobId) return;
-    if (job.status === 'done' || job.status === 'error') {
-      // Cancel any outstanding poll for this job
-      const timer = pollIntervals.get(job.jobId);
-      if (timer) { clearInterval(timer); pollIntervals.delete(job.jobId); }
-      // Render the result if we haven't already — this is the fast path when
-      // the server finishes before pollJob's first 2s tick (e.g. cover / guardrail).
-      if (renderedJobs.has(job.jobId)) return;
-      renderedJobs.add(job.jobId);
-      // Find and remove any thinking bubble still on screen
-      const msgs = document.getElementById('chat-messages');
-      if (msgs) {
-        const stillThinking = msgs.querySelectorAll('[id^="thinking-"]');
-        stillThinking.forEach(el => el.remove());
-      }
-      try { appendAgentMessage(job); }
-      catch (renderErr) { console.error('[handleJobUpdate] render failed:', renderErr); }
-      // Re-enable the send button
-      const sendBtn = document.getElementById('send-btn');
-      if (sendBtn) sendBtn.disabled = false;
-      // If no hints arrived with the update, poll for them
-      if (job.status === 'done' && (!job.hints || job.hints.length === 0)) {
-        pollForHints(job.jobId);
-      }
-    }
-  }
 
   // ========== Message rendering ==========
   function appendMessage(role, text) {
