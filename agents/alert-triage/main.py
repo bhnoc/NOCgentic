@@ -44,6 +44,7 @@ from athena_client import (  # noqa: E402
     execute_query,
     date_filter,
     sanitize_value,
+    sanitize_like_value,
 )
 
 # Initialize OTel tracing + metrics
@@ -170,9 +171,16 @@ async def athena_alerts(
     src_ip: str | None = None,
     dst_ip: str | None = None,
     severity: str | None = None,
+    keywords: list[str] | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    """Query the unified alerts table."""
+    """Query the unified alerts table.
+
+    keywords: when validating a specific alert (e.g. "ET SCAN ... 3306"), push the
+    signature terms into the WHERE clause so we search FOR that alert instead of
+    fetching the generic top-N by time and hoping it is in the slice. Without this,
+    validating a real alert that is not in the most-recent N returns a false "absent".
+    """
     dt = date_filter(hours)
     conditions = [dt]
     if src_ip:
@@ -181,6 +189,15 @@ async def athena_alerts(
         conditions.append(f"(orig_h = '{sanitize_value(dst_ip)}' OR resp_h = '{sanitize_value(dst_ip)}')")
     if severity:
         conditions.append(f"severity = '{sanitize_value(severity)}'")
+    if keywords:
+        # OR the keyword terms across alert_name + alert_detail (case-insensitive).
+        kw_terms = [
+            f"(LOWER(alert_name) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\' "
+            f"OR LOWER(alert_detail) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\')"
+            for k in keywords if k and k.strip()
+        ]
+        if kw_terms:
+            conditions.append("(" + " OR ".join(kw_terms) + ")")
     where = " AND ".join(conditions)
     sql = (
         f"SELECT ts_datetime, uid, orig_h, orig_p, resp_h, resp_p, "
@@ -194,15 +211,32 @@ async def athena_suricata(
     hours: int = 24,
     src_ip: str | None = None,
     dst_ip: str | None = None,
+    port: int | None = None,
+    keywords: list[str] | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    """Query suricata_corelight IDS alerts."""
+    """Query suricata_corelight IDS alerts.
+
+    port + keywords push the alert's own signature/port into the WHERE clause so
+    'validate alert X on port Y' searches FOR that alert rather than sampling the
+    generic top-N (which caused real alerts to read as "absent from telemetry").
+    """
     dt = date_filter(hours)
     conditions = [dt]
     if src_ip:
         conditions.append(f"(id_orig_h = '{sanitize_value(src_ip)}' OR id_resp_h = '{sanitize_value(src_ip)}')")
     if dst_ip:
         conditions.append(f"(id_orig_h = '{sanitize_value(dst_ip)}' OR id_resp_h = '{sanitize_value(dst_ip)}')")
+    if port:
+        conditions.append(f"(id_resp_p = {int(port)} OR id_orig_p = {int(port)})")
+    if keywords:
+        kw_terms = [
+            f"(LOWER(alert_signature) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\' "
+            f"OR LOWER(alert_category) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\')"
+            for k in keywords if k and k.strip()
+        ]
+        if kw_terms:
+            conditions.append("(" + " OR ".join(kw_terms) + ")")
     where = " AND ".join(conditions)
     sql = (
         f"SELECT ts_datetime, uid, id_orig_h, id_orig_p, id_resp_h, id_resp_p, "
@@ -690,6 +724,18 @@ async def triage(req: TriageRequest) -> TriageResponse:
         if llm_domain and llm_domain != hint_domain:
             phase2_tasks.append(("dns_targeted", athena_dns(hours=hours, domain=llm_domain, limit=50)))
 
+        # Alert-VALIDATION path: when the query names a specific alert (keywords) or a
+        # port, search the alert/IDS tables FOR that signature instead of relying on the
+        # generic top-N-by-time hint fetch. Without this, validating a real alert that is
+        # outside the recent-N window returns a false "absent from telemetry". These
+        # results are MERGED with the hint sets, not replaced, so we never lose hits.
+        llm_keywords = [k for k in (qf.get("keywords") or []) if k and k.strip()]
+        if llm_keywords or llm_port:
+            phase2_tasks.append(("suricata_signature",
+                athena_suricata(hours=hours, port=llm_port, keywords=llm_keywords or None, limit=100)))
+            phase2_tasks.append(("alerts_signature",
+                athena_alerts(hours=hours, keywords=llm_keywords or None, limit=100)))
+
         # Fetch additional log types requested by LLM
         requested_log_types = qf.get("log_types", [])
         core_types = {"suricata_corelight", "conn", "alerts", "dns"}
@@ -721,6 +767,14 @@ async def triage(req: TriageRequest) -> TriageResponse:
                 elif label == "dns_targeted":
                     dns_logs = result
                     capped["dns"] = len(result) >= 50
+                elif label == "suricata_signature":
+                    # Prepend signature hits so the alert being validated is the
+                    # first thing the LLM sees; dedup by uid to avoid double-count.
+                    seen = {r.get("uid") for r in suricata_alerts if r.get("uid")}
+                    suricata_alerts = result + [r for r in suricata_alerts if r.get("uid") not in seen]
+                elif label == "alerts_signature":
+                    seen = {r.get("uid") for r in unified_alerts if r.get("uid")}
+                    unified_alerts = result + [r for r in unified_alerts if r.get("uid") not in seen]
                 else:
                     extra_log_data[label] = result[:20]
 
