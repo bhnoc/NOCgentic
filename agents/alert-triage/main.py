@@ -804,6 +804,7 @@ async def triage(req: TriageRequest) -> TriageResponse:
         llm_domain = qf.get("domain")
         llm_port = qf.get("port")
         extra_log_data: dict[str, list[dict]] = {}
+        notice_hits: list[dict] = []
 
         # Counts/breakdown ask ("how many alerts today by severity"): the sampled
         # hint rows badly undercount (150 vs the true ~68k). Run one cheap aggregate
@@ -885,6 +886,8 @@ async def triage(req: TriageRequest) -> TriageResponse:
                 elif label == "alerts_signature":
                     seen = {r.get("uid") for r in unified_alerts if r.get("uid")}
                     unified_alerts = result + [r for r in unified_alerts if r.get("uid") not in seen]
+                elif label == "notice_signature":
+                    notice_hits = result[:20]
                 else:
                     extra_log_data[label] = result[:20]
 
@@ -1005,6 +1008,14 @@ async def triage(req: TriageRequest) -> TriageResponse:
             # corroboration survives llm_triage's 10k-char truncation and the LLM
             # leads its verdict with real volume, not sampled rows. Omitted when null.
             **({"source_attack_profile": same_source_profile} if same_source_profile else {}),
+            # notice-table matches carry the src attribution + msg/sub that some
+            # criticals (AWSServiceEnum) have ONLY here (the alerts view NULLs orig_h).
+            # Surfaced early so it is not truncated and the LLM can attribute the alert.
+            **({"notice_matches": [
+                {"src": n.get("src"), "dst": n.get("dst"), "note": n.get("note"),
+                 "msg": n.get("msg"), "detail": n.get("sub"), "ts": n.get("ts_datetime")}
+                for n in notice_hits[:10]
+            ]} if notice_hits else {}),
             # True per-severity totals for a counts/breakdown ask (real, not sampled).
             # Placed early so it survives truncation and the LLM reports exact numbers.
             **({"alert_severity_totals": {
