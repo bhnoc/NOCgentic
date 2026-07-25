@@ -360,11 +360,18 @@ async def llm_classify(query: str) -> dict[str, Any]:
     safe_query = sanitize(query)
     try:
         raw = await llm_complete(
+            # On flash-lite, thinking_budget=0 clamps to -1 (UNBOUNDED dynamic
+            # thinking) which shares max_output_tokens. At 256 the thinking ate the
+            # budget and the JSON truncated mid-object (finish_reason=max_tokens,
+            # e.g. `{"intent": "athena_hunter", "confidence`), so extract_json failed
+            # and EVERY classify silently fell back to the heuristic. Bound the
+            # thinking (512) and give the tiny JSON output real room (1024): same fix
+            # as athena-hunter's SQL gen.
             system_prompt=CLASSIFY_SYSTEM_PROMPT,
             user_content=safe_query,
-            max_tokens=256,
+            max_tokens=1024,
             temperature=0.0,
-            thinking_budget=0,
+            thinking_budget=512,
         )
         result = extract_json(raw)
         intent = result.get("intent", "athena_hunter")

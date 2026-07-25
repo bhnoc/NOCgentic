@@ -503,12 +503,15 @@ async def run_nl_sql_case(real: RealBits, case: dict[str, Any], today: str, comp
 
 
 async def run_classify_case(real: RealBits, case: dict[str, Any], complete) -> dict[str, Any]:
+    # Must mirror the orchestrator's real llm_classify params (max_tokens=1024,
+    # thinking_budget=512) so the benchmark tests the production call. The old
+    # 256/0 combo truncated the JSON on flash-lite (thinking ate the budget).
     raw = await complete(
         system_prompt=real.CLASSIFY_SYSTEM_PROMPT,
         user_content=case["query"],
-        max_tokens=256,
+        max_tokens=1024,
         temperature=0.0,
-        thinking_budget=0,
+        thinking_budget=512,
     )
     score, detail = score_classify(raw, case, real)
     return {"raw": raw, "score": score, "detail": detail}
