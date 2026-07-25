@@ -174,11 +174,25 @@ def date_partitions(hours: int = 24) -> list[str]:
 
 
 def date_filter(hours: int = 24) -> str:
-    """Return SQL WHERE fragment for date partitions."""
+    """Return SQL WHERE fragment bounding results to the last N hours.
+
+    The dt partition list is a coarse PRUNE (whole-day granularity), not the actual
+    window: "last 24h" spans two partitions (yesterday + today), so partition-only
+    filtering returns up to ~48h of rows. That over-counts every metric on real data
+    (two distinct capture days summed) and, in the redated dev slice, doubles counts
+    exactly (each partition holds a full copy of the window). Add an explicit
+    `ts >= now - hours` lower bound so the answer reflects the true window regardless
+    of how many partitions it touches. ts is epoch seconds (double) in every table.
+    """
     parts = date_partitions(hours)
     if len(parts) == 1:
-        return f"dt = '{parts[0]}'"
-    return f"dt IN ({', '.join(repr(d) for d in parts)})"
+        part_clause = f"dt = '{parts[0]}'"
+    else:
+        part_clause = f"dt IN ({', '.join(repr(d) for d in parts)})"
+    if hours <= 0:
+        return part_clause
+    epoch_start = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
+    return f"({part_clause} AND ts >= {epoch_start:.0f})"
 
 
 # ---------------------------------------------------------------------------
