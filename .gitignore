@@ -41,3 +41,6 @@ ubuntu-mirror.txt
 ### rapid-prototype scratch (findings, secrets, harness) — never commit
 temp/
 
+
+# Python regression-test virtualenv
+tests/python/.venv/

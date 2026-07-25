@@ -192,6 +192,28 @@ sudo docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d
 
 ---
 
+## Show-day runbook (flip from dev to live at the conference)
+
+Between events the box runs in dev posture (SG locked to a few IPs, demo data re-dated).
+On show day, flip to live in this order:
+
+1. **Instance up + DNS.** Start the instance if stopped, re-point `aing.bhnoc.com` to the new
+   IP (the IP is ephemeral). See "Start / stop" above.
+2. **Cert valid.** Check expiry (`certbot`/openssl below in "TLS certificate"); renew + reload
+   nginx if it lapsed while the box was off. Do this BEFORE opening 443 to the audience.
+3. **Creds fresh.** `refresh-env-creds.sh .env.s3` if the box was off for hours (temp creds
+   expire), then recreate the stack. Confirm `/health` 200 and a chat query answers.
+4. **Open 443 to the audience.** Add the audience CIDR(s) to the SG on port 443, keep SSH (22)
+   restricted to operator IPs only (see allow-list below). Prod style: `--protocol tcp --port 443`,
+   NOT all-protocols.
+5. **Live data.** At the conference real Corelight data flows into Athena, so the re-dated
+   "demo day" is NOT needed and should NOT be run (it would overwrite today's real partition).
+   The redate driver is a between-conferences / dev-demo tool only (see seeding section).
+6. **Trace viewer stays operator-only.** `/bh/1337/thetraces/` keeps its nginx IP allow-list
+   (operator IPs) even after 443 opens to attendees. Do not add the audience CIDR to that path.
+
+At lockdown (event over): revoke the audience CIDR from 443, return to the dev allow-list.
+
 ## Security group / access allow-list
 
 `sg-022b87911ecf12539`. During dev it's locked to a few IPs (all protocols). In prod,
@@ -313,10 +335,17 @@ curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: aing
 
 ## Seeding a re-dated "demo day" (make the app look live between cons)
 
+> **DEV/DEMO ONLY. Do NOT run this at a live conference:** real Corelight data flows into
+> Athena during the event, so today's partition is already populated. Running the redate
+> driver on show day would clobber the real partition with the frozen April slice. This is
+> purely for making the app look live BETWEEN events. See the show-day runbook above.
+
 The conference logs are frozen in the past (BH Asia = April 2026). Between events the
 dashboard's "last 24h" views look empty. Fix: copy a **contiguous window** of a real
 capture day and shift its timestamps to **today**, so the app queries "today" and sees
-live-looking traffic. Driver: **`scripts/redate_slice.py`** (in this repo).
+live-looking traffic. Driver: **`scripts/redate_slice.py`** (in this repo). It ages out at
+UTC midnight (re-run to today when demoing); the driver refuses if DST_DT==SRC_DT or the
+bucket isn't the demo parquet bucket.
 
 > ⚠️ **The seeded slice goes stale every midnight UTC.** It's pinned to a fixed `DST_DT`,
 > so once the UTC date rolls over, single-day `dt = 'today'` queries return **0 rows** (the

@@ -23,7 +23,7 @@ const DECOY_THIRD_OCTET = 69;
 const IP_RE = /\b10\.220\.(\d{1,3})\.(\d{1,3})\b/g;
 const ZONE_RE = /\b(Registration|Tools?)\b/g;
 
-function scrubString(s: string | null | undefined): string | undefined {
+export function scrubString(s: string | null | undefined): string | undefined {
   if (!s) return s ?? undefined;
   let out = s.replace(IP_RE, (full, third, host) => {
     const n = parseInt(third, 10);
@@ -40,7 +40,7 @@ function ipIsRestricted(ip: string | null | undefined): boolean {
   return m ? RESTRICTED_OCTETS.has(parseInt(m[1], 10)) : false;
 }
 
-interface RawAlert {
+export interface RawAlert {
   id: string;
   timestamp: string;
   severity: Alert['severity'];
@@ -60,6 +60,17 @@ class AlertCache {
   // When the orchestrator's athena_hunter kill-switch is on, freeze the feed.
   // Fail SAFE: defaults to false so a killswitch check error never freezes the feed.
   private athenaKilled = false;
+
+  // --- Test-only hooks (additive; do not affect production behavior) --------
+  /** Push a raw alert onto the queue so dequeue() can be exercised in tests. */
+  __enqueueForTest(raw: RawAlert): void {
+    this.queue.push(raw);
+  }
+  /** Set the cached athena kill-switch flag directly for tests. */
+  __setAthenaKilledForTest(killed: boolean): void {
+    this.athenaKilled = killed;
+  }
+  // --------------------------------------------------------------------------
 
   start(): void {
     if (this.running) return;

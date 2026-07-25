@@ -15,7 +15,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Regression gate: locks in the QA-sweep fixes (pytest + vitest). Deploy only
+  # runs if this passes, so a bad push can't reach the box regardless of who pushed.
+  test:
+    runs-on: [self-hosted, nocgentic]
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Run regression suites
+        run: bash ops/run-tests.sh
+
   deploy:
+    needs: test
     runs-on: [self-hosted, nocgentic]
     steps:
       - name: Check out main

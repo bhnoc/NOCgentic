@@ -1,0 +1,15 @@
+# Regression test suite deps (NOCgentic). Install into tests/python/.venv:
+#   python -m venv tests/python/.venv
+#   tests/python/.venv/bin/python -m pip install -r tests/python/requirements-test.txt
+#
+# These are the minimum needed to IMPORT the modules under test (pure functions
+# in agents/shared + each agent main.py). LangChain is only imported lazily
+# inside llm_complete(), so it is intentionally NOT required to import main.py.
+pytest>=8.0
+pytest-asyncio>=0.23
+
+# Needed to import the agent main.py modules and shared helpers:
+fastapi>=0.110.0      # main.py creates a FastAPI app at import time
+pydantic>=2.0.0       # request/response models
+boto3>=1.34.0         # athena_client + redate_slice construct clients
+httpx>=0.27.0         # thousandeyes-analyst
