@@ -207,6 +207,21 @@ async def athena_alerts(
     return await _athena_query(sql, "alerts")
 
 
+async def athena_alert_severity_counts(hours: int = 24) -> list[dict]:
+    """TRUE alert counts by severity (GROUP BY, no row cap).
+
+    "How many alerts today by severity" must report real totals (34829 low, 2
+    critical, ...), not the ~150 sampled rows a LIMIT'd fetch returns. This one
+    cheap aggregate answers the count question exactly.
+    """
+    dt = date_filter(hours)
+    sql = (
+        f"SELECT severity, COUNT(*) AS count FROM alerts "
+        f"WHERE {dt} GROUP BY severity ORDER BY count DESC"
+    )
+    return await _athena_query(sql, "alerts")
+
+
 async def athena_suricata(
     hours: int = 24,
     src_ip: str | None = None,
@@ -427,6 +442,37 @@ async def athena_generic_log(
     where = " AND ".join(conditions)
     sql = f"SELECT * FROM {log_type} WHERE {where} ORDER BY ts DESC LIMIT {min(limit, 200)}"
     return await _athena_query(sql, log_type)
+
+
+async def athena_notice_search(
+    hours: int = 24,
+    keywords: list[str] | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Search the notice table by keyword on note/msg/sub, returning src attribution.
+
+    Some criticals (e.g. AWSServiceEnum) live ONLY in notice, and the alerts VIEW
+    surfaces them with NULL orig_h/resp_h. Correct attribution is notice.src plus the
+    human-readable msg/sub (which services, which regions). Without this the agent
+    reports the critical as "absent". Keyword-matched so 'AWS enumeration' finds it.
+    """
+    dt = date_filter(hours)
+    conditions = [dt]
+    if keywords:
+        kw_terms = [
+            f"(LOWER(note) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\' "
+            f"OR LOWER(msg) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\' "
+            f"OR LOWER(sub) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\')"
+            for k in keywords if k and k.strip()
+        ]
+        if kw_terms:
+            conditions.append("(" + " OR ".join(kw_terms) + ")")
+    where = " AND ".join(conditions)
+    sql = (
+        f"SELECT ts_datetime, uid, src, dst, note, msg, sub "
+        f"FROM notice WHERE {where} ORDER BY ts DESC LIMIT {min(limit, 200)}"
+    )
+    return await _athena_query(sql, "notice")
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +805,17 @@ async def triage(req: TriageRequest) -> TriageResponse:
         llm_port = qf.get("port")
         extra_log_data: dict[str, list[dict]] = {}
 
+        # Counts/breakdown ask ("how many alerts today by severity"): the sampled
+        # hint rows badly undercount (150 vs the true ~68k). Run one cheap aggregate
+        # so the answer reports real totals incl. the exact critical count.
+        ql = (req.query or "").lower()
+        severity_totals: list[dict] | None = None
+        if ("how many" in ql or "breakdown" in ql or "count" in ql or "total" in ql) and "alert" in ql:
+            try:
+                severity_totals = await athena_alert_severity_counts(hours=hours)
+            except Exception as exc:
+                logger.warning("severity-counts aggregate failed: %s", exc)
+
         # Only re-query if the LLM found filters we didn't already use
         phase2_tasks: list[tuple[str, Any]] = []
 
@@ -782,6 +839,12 @@ async def triage(req: TriageRequest) -> TriageResponse:
                 athena_suricata(hours=hours, port=llm_port, keywords=llm_keywords or None, limit=100)))
             phase2_tasks.append(("alerts_signature",
                 athena_alerts(hours=hours, keywords=llm_keywords or None, limit=100)))
+        # Search notice too: some criticals (AWSServiceEnum) live ONLY there and the
+        # alerts view shows them with NULL orig_h, so keyword search on notice is the
+        # only path to their src attribution + descriptive msg/sub.
+        if llm_keywords:
+            phase2_tasks.append(("notice_signature",
+                athena_notice_search(hours=hours, keywords=llm_keywords, limit=50)))
 
         # Fetch additional log types requested by LLM
         requested_log_types = qf.get("log_types", [])
@@ -942,6 +1005,13 @@ async def triage(req: TriageRequest) -> TriageResponse:
             # corroboration survives llm_triage's 10k-char truncation and the LLM
             # leads its verdict with real volume, not sampled rows. Omitted when null.
             **({"source_attack_profile": same_source_profile} if same_source_profile else {}),
+            # True per-severity totals for a counts/breakdown ask (real, not sampled).
+            # Placed early so it survives truncation and the LLM reports exact numbers.
+            **({"alert_severity_totals": {
+                "note": "TRUE totals from GROUP BY severity (not sampled). Report these exact counts.",
+                "total_all_severities": sum(int(r.get("count", 0) or 0) for r in severity_totals),
+                "by_severity": {r.get("severity"): int(r.get("count", 0) or 0) for r in severity_totals},
+            }} if severity_totals else {}),
             "query_filters":      {k: v for k, v in qf.items() if v and k != "focus"},
             "time_range_hours":   hours,
             "data_source":        "athena",
