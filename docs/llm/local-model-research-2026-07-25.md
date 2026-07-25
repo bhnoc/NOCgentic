@@ -36,8 +36,15 @@ All three expose an OpenAI-compatible endpoint, so the app's `local` provider (b
 
 Recommendation: start with **llama.cpp `llama-server`** (leanest, native Unsloth GGUF, best single-user latency), keep the provider base-URL generic so we can swap to vLLM later if concurrency ever matters.
 
-## Prerequisites on the box (not yet installed)
-The L40S is present (confirmed via lspci: NVIDIA AD102GL [L40S]) but the box has **no NVIDIA driver / CUDA installed** and no `nvidia-smi`. 460GB disk free (plenty for weights). Before any local model runs: install the NVIDIA driver + CUDA, build/install llama.cpp with CUDA, then pull a shortlist GGUF.
+## Box setup: DONE and verified (2026-07-25)
+The GPU stack is now live on the box (full runbook in the deploy skill):
+- **Driver + CUDA:** nvidia-driver-610-open + cuda-toolkit 13.3 via the CUDA apt repo, one reboot to bind the module. `nvidia-smi` shows **NVIDIA L40S, 46068 MiB, driver 610.43.02**.
+- **llama.cpp:** built with `-DGGML_CUDA=ON` at /home/ubuntu/llama.cpp (llama-server + llama-cli).
+- **First model:** Qwen3-Coder-30B-A3B-Instruct-Q4_K_M (~18GB) pulled via `llama-cli -hf unsloth/...:Q4_K_M` into /home/ubuntu/models.
+- **Verified working:** loads to ~43GB VRAM (fits 46GB), and on a Presto test prompt it generated a CORRECT Athena statement (`SELECT COUNT(*) FROM conn WHERE dt = '2026-07-25';`) at **~197 tokens/sec generation, 172 t/s prompt**. The local inference path works end to end.
+- Download note: the box network does ~1GB/min, so an 18GB pull takes ~15-20 min. Run it DETACHED (nohup) on the box, not through a client with a timeout, or it gets killed mid-download (a partial `.downloadInProgress` blob; llama.cpp resumes on re-run).
+
+Next: capture the Gemini baseline with `bench/`, then benchmark this model (and Qwen2.5-Coder-32B + the XiYanSQL control) against it; wire GBNF grammars for the JSON + SQL paths.
 
 ## Flagged uncertainties
 - LiveSQLBench leaderboard last updated 2026-03-02, so it may lag the very latest July 2026 releases; Qwen3-Coder-30B-A3B is not yet on it, so its SQL score is inferred from family lineage, not measured.
