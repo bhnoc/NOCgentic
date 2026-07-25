@@ -1,0 +1,294 @@
+{
+  "meta": {
+    "generated": "2026-07-25",
+    "database": "blackhat_pope_logs",
+    "workgroup": "blackhat-pope-dev",
+    "region": "us-west-2",
+    "profile": "VirtualPOC-users",
+    "partition": "dt='2026-07-25'",
+    "dataset_scale": {
+      "total_conn_rows": 4815432,
+      "total_alert_rows": 67941,
+      "total_dns_rows": 2627151,
+      "distinct_dns_queries": 36717,
+      "dhcp_rows": 4937,
+      "known_devices_rows": 2249,
+      "known_devices_distinct_mac": 1008
+    },
+    "column_notes": "Raw Zeek tables use id_orig_h/id_resp_h/id_orig_p/id_resp_p. The alerts VIEW uses orig_h/resp_h/orig_p/resp_p. ts_datetime is string, ts is epoch double. All tables partitioned by dt (varchar YYYY-MM-DD)."
+  },
+
+  "facts": [
+    {
+      "topic": "top_talkers_by_connection_count",
+      "question_it_supports": "Which source IPs generated the most connections today? / Who are the top talkers?",
+      "answer": {
+        "top5": [
+          {"ip": "172.16.16.16", "connections": 908870},
+          {"ip": "192.168.130.221", "connections": 178029},
+          {"ip": "192.168.131.24", "connections": 175827},
+          {"ip": "172.16.16.17", "connections": 87789},
+          {"ip": "10.220.198.33", "connections": 80624}
+        ]
+      },
+      "proof_query": "SELECT id_orig_h, count(*) c FROM conn WHERE dt='2026-07-25' GROUP BY id_orig_h ORDER BY c DESC LIMIT 5",
+      "notes": "#1 talker is overwhelmingly DNS (see next fact). This is a stable, easily verified leaderboard."
+    },
+
+    {
+      "topic": "profile_number1_talker_172.16.16.16",
+      "question_it_supports": "Profile 172.16.16.16 — what is it doing? Is it a DNS resolver/forwarder?",
+      "answer": {
+        "total_connections": 908870,
+        "top_dest_ports": [{"port": 53, "proto": "udp", "count": 908258}, {"port": 53, "proto": "tcp", "count": 484}, {"port": 443, "proto": "tcp", "count": 85}, {"port": 123, "proto": "udp", "count": 43}],
+        "top_dest_ips": [{"ip": "208.67.220.220", "count": 454621}, {"ip": "208.67.222.222", "count": 454120}],
+        "services": [{"service": "dns", "count": 907896}, {"service": "ssl", "count": 846}, {"service": "ntp", "count": 85}],
+        "mac": "00:0c:29:3f:82:96",
+        "mac_vendor": "unknown (VMware OUI 00:0c:29)",
+        "interpretation": "This host is a DNS forwarder — ~99.9% of its traffic is UDP/53 to the two OpenDNS resolvers (208.67.220.220 and 208.67.222.222). Behaves like the NOC's recursive resolver."
+      },
+      "proof_query": "SELECT id_resp_p, proto, count(*) c FROM conn WHERE dt='2026-07-25' AND id_orig_h='172.16.16.16' GROUP BY id_resp_p, proto ORDER BY c DESC LIMIT 8; -- and: SELECT id_resp_h, count(*) c FROM conn WHERE dt='2026-07-25' AND id_orig_h='172.16.16.16' GROUP BY id_resp_h ORDER BY c DESC LIMIT 8; -- and: SELECT service, count(*) c FROM conn WHERE dt='2026-07-25' AND id_orig_h='172.16.16.16' GROUP BY service ORDER BY c DESC LIMIT 8",
+      "notes": "208.67.220.220 / 208.67.222.222 are Cisco OpenDNS public resolvers — consistent with a DNS forwarder role."
+    },
+
+    {
+      "topic": "internal_host_profile_192.168.131.7",
+      "question_it_supports": "I found my IP 192.168.131.7 in the data — what do you know about it? (by-IP profile, links to a critical alert)",
+      "answer": {
+        "ip": "192.168.131.7",
+        "connections": 326,
+        "mac": "6e:c5:2e:f5:8f:2e",
+        "mac_vendor": "unknown - Locally Administered MAC (randomized)",
+        "dhcp_hostname": "Dikshya-stha",
+        "top_dns_queries": ["www.google.com (56)", "doh.opendns.com (28)", "dns.adguard.com (24)", "cloudflare-dns.com (16)", "graph.facebook.com (8)"],
+        "top_ssl_server_names": ["cloudflare-dns.com (10)", "android.chat.openai.com (9)", "doh.opendns.com (8)", "www.google.com (7)", "dataplane.rum.us-east-1.amazonaws.com (7)", "vs.aws.amazon.com (5)", "graph.facebook.com (5)", "o33249.ingest.sentry.io (5)"],
+        "alerts": [{"name": "ET INFO Android Device Connectivity Check", "count": 6}, {"name": "ET INFO Observed Cloudflare DNS over HTTPS Domain (cloudflare-dns.com in TLS SNI)", "count": 1}],
+        "critical_finding": "This host (src=192.168.131.7) is the source of a CRITICAL notice: AWSServiceEnum::Possible_AWS_Service_Enumeration — 'Host appears to be enumerating AWS API service endpoints (5 services across 1 region within the last 1.0 min).' AWS SSL SNIs observed: dataplane.rum.us-east-1.amazonaws.com, vs.aws.amazon.com."
+      },
+      "proof_query": "SELECT count(*) FROM conn WHERE dt='2026-07-25' AND id_orig_h='192.168.131.7'; -- MAC/host: SELECT mac, host_name, assigned_addr FROM dhcp WHERE dt='2026-07-25' AND assigned_addr='192.168.131.7'; -- DNS: SELECT query, count(*) c FROM dns WHERE dt='2026-07-25' AND id_orig_h='192.168.131.7' GROUP BY query ORDER BY c DESC LIMIT 8; -- SSL: SELECT server_name, count(*) c FROM ssl WHERE dt='2026-07-25' AND id_orig_h='192.168.131.7' AND server_name IS NOT NULL GROUP BY server_name ORDER BY c DESC LIMIT 10; -- alerts: SELECT alert_name, count(*) c FROM alerts WHERE dt='2026-07-25' AND (orig_h='192.168.131.7' OR resp_h='192.168.131.7') GROUP BY alert_name ORDER BY c DESC; -- critical link: SELECT src, note, msg FROM notice WHERE dt='2026-07-25' AND note LIKE '%AWSServiceEnum%'",
+      "notes": "STRONGEST end-to-end scenario: IP -> DHCP hostname (Dikshya-stha) -> MAC -> DNS/SSL behavior -> a CRITICAL AWS-enumeration alert. Note: the alerts VIEW shows NULL orig_h for the AWS enum critical (it maps from notice.src which the view does not populate for this note type); to attribute the critical alert to the host you must query the notice table's src column, not the alerts view. Flag this to eval authors."
+    },
+
+    {
+      "topic": "alerts_by_severity",
+      "question_it_supports": "How many alerts today and by severity? What is the alert breakdown?",
+      "answer": {
+        "total": 67941,
+        "by_severity": [{"severity": "low", "count": 34829}, {"severity": "medium", "count": 31312}, {"severity": "high", "count": 1491}, {"severity": "error", "count": 301}, {"severity": "informational (default)", "count": 3}, {"severity": "notification", "count": 3}, {"severity": "critical", "count": 2}]
+      },
+      "proof_query": "SELECT severity, count(*) c FROM alerts WHERE dt='2026-07-25' GROUP BY severity ORDER BY c DESC",
+      "notes": "Only 2 critical, both AWSServiceEnum notices. severity is a free-text varchar with inconsistent values ('informational (default)') — do exact-string matches in scenarios."
+    },
+
+    {
+      "topic": "top_alert_names",
+      "question_it_supports": "What are the most common alert signatures firing? Top alert types.",
+      "answer": {
+        "all_suricata_type": true,
+        "top": [
+          {"alert_name": "ET INFO TLS Handshake Failure", "count": 22663},
+          {"alert_name": "ET INFO DNS Query to Cloudflare Tunneling Domain (argotunnel.com)", "count": 10070},
+          {"alert_name": "ET INFO HTTP traffic on port 443 (CONNECT)", "count": 5128},
+          {"alert_name": "ET INFO Remote Monitoring and Management (RMM) Tool in TLS SNI (namequery.com)", "count": 3447},
+          {"alert_name": "ET INFO Android Device Connectivity Check", "count": 2153},
+          {"alert_name": "ET INFO Observed DNS Query to VSCode Hosting Domain", "count": 1893},
+          {"alert_name": "ET INFO Remote Monitoring and Management (RMM) Tool in DNS Lookup (namequery.com)", "count": 1809},
+          {"alert_name": "ET SCAN Suspicious inbound to mySQL port 3306", "count": 886}
+        ]
+      },
+      "proof_query": "SELECT alert_type, alert_name, count(*) c FROM alerts WHERE dt='2026-07-25' GROUP BY alert_type, alert_name ORDER BY c DESC LIMIT 15",
+      "notes": "Note the alert_name text in the data contains spaced-out domains, e.g. 'argotunnel .com', 'namequery .com' (space before TLD) — match with LIKE '%argotunnel%'. Top alerts are overwhelmingly ET INFO (benign informational)."
+    },
+
+    {
+      "topic": "high_severity_alert_names",
+      "question_it_supports": "What high-severity alerts fired today?",
+      "answer": {
+        "top": [
+          {"alert_name": "ETPRO INFO OpenDNS DNSCrypt", "count": 837},
+          {"alert_name": "ET INFO Possible Kali Linux hostname in DHCP Request Packet", "count": 225},
+          {"alert_name": "ETPRO INFO Proxy.pac Download", "count": 157},
+          {"alert_name": "ETPRO INFO Request to Externally Hosted proxy config file .pac", "count": 153},
+          {"alert_name": "ET INFO Dropbox.com Offsite File Backup in Use", "count": 26},
+          {"alert_name": "ETPRO INFO Python Requests Suspicious User Agent", "count": 16},
+          {"alert_name": "ETPRO HUNTING Possibly Suspicious example.com SSL Cert", "count": 7}
+        ]
+      },
+      "proof_query": "SELECT alert_name, count(*) c FROM alerts WHERE dt='2026-07-25' AND severity='high' GROUP BY alert_name ORDER BY c DESC LIMIT 10",
+      "notes": "The 'Kali Linux hostname in DHCP' (225) is a great alert-validation scenario — cross-checkable against the dhcp table (see MAC/dhcp fact)."
+    },
+
+    {
+      "topic": "alert_validation_scenario_mysql_scan",
+      "question_it_supports": "Validate this alert: 'ET SCAN Suspicious inbound to mySQL port 3306' — is it a real scan? Who is doing it?",
+      "answer": {
+        "scanner_ip": "10.220.153.11",
+        "target_ip": "10.220.152.12",
+        "target_port": 3306,
+        "mysql_scan_alert_count": 880,
+        "corroborating_alerts_from_same_src": [
+          {"alert_name": "ET SCAN MYSQL MySQL Remote FAST Account Password Cracking", "count": 45},
+          {"alert_name": "ET INFO Server Responded with Vulnerable OpenSSH Version (CVE-2024-6409)", "count": 78},
+          {"alert_name": "ET SCAN Potential SSH Scan OUTBOUND", "count": 6},
+          {"alert_name": "ET SCAN Potential SSH Scan", "count": 3}
+        ],
+        "scanner_conn_shape": {"connections": 33505, "distinct_dests": 50, "distinct_ports": 7}
+      },
+      "proof_query": "SELECT orig_h, resp_h, resp_p FROM alerts WHERE dt='2026-07-25' AND alert_name LIKE '%Suspicious inbound to mySQL%' LIMIT 5; -- src alerts: SELECT alert_name, count(*) c FROM alerts WHERE dt='2026-07-25' AND orig_h='10.220.153.11' GROUP BY alert_name ORDER BY c DESC; -- shape: SELECT count(*) conns, count(DISTINCT id_resp_h) dests, count(DISTINCT id_resp_p) ports FROM conn WHERE dt='2026-07-25' AND id_orig_h='10.220.153.11'",
+      "notes": "TRUE POSITIVE scan scenario. 10.220.153.11 -> 10.220.152.12:3306 with MySQL password-cracking AND SSH-scan alerts. Clean, defensible 'this alert is real' answer."
+    },
+
+    {
+      "topic": "alert_validation_scenario_aws_enum",
+      "question_it_supports": "Validate the CRITICAL alert 'AWSServiceEnum::Possible_AWS_Service_Enumeration' — who and what?",
+      "answer": {
+        "severity": "critical",
+        "count": 2,
+        "alert_type": "notice",
+        "source_host": "192.168.131.7 (hostname Dikshya-stha)",
+        "detail_examples": [
+          "Host appears to be enumerating AWS API service endpoints (5 services across 1 region(s) within the last 1.0 min).",
+          "Host appears to be enumerating AWS API service endpoints (5 services across 3 region(s) within the last 1.0 min)."
+        ],
+        "enumerated_services_example": "data-kinesis.us-west-2, cognito-identity.us-east-1, s3.us-west-1, sts.us-east-1, kinesis.us-east-1"
+      },
+      "proof_query": "SELECT alert_name, severity, count(*) FROM alerts WHERE dt='2026-07-25' AND severity='critical' GROUP BY alert_name, severity; -- attribution (alerts view orig_h is NULL, use notice.src): SELECT src, sub, msg, ts_datetime FROM notice WHERE dt='2026-07-25' AND note LIKE '%AWSServiceEnum%'",
+      "notes": "Only critical-severity alerts in the whole dataset. IMPORTANT: the alerts VIEW returns NULL for orig_h/resp_h on this notice — attribution requires the notice table's src column. Great scenario but authors must use the notice table to get the golden host answer."
+    },
+
+    {
+      "topic": "dns_top_queried_domains",
+      "question_it_supports": "What are the most queried DNS domains today?",
+      "answer": {
+        "top": [
+          {"query": "_companion-link._tcp.local", "count": 85334},
+          {"query": "_rdlink._tcp.local", "count": 58260},
+          {"query": "1.128.168.192.in-addr.arpa", "count": 44131},
+          {"query": "doh.opendns.com", "count": 36268},
+          {"query": "www.google.com", "count": 26165},
+          {"query": "gateway.fe2.apple-dns.net", "count": 22960},
+          {"query": "api2direct.cursor.sh", "count": 18252},
+          {"query": "api2.cursor.sh", "count": 18033},
+          {"query": "mask.icloud.com", "count": 17686},
+          {"query": "blackhat.com", "count": 15077}
+        ]
+      },
+      "proof_query": "SELECT query, count(*) c FROM dns WHERE dt='2026-07-25' AND query IS NOT NULL GROUP BY query ORDER BY c DESC LIMIT 15",
+      "notes": "Top domains are mDNS (.local), reverse-DNS (.arpa), and normal SaaS (Apple, Google, Cursor, iCloud). 'blackhat.com' at 15077 is the conference domain."
+    },
+
+    {
+      "topic": "dns_suspicious_domains",
+      "question_it_supports": "Are there suspicious/tunneling/exfil-shaped DNS domains? (threat hunt on DNS)",
+      "answer": {
+        "cloudflare_tunnel": "argotunnel.com — flagged 10070 times by 'ET INFO DNS Query to Cloudflare Tunneling Domain'",
+        "rmm_tool": "namequery.com — 3447 (TLS SNI) + 1809 (DNS) RMM-tool alerts",
+        "doh_resolvers_seen": ["doh.opendns.com (36268)", "dns.quad9.net", "cloudflare-dns.com", "dns.adguard.com", "dns.google"],
+        "wpad_domain": "wpad.investmentscorecard.com (2565) — WPAD/proxy-config lookups, worth review",
+        "notable": "No obvious high-entropy DGA in the top set; long names present are legit (google clients6.google.com signaler shards, fbcdn netseer-ipaddr-assoc, office.com telemetry)."
+      },
+      "proof_query": "SELECT query, count(*) c FROM dns WHERE dt='2026-07-25' AND rcode_name='NXDOMAIN' AND query IS NOT NULL GROUP BY query ORDER BY c DESC LIMIT 10; -- long names: SELECT DISTINCT query FROM dns WHERE dt='2026-07-25' AND length(query) > 50 AND query NOT LIKE '%.local' AND query NOT LIKE '%.arpa' ORDER BY query LIMIT 12; -- tunnel alert: SELECT count(*) FROM alerts WHERE dt='2026-07-25' AND alert_name LIKE '%argotunnel%'",
+      "notes": "The argotunnel.com (Cloudflare Tunnel) and namequery.com (RMM) domains are the best 'is this DNS suspicious' scenarios — verifiable against both dns and alerts tables. DGA-hunt scenarios are WEAK here (no strong DGA present)."
+    },
+
+    {
+      "topic": "threat_hunt_ssh",
+      "question_it_supports": "Any SSH (port 22) activity and from where? SSH scanning?",
+      "answer": {
+        "top_ssh_pairs": [
+          {"src": "192.168.129.6", "dst": "10.131.12.220", "connections": 293},
+          {"src": "10.220.153.11", "dst": "10.220.152.12", "connections": 22},
+          {"src": "10.220.199.142", "dst": "13.214.79.189", "connections": 18},
+          {"src": "10.220.250.24", "dst": "10.220.199.214", "connections": 14},
+          {"src": "10.220.150.4", "dst": "10.220.153.11", "connections": 12}
+        ],
+        "ssh_scan_note": "10.220.153.11 (the MySQL scanner) also generated 'ET SCAN Potential SSH Scan OUTBOUND' (6) and a CVE-2024-6409 vulnerable-OpenSSH alert (78)."
+      },
+      "proof_query": "SELECT id_orig_h, id_resp_h, count(*) c FROM conn WHERE dt='2026-07-25' AND id_resp_p=22 GROUP BY id_orig_h, id_resp_h ORDER BY c DESC LIMIT 10",
+      "notes": "Modest SSH volume; top pair 192.168.129.6 -> 10.131.12.220 (293 conns) looks like a persistent legit session/automation. Real answers exist."
+    },
+
+    {
+      "topic": "threat_hunt_scanning_fanout",
+      "question_it_supports": "Which hosts contact an unusually large number of distinct destinations (scanning / lateral-movement shape)?",
+      "answer": {
+        "top_fanout": [
+          {"ip": "10.220.250.18", "distinct_dests": 4781, "distinct_ports": 15},
+          {"ip": "192.168.130.120", "distinct_dests": 1378, "distinct_ports": 11},
+          {"ip": "192.168.131.249", "distinct_dests": 1091, "distinct_ports": 9},
+          {"ip": "10.220.250.29", "distinct_dests": 898, "distinct_ports": 186},
+          {"ip": "10.220.35.19", "distinct_dests": 864, "distinct_ports": 11}
+        ],
+        "most_scan_like": "10.220.250.29 — 898 distinct destinations across 186 distinct ports (top ports 443, 7680 Windows Delivery Optimization, 53, 3544 Teredo, 80). High port diversity is the scan signal; 10.220.250.18 has huge dest count but only 15 ports (looks like a heavy client/proxy, not a port scan)."
+      },
+      "proof_query": "SELECT id_orig_h, count(DISTINCT id_resp_h) d, count(DISTINCT id_resp_p) p FROM conn WHERE dt='2026-07-25' GROUP BY id_orig_h ORDER BY d DESC LIMIT 8; -- port profile: SELECT id_resp_p, count(*) c FROM conn WHERE dt='2026-07-25' AND id_orig_h='10.220.250.29' GROUP BY id_resp_p ORDER BY c DESC LIMIT 6",
+      "notes": "Distinguish fan-out-by-dest (10.220.250.18, likely NAT/proxy) from fan-out-by-port (10.220.250.29, scan-shaped). Good nuanced threat-hunt scenario."
+    },
+
+    {
+      "topic": "threat_hunt_top_talkers_by_bytes",
+      "question_it_supports": "Which hosts moved the most data (bytes) today?",
+      "answer": {
+        "top5_by_bytes": [
+          {"ip": "172.16.7.12", "total_bytes": 297561894620},
+          {"ip": "192.168.191.97", "total_bytes": 138495541365},
+          {"ip": "10.220.35.28", "total_bytes": 47975040500},
+          {"ip": "192.168.131.24", "total_bytes": 45274422022},
+          {"ip": "10.220.199.140", "total_bytes": 38852995372}
+        ],
+        "number1_detail": {"ip": "172.16.7.12", "connections": 1448, "distinct_dests": 174, "top_dest": "17.248.164.77:443 ssl (~21.5MB resp) — Apple; all top destinations are 443/ssl"}
+      },
+      "proof_query": "SELECT id_orig_h, sum(orig_bytes+resp_bytes) b FROM conn WHERE dt='2026-07-25' GROUP BY id_orig_h ORDER BY b DESC LIMIT 5; -- detail: SELECT id_resp_h, id_resp_p, service, sum(resp_bytes) b FROM conn WHERE dt='2026-07-25' AND id_orig_h='172.16.7.12' GROUP BY id_resp_h, id_resp_p, service ORDER BY b DESC LIMIT 5",
+      "notes": "172.16.7.12 moved ~297GB over only 1448 connections — bulk transfer / streaming, all SSL/443. Big verifiable number for a 'top bandwidth consumer' scenario."
+    },
+
+    {
+      "topic": "mac_data_exists",
+      "question_it_supports": "What do we know about this MAC address? (by-MAC investigation use case)",
+      "answer": {
+        "mac_data_available": true,
+        "sources": {
+          "conn": "id_orig_mac / id_orig_mac_vendor / id_resp_mac / id_resp_mac_vendor on every connection row — the richest MAC source (populated on ~all conn rows).",
+          "dhcp": "mac + host_name + assigned_addr + client_fqdn — maps MAC to hostname and leased IP (4937 rows).",
+          "known_devices": "mac + vendor_mac + host_ip + protocols + num_instances (2249 rows, 1008 distinct MACs). Corelight-derived device inventory."
+        },
+        "example_mac_to_ip": {"mac": "00:0c:29:3f:82:96", "vendor": "VMware (OUI 00:0c:29)", "primary_ip": "172.16.16.16", "connections": 908870, "note": "same MAC also seen on its IPv6 fe80:: link-local"},
+        "example_dhcp_lookup": {"mac": "c8:6e:08:d6:0e:7a", "host_name": "CSCO-W-PF5F1TWH", "assigned_addr": "192.168.131.234", "client_fqdn": "CSCO-W-PF5F1TWH.cisco.com"},
+        "example_known_device": {"mac": "08:00:27:c3:41:3b", "vendor_mac": "PCS Computer Systems GmbH", "host_ip": "192.168.129.53", "protocols": "DHCP"},
+        "caveat": "Many MACs are randomized/locally-administered (vendor shows 'Randomized' or 'unknown - Locally Administered MAC'), typical of modern phones/laptops with MAC privacy. Vendor attribution only works for non-randomized MACs."
+      },
+      "proof_query": "SELECT id_orig_h, id_orig_mac, id_orig_mac_vendor FROM conn WHERE dt='2026-07-25' AND id_orig_mac IS NOT NULL LIMIT 5; -- dhcp: SELECT mac, host_name, assigned_addr, client_fqdn FROM dhcp WHERE dt='2026-07-25' AND mac IS NOT NULL LIMIT 8; -- known_devices: SELECT mac, host_ip, vendor_mac, protocols, num_instances FROM known_devices WHERE dt='2026-07-25' AND mac IS NOT NULL ORDER BY num_instances DESC LIMIT 6; -- mac->ip: SELECT id_orig_h, count(*) c FROM conn WHERE dt='2026-07-25' AND id_orig_mac='00:0c:29:3f:82:96' GROUP BY id_orig_h ORDER BY c DESC",
+      "notes": "MAC data DEFINITELY EXISTS and is queryable three ways. By-MAC scenarios are authorable: (1) MAC -> IP(s) via conn, (2) MAC -> hostname/FQDN/lease via dhcp, (3) MAC -> vendor/device-inventory via known_devices. Best golden-answer MAC: 00:0c:29:3f:82:96 -> 172.16.16.16 (VMware, DNS forwarder). Best hostname link: c8:6e:08:d6:0e:7a -> CSCO-W-PF5F1TWH.cisco.com. Caveat: heavy MAC randomization limits vendor-based scenarios."
+    },
+
+    {
+      "topic": "alert_validation_scenario_kali_dhcp",
+      "question_it_supports": "Validate 'ET INFO Possible Kali Linux hostname in DHCP Request Packet' — are there real Kali hosts?",
+      "answer": {
+        "high_sev_alert_count": 225,
+        "confirmed_kali_hosts_in_dhcp": [
+          {"mac": "04:ea:56:d6:42:96", "host_name": "kali", "assigned_addr": "10.220.25.15"},
+          {"mac": "04:e8:b9:8c:31:ab", "host_name": "kali", "assigned_addr": "10.220.26.11"},
+          {"mac": "bc:03:58:77:1f:37", "host_name": "kali", "assigned_addr": "10.220.25.13"}
+        ]
+      },
+      "proof_query": "SELECT count(*) FROM alerts WHERE dt='2026-07-25' AND alert_name LIKE '%Kali Linux hostname%'; -- corroborate in dhcp: SELECT mac, host_name, assigned_addr FROM dhcp WHERE dt='2026-07-25' AND lower(host_name) LIKE '%kali%' LIMIT 5",
+      "notes": "TRUE POSITIVE and cross-verifiable: the DHCP alert is corroborated by literal host_name='kali' rows in the dhcp table with real MACs and leased IPs. Excellent alert-validation + MAC + IP tri-linked scenario. (This is a NOC — Kali on the attendee network is expected/benign context, worth noting for the 'validate' answer.)"
+    }
+  ],
+
+  "scenario_authorability_summary": {
+    "by_ip_profile": "STRONG — top talkers leaderboard is stable; 192.168.131.7 (Dikshya-stha) gives a full IP->host->behavior->critical-alert chain; 172.16.16.16 is a clean DNS-forwarder profile; 172.16.7.12 a bandwidth-hog profile. ~4-5 solid scenarios.",
+    "by_mac": "MODERATE-STRONG — MAC data exists in conn/dhcp/known_devices. 3-4 scenarios: MAC->IP (00:0c:29:3f:82:96), MAC->hostname/FQDN (c8:6e:08:d6:0e:7a), MAC->vendor inventory. Caveat: heavy MAC randomization narrows vendor-attribution scenarios.",
+    "threat_hunt": "STRONG — SSH activity, scan fan-out (10.220.250.29 by-port vs 10.220.250.18 by-dest), top-bytes talkers, DNS tunneling/RMM domains. ~4-5 scenarios.",
+    "alert_validation": "STRONG — MySQL scan (10.220.153.11->10.220.152.12) TRUE POSITIVE, Kali-DHCP cross-verifiable, AWS-enum critical (with the notice-table attribution caveat). ~3-4 scenarios.",
+    "total_estimate": "~15 solid verifiable scenarios across the four use cases.",
+    "flags": [
+      "The alerts VIEW returns NULL orig_h/resp_h for the AWSServiceEnum critical notice — attribution needs the notice.src column. Author accordingly.",
+      "alert_name strings contain spaced domains ('argotunnel .com', 'namequery .com') — use LIKE '%argotunnel%' not exact match.",
+      "severity is inconsistent free-text ('informational (default)') — exact-string match required.",
+      "DGA/high-entropy DNS hunting is WEAK — no strong DGA present; lean on argotunnel/namequery/wpad instead.",
+      "MAC randomization is widespread; vendor-based MAC attribution only reliable for OUI-assigned MACs (VMware, Cisco, Intel, PCS, AzureWave seen)."
+    ]
+  }
+}
