@@ -22,11 +22,18 @@ Usage:
     )
 
 Environment variables:
-    LLM_PROVIDER       — "gemini" or "openrouter" (default: "gemini")
-    GEMINI_API_KEY      — Google Gemini API key
-    OPENROUTER_API_KEY  — OpenRouter API key
+    LLM_PROVIDER        "gemini" (cloud), "openrouter" (cloud), or "local" (on-box). Default "gemini".
+    GEMINI_API_KEY      Google Gemini API key
+    OPENROUTER_API_KEY  OpenRouter API key
     GEMINI_MODEL        default: gemini-3.5-flash-lite
-    OPENROUTER_MODEL    — default: anthropic/claude-3-haiku
+    OPENROUTER_MODEL    default: anthropic/claude-3-haiku
+    LOCAL_LLM_BASE_URL  OpenAI-compatible local server (llama.cpp/Ollama/vLLM). Default http://localhost:8080/v1
+    LOCAL_LLM_MODEL     served model name for the local provider. Default "local-model"
+    LOCAL_LLM_API_KEY   placeholder key for local servers. Default "not-needed"
+
+Provider selection is per-box: a CPU/no-GPU host runs LLM_PROVIDER=gemini (cloud),
+the GPU box can run LLM_PROVIDER=local against an on-box llama.cpp server. Same image,
+different env. OpenRouter is the cloud fallback / alternative.
 """
 
 from __future__ import annotations
@@ -147,6 +154,15 @@ GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku")
 
+# Local provider: any OpenAI-compatible server (llama.cpp `llama-server`, Ollama,
+# or vLLM) running on the GPU box. Selected with LLM_PROVIDER=local. The base URL
+# is where that server listens; the API key is usually a placeholder for local
+# servers (llama.cpp ignores it, Ollama accepts anything). Set LOCAL_LLM_MODEL to
+# the served model name (e.g. the GGUF alias for llama.cpp, or "qwen3:8b" for Ollama).
+LOCAL_LLM_BASE_URL: str = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8080/v1")
+LOCAL_LLM_MODEL: str = os.getenv("LOCAL_LLM_MODEL", "local-model")
+LOCAL_LLM_API_KEY: str = os.getenv("LOCAL_LLM_API_KEY", "not-needed")
+
 
 # ---------------------------------------------------------------------------
 # LangChain model factories
@@ -208,6 +224,28 @@ def _get_openrouter_model(
     )
 
 
+def _get_local_model(
+    model: str | None = None,
+    max_tokens: int = 1024,
+    temperature: float = 0.1,
+):
+    """Create a LangChain ChatOpenAI instance pointing at a LOCAL OpenAI-compatible
+    server (llama.cpp `llama-server`, Ollama, or vLLM on the GPU box). Same client
+    shape as OpenRouter, just a different base URL and no real key required. Longer
+    timeout than the cloud paths because a cold local model can be slow to first token."""
+    from langchain_openai import ChatOpenAI
+
+    model_name = model or LOCAL_LLM_MODEL
+    return ChatOpenAI(
+        model=model_name,
+        openai_api_key=LOCAL_LLM_API_KEY,
+        openai_api_base=LOCAL_LLM_BASE_URL,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=180,
+    )
+
+
 def _extract_content(response) -> str:
     """Extract text content from LangChain response (handles both str and list)."""
     raw = response.content
@@ -263,6 +301,12 @@ async def llm_complete(
                 active = "gemini"
             else:
                 raise RuntimeError("No LLM API key configured")
+    elif active == "local":
+        # Local server needs no API key; the only requirement is a base URL, which
+        # always has a default. No fallback: if LLM_PROVIDER=local, the operator
+        # explicitly wants the on-box model, so surface a clear error if it's down
+        # rather than silently phoning home to a cloud provider.
+        pass
     else:
         raise ValueError(f"Unknown LLM_PROVIDER: {active}")
 
@@ -270,11 +314,15 @@ async def llm_complete(
     if active == "gemini":
         llm = _get_gemini_model(model, max_tokens, temperature, thinking_budget)
         provider_name = "google"
+        model_name = model or GEMINI_MODEL
+    elif active == "local":
+        llm = _get_local_model(model, max_tokens, temperature)
+        provider_name = "local"
+        model_name = model or LOCAL_LLM_MODEL
     else:
         llm = _get_openrouter_model(model, max_tokens, temperature)
         provider_name = "openrouter"
-
-    model_name = model or (GEMINI_MODEL if active == "gemini" else OPENROUTER_MODEL)
+        model_name = model or OPENROUTER_MODEL
 
     # Build messages
     messages = []
