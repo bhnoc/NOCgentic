@@ -120,6 +120,8 @@ sudo docker exec app-nginx-1 nginx -t && sudo docker exec app-nginx-1 nginx -s r
 
 ## Deploy a change
 
+> **Commit identity:** this repo (and PostCog) commit as `adminofgits` via a repo-LOCAL git config (`55036044+adminofgits@users.noreply.github.com`), so GitHub attributes commits to the account that pushes them, not the global `James Pope` work identity. If commits start showing as James Pope, the local config was lost: `git config --local user.name adminofgits` + the noreply email.
+
 **CI auto-deploy is live** (2026-07-22). Just `git push origin main` — a self-hosted
 runner on the box (label `nocgentic`) picks up `.github/workflows/deploy.yml`, rsyncs the
 checkout into `/opt/bhasia/app` (preserving `.env`/`.env.s3`/`node_modules`/logs), refreshes
