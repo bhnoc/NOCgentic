@@ -122,3 +122,30 @@ TE prose sometimes omits unknown-count clause (LLM noncompliance, structured dat
 ## OPS ISSUE (not sweep-caused): SSH to box with ~/.ssh/blackhat started refusing (Permission denied publickey)
 mid-sweep despite working earlier + unchanged key. CI runner (own auth) unaffected; verified all via HTTPS.
 Check box authorized_keys/sshd when convenient.
+
+## Sweep 5 — IN PROGRESS (2026-07-25)
+Sweep 4 didn't converge (found highs), so sweep 5 runs. Focus per playbook: judge sweep-4 FIXES for
+regressions + the deferred AGGRESSIVE security pass (on isolated local :3002, never the shared box) +
+fresh-eyes correctness on the highest-churn files. 3 hunters:
+- fix-regression (reg-): adversarial re-exam of every sweep-4 change for path-not-tested regressions.
+- aggressive-security (sec-): injection/fuzz/ratelimit-bypass/IDOR/headers/WS/traversal vs local :3002.
+- fresh-correctness (fc-): end-to-end fresh read of orchestrator/athena/triage/shared for accumulated-edit defects.
+Baseline: main @ 0725c75, smoke 5/5. Isolated target: docker nocgentic-web-s5 on :3002.
+
+## Sweep 5 — COMPLETE (2026-07-25, deployed @ 3bda0f4)
+Judged sweep-4 fixes + ran the deferred AGGRESSIVE security pass (isolated local :3002).
+Aggressive pass CLEAN on all 7 exploit classes (injection/IDOR/headers/WS/traversal/proto-pollution/errors).
+9 findings (0 crit/high, 4 med, 5 low): mostly incomplete prior fixes. Writeup: docs/security/qa-sweep-5.md.
+Fixed: fc-1/reg-3 (severity word-mapping now fully aligned across agents, 10/10 parity, Alert type +unknown),
+reg-1 (alert-triage capped counts now SAMPLED-flagged), sec-1 (rate-limit 429 not 500, proven),
+fc-3 (_ZONE_RE case-insensitive + "Tools" not "tool"), fc-2 (dead sentinels), fc-4 (thinking_budget comment).
+sec-2 accepted as topology-mitigated (expose-only + nginx overwrites X-Real-IP) — documented in ops skill.
+Verified: smoke 5/5, acid 5/5, athena recovered to 0.95 after re-date to 2026-07-25.
+
+## CONVERGED (effectively): no exploitable/correctness-critical findings open.
+Accepted residuals (documented, by-design): sanitize_sql OR-1=1 (LLM-fronted, RO creds); rate-limit keying
+topology-dependent (keep services expose-only); LLM prose sometimes omits unknown-count clause.
+Data re-dates daily (slice ages out at UTC midnight) — re-run redate_slice.py; now at 2026-07-25 (92-day shift).
+
+## STILL OPEN OPS ISSUE: SSH to box with ~/.ssh/blackhat = Permission denied (publickey) since ~sweep 4.
+CI runner unaffected (own auth); all verification via HTTPS + AWS. Check box authorized_keys/sshd.

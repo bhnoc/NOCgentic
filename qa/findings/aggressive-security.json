@@ -1,0 +1,28 @@
+[
+  {
+    "id": "sec-1",
+    "surface": "aggressive-security",
+    "file": "packages/web-server/src/index.ts",
+    "line": 87,
+    "category": "security",
+    "severity": "medium",
+    "confidence": "high",
+    "summary": "Rate-limit rejections return HTTP 500 instead of 429, breaking client backoff and firing false server-error alarms.",
+    "code": "for i in $(seq 1 125); do curl -s -o /dev/null -w '%{http_code}\\n' -X POST http://localhost:3002/api/v1/chat -H 'Content-Type: application/json' -H 'X-Real-IP: 9.9.9.9' -d '{\"query\":\"x\"}'; done",
+    "scenario": "Sent 125 POSTs from a single fixed X-Real-IP (9.9.9.9). Exactly 120 returned 202, then every subsequent request returned `HTTP/1.1 500 Internal Server Error` with body `{\"error\":\"Rate limit exceeded. Please wait before sending more queries.\"}` and headers `x-ratelimit-remaining: 0`, `retry-after: 2`. Zero 429s across all runs. Container logs show `level:50 ... res:{statusCode:500}, err:{error:'Rate limit exceeded...'}`. The custom `errorResponseBuilder` returns a bare object with no statusCode, so @fastify/rate-limit v9's thrown payload falls through to Fastify's generic 500 handler instead of emitting 429. Exploitable/harmful because: (a) well-behaved clients and browsers keying on 429 will not back off, (b) monitoring pages ops on a 500 spike (CLAUDE.md alerts on API error rate >1%), and (c) at a security conference a flood of 500s reads as 'the app is crashing' rather than 'you are being throttled'. No stack trace leaks in the body.",
+    "suggested_fix": "In the @fastify/rate-limit registration, do not rely on errorResponseBuilder alone to set status. Either return an object that preserves the 429 (the plugin sets reply.code(429) before calling the builder in normal use, so verify the builder isn't overriding it) or add an onExceeding/onExceeded that explicitly does `reply.code(429)`, and add a test asserting the 121st request returns 429 not 500."
+  },
+  {
+    "id": "sec-2",
+    "surface": "aggressive-security",
+    "file": "packages/web-server/src/index.ts",
+    "line": 76,
+    "category": "security",
+    "severity": "medium",
+    "confidence": "high",
+    "summary": "POST rate limit is fully bypassable by rotating the client-supplied X-Real-IP (or X-Forwarded-For) header when the web-server is reached directly rather than through nginx.",
+    "code": "for i in $(seq 1 150); do curl -s -o /dev/null -w '%{http_code}\\n' -X POST http://localhost:3002/api/v1/chat -H 'Content-Type: application/json' -H \"X-Real-IP: 10.1.$((i/256)).$((i%256))\" -d '{\"query\":\"x\"}'; done   # variant: same with X-Forwarded-For and NO X-Real-IP",
+    "scenario": "The keyGenerator buckets on `req.headers['x-real-ip'] || req.ip` and Fastify runs with trustProxy:true (so req.ip = leftmost X-Forwarded-For). Sent 150 POSTs each with a unique X-Real-IP -> 150/150 returned 202 (0 throttled). Repeated with 150 unique X-Forwarded-For values and no X-Real-IP -> again 150/150 returned 202. Every request mints a fresh bucket, so the 120/min cap never triggers. Prod caveat, stated honestly: nginx-ssl.conf overwrites X-Real-IP with $remote_addr on every request, which closes the X-Real-IP vector at the edge, and because the app prefers X-Real-IP it never falls back to the spoofable XFF path behind nginx. So this is exploitable only when the container is reached directly (exactly the :3002 topology tested, and any future direct-exposure / nginx-misconfig / SSRF-to-container scenario). The app itself has zero rate-limit protection independent of the edge.",
+    "suggested_fix": "Defense in depth: don't trust an arbitrary client header as the sole rate-limit key. If X-Real-IP is only ever legitimately set by the trusted nginx hop, validate it's present AND that the direct peer (remoteAddress) is the known proxy before honoring it; otherwise key on the raw socket remoteAddress. Alternatively bind the app to listen only on the internal network so it cannot be reached without traversing nginx, and add a small unconditional per-socket cap as a backstop."
+  }
+]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Re-date a live traffic slice from dt=2026-04-24 -> dt=2026-07-24 (today), +91 days.
+Re-date a live traffic slice from dt=2026-04-24 -> dt=2026-07-25 (today), +92 days.
 
 Takes a contiguous 3-hour window (00:00-03:00) of the genuinely-live 04-24 traffic
 and INSERTs it back into the same tables under a new dt partition, with the two
@@ -21,9 +21,9 @@ WG       = "blackhat-pope-dev"
 BUCKET   = "blackhat-pope-parquet"
 
 SRC_DT   = "2026-04-24"
-DST_DT   = "2026-07-24"
-SHIFT_S  = 7_862_400          # 91 days in seconds
-SHIFT_D  = "91"               # days, for interval literal
+DST_DT   = "2026-07-25"
+SHIFT_S  = 7_948_800          # 92 days in seconds
+SHIFT_D  = "92"               # days, for interval literal
 WIN_FROM = f"{SRC_DT} 00:00:00"
 WIN_TO   = f"{SRC_DT} 03:00:00"
 
