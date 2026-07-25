@@ -797,6 +797,45 @@ async def triage(req: TriageRequest) -> TriageResponse:
             logger.info("Phase 2 done in %.1fms — %d extra tasks",
                          (time.monotonic() - start) * 1000 - phase1_ms, len(phase2_tasks))
 
+        # === PHASE 2b: CORROBORATION for alert validation ===
+        # A single signature match (e.g. ~96 MySQL-scan hits) is not enough to judge
+        # true- vs false-positive: a Web->DB hit could look benign in isolation. The
+        # verdict-deciding evidence is OTHER alerts from the SAME source (a scanner
+        # firing password-cracking + SSH-scan alerts alongside the MySQL scan proves
+        # intent). When we found a signature hit while validating, pull all alerts from
+        # that source so the LLM sees the full attacker behaviour, not one line.
+        if (llm_keywords or llm_port) and suricata_alerts:
+            scan_src = None
+            for a in suricata_alerts:
+                s = a.get("id_orig_h") or a.get("orig_h")
+                if s and not str(s).startswith(("0.", "255.")):
+                    scan_src = s
+                    break
+            if scan_src:
+                try:
+                    corro = await athena_suricata(hours=hours, src_ip=scan_src, limit=200)
+                    if corro:
+                        seen = {r.get("uid") for r in suricata_alerts if r.get("uid")}
+                        # Append corroborating alerts (distinct signatures from the same src)
+                        # after the signature hits so the LLM sees the fuller behaviour.
+                        suricata_alerts = suricata_alerts + [r for r in corro if r.get("uid") not in seen]
+                        # Surface a compact "same-source alert" summary so the signal is
+                        # not lost in the row cap: distinct signatures + counts from this src.
+                        from collections import Counter as _Counter
+                        sig_counts = _Counter(
+                            r.get("alert_signature") or r.get("alert_name") or "?"
+                            for r in corro
+                        )
+                        extra_log_data["same_source_alert_summary"] = {
+                            "source": scan_src,
+                            "distinct_signatures": len(sig_counts),
+                            "top_signatures": sig_counts.most_common(8),
+                        }
+                        logger.info("Phase 2b: corroboration for src=%s -> %d alerts, %d distinct sigs",
+                                    scan_src, len(corro), len(sig_counts))
+                except Exception as exc:
+                    logger.warning("Phase 2b corroboration failed: %s", exc)
+
         # If we didn't get DNS in Phase 1 but LLM wants it, fetch now
         if not dns_logs and "dns" in requested_log_types:
             dns_logs = await athena_dns(hours=hours, limit=50)
@@ -806,7 +845,13 @@ async def triage(req: TriageRequest) -> TriageResponse:
         # Merge suricata + unified alerts
         all_alerts = suricata_alerts + unified_alerts
         keywords = qf.get("keywords", [])
-        if keywords:
+        # When validating an alert we deliberately pulled corroborating same-source
+        # alerts in Phase 2b (e.g. password-cracking alongside the MySQL scan). Those
+        # do NOT contain the original signature keywords, so a keyword filter here
+        # would strip the very evidence that decides the verdict. Skip the alert
+        # keyword-filter when corroboration ran; keep it for non-validation queries.
+        did_corroborate = "same_source_alert_summary" in extra_log_data
+        if keywords and not did_corroborate:
             all_alerts = _apply_keyword_filter(all_alerts, keywords)
             conn_flows = _apply_keyword_filter(conn_flows, keywords)
 
@@ -863,7 +908,12 @@ async def triage(req: TriageRequest) -> TriageResponse:
         if session_context:
             triage_data["session_context"] = session_context[:30]
         if extra_log_data:
-            triage_data["additional_log_data"] = {lt: evts[:15] for lt, evts in extra_log_data.items()}
+            # Most entries are event lists (slice to 15); same_source_alert_summary is
+            # a dict (keep whole) so the corroboration signal reaches the LLM intact.
+            triage_data["additional_log_data"] = {
+                lt: (evts[:15] if isinstance(evts, list) else evts)
+                for lt, evts in extra_log_data.items()
+            }
 
         span.set_attribute("triage.total_alerts", len(enriched_alerts))
         span.set_attribute("triage.total_flows", len(conn_flows))
