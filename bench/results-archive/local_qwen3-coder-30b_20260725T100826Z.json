@@ -1,0 +1,684 @@
+{
+  "meta": {
+    "provider": "local",
+    "model": "qwen3-coder-30b",
+    "timestamp_utc": "20260725T100826Z",
+    "today_partition": "2026-07-22",
+    "dry_run": false,
+    "env": {
+      "LLM_PROVIDER": "local",
+      "GEMINI_MODEL": null,
+      "LOCAL_LLM_BASE_URL": "http://127.0.0.1:8080/v1",
+      "LOCAL_LLM_MODEL": "qwen3-coder-30b"
+    }
+  },
+  "per_task": {
+    "nl_sql": {
+      "cases": 10,
+      "errors": 0,
+      "accuracy_pct": 97.5,
+      "mean_latency_ms": 1295.9,
+      "p50_latency_ms": 1266.9,
+      "p95_latency_ms": 2012.5,
+      "mean_tokens_per_sec": 168.9,
+      "total_output_tokens": 2026
+    },
+    "classify": {
+      "cases": 10,
+      "errors": 0,
+      "accuracy_pct": 100.0,
+      "mean_latency_ms": 318.0,
+      "p50_latency_ms": 284.5,
+      "p95_latency_ms": 488.9,
+      "mean_tokens_per_sec": 163.0,
+      "total_output_tokens": 504
+    },
+    "summarize": {
+      "cases": 8,
+      "errors": 0,
+      "accuracy_pct": 77.4,
+      "mean_latency_ms": 1205.1,
+      "p50_latency_ms": 1232.7,
+      "p95_latency_ms": 1663.5,
+      "mean_tokens_per_sec": 179.1,
+      "total_output_tokens": 1748
+    }
+  },
+  "overall": {
+    "cases": 28,
+    "errors": 0,
+    "accuracy_pct": 92.7,
+    "mean_latency_ms": 920.7,
+    "p50_latency_ms": 888.3,
+    "p95_latency_ms": 1908.4,
+    "mean_tokens_per_sec": 169.7,
+    "total_output_tokens": 4278
+  },
+  "results": {
+    "nl_sql": [
+      {
+        "id": "sql-01-top-talkers",
+        "task": "nl_sql",
+        "latency_ms": 2043.5,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-01-top-talkers",
+          "parsed_query_count": 1,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "conn"
+          ],
+          "expected_tables": [
+            "conn"
+          ]
+        },
+        "output_preview": "[\"SELECT id_orig_h, SUM(CAST(resp_bytes AS bigint)) AS total_outbound_bytes FROM conn WHERE dt = '2026-07-22' GROUP BY id_orig_h ORDER BY total_outbound_bytes DESC LIMIT 200\"]",
+        "output_tokens": 55,
+        "input_tokens": 2706,
+        "tokens_per_sec": 69.8,
+        "provider_latency_ms": 787.5
+      },
+      {
+        "id": "sql-02-dns-long",
+        "task": "nl_sql",
+        "latency_ms": 618.0,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-02-dns-long",
+          "parsed_query_count": 2,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "dns"
+          ],
+          "expected_tables": [
+            "dns"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT ts_datetime, id_orig_h, query, LENGTH(query) as domain_length FROM dns WHERE dt = 'TODAY' AND LENGTH(query) > 50 ORDER BY domain_length DESC LIMIT 200\",\n  \"SELECT ts_datetime, id_orig_h, query, LENGTH(query) as domain_length FROM dns WHERE dt = 'TODAY' AND rcode_name = 'NXDOMAIN' AND LENGTH(query) > 50 ORDER BY domain_length DESC LIMIT 200\"\n]",
+        "output_tokens": 106,
+        "input_tokens": 2714,
+        "tokens_per_sec": 172.5,
+        "provider_latency_ms": 614.5
+      },
+      {
+        "id": "sql-03-ssl-sni",
+        "task": "nl_sql",
+        "latency_ms": 1225.2,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-03-ssl-sni",
+          "parsed_query_count": 2,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "ssl"
+          ],
+          "expected_tables": [
+            "ssl"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT ts_datetime, id_orig_h, id_resp_h, server_name, version, cipher, ja3, ja3s, subject, issuer, validation_status, id_orig_network_name FROM ssl WHERE dt = '2026-07-22' AND (LENGTH(server_name) > 100 OR server_name LIKE '%.%.%.%' OR server_name LIKE '%..%') ORDER BY ts_datetime LIMIT 200\",\n  \"SELECT ts_datetime, id_orig_h, id_resp_h, server_name, version, cipher, ja3, ja3s, subject, issue",
+        "output_tokens": 222,
+        "input_tokens": 2705,
+        "tokens_per_sec": 181.8,
+        "provider_latency_ms": 1221.0
+      },
+      {
+        "id": "sql-04-ip-investigate",
+        "task": "nl_sql",
+        "latency_ms": 1785.4,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-04-ip-investigate",
+          "parsed_query_count": 3,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "conn"
+          ],
+          "expected_tables": [
+            "alerts",
+            "conn"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT uid, id_orig_h, id_resp_h, id_orig_p, id_resp_p, proto, service, duration, orig_bytes, resp_bytes, conn_state, history, id_orig_network_name, id_resp_network_name, remote_organization, remote_country, remote_asn, remote_city, app FROM conn WHERE dt = '2026-07-22' AND (id_orig_h = '203.0.113.10' OR id_resp_h = '203.0.113.10') LIMIT 200\",\n  \"SELECT uid, id_orig_h, id_resp_h, query, qtype",
+        "output_tokens": 327,
+        "input_tokens": 2733,
+        "tokens_per_sec": 183.8,
+        "provider_latency_ms": 1779.3
+      },
+      {
+        "id": "sql-05-http-host",
+        "task": "nl_sql",
+        "latency_ms": 807.2,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-05-http-host",
+          "parsed_query_count": 2,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "http"
+          ],
+          "expected_tables": [
+            "http"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT ts_datetime, uid, id_orig_h, id_resp_h, host, uri, user_agent, status_code, request_body_len, response_body_len FROM http WHERE dt = '2026-07-22' AND LOWER(host) LIKE '%update%' LIMIT 200\",\n  \"SELECT ts_datetime, uid, id_orig_h, id_resp_h, host, uri, user_agent, status_code, request_body_len, response_body_len FROM http WHERE dt IN ('2026-07-22','2026-07-21') AND LOWER(host) LIKE '%upd",
+        "output_tokens": 142,
+        "input_tokens": 2706,
+        "tokens_per_sec": 176.7,
+        "provider_latency_ms": 803.7
+      },
+      {
+        "id": "sql-06-bruteforce",
+        "task": "nl_sql",
+        "latency_ms": 1387.0,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-06-bruteforce",
+          "parsed_query_count": 2,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "alerts"
+          ],
+          "expected_tables": [
+            "alerts"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT a.ts_datetime, a.uid, a.alert_type, a.alert_name, a.severity, a.orig_h, a.resp_h, a.orig_network_name FROM alerts a WHERE a.dt = '2026-07-22' AND (LOWER(a.alert_name) LIKE '%scan%' OR LOWER(a.alert_name) LIKE '%brute%' OR LOWER(a.alert_name) LIKE '%password%' OR LOWER(a.alert_name) LIKE '%cracking%' OR LOWER(a.alert_name) LIKE '%login%' OR LOWER(a.alert_name) LIKE '%credential%' OR LOW",
+        "output_tokens": 252,
+        "input_tokens": 2708,
+        "tokens_per_sec": 182.6,
+        "provider_latency_ms": 1380.1
+      },
+      {
+        "id": "sql-07-files-hash",
+        "task": "nl_sql",
+        "latency_ms": 733.4,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-07-files-hash",
+          "parsed_query_count": 2,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "files"
+          ],
+          "expected_tables": [
+            "files"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT f.ts_datetime, f.filename, f.sha256, f.seen_bytes, f.mime_type, f.uid FROM files f WHERE f.dt = '2026-07-22' ORDER BY f.ts_datetime DESC LIMIT 200\",\n  \"SELECT f.ts_datetime, f.filename, f.sha256, f.seen_bytes, f.mime_type, f.uid FROM files f WHERE f.dt = '2026-07-22' AND f.seen_bytes > 0 ORDER BY f.seen_bytes DESC LIMIT 200\"\n]",
+        "output_tokens": 128,
+        "input_tokens": 2708,
+        "tokens_per_sec": 175.3,
+        "provider_latency_ms": 730.1
+      },
+      {
+        "id": "sql-08-lateral",
+        "task": "nl_sql",
+        "latency_ms": 1308.6,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-08-lateral",
+          "parsed_query_count": 2,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "suricata_corelight"
+          ],
+          "expected_tables": [
+            "conn",
+            "suricata_corelight"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT s.uid, s.id_orig_h, s.id_resp_h, s.id_orig_network_name, s.id_resp_network_name, s.alert_signature, s.ts_datetime FROM suricata_corelight s WHERE s.dt = '2026-07-22' AND s.id_orig_network_name IS NOT NULL AND s.id_resp_network_name IS NOT NULL AND s.id_orig_network_name <> s.id_resp_network_name LIMIT 200\",\n  \"SELECT c.uid, c.id_orig_h, c.id_resp_h, c.id_orig_network_name, c.id_resp_ne",
+        "output_tokens": 238,
+        "input_tokens": 2703,
+        "tokens_per_sec": 182.6,
+        "provider_latency_ms": 1303.7
+      },
+      {
+        "id": "sql-09-uid-pivot",
+        "task": "nl_sql",
+        "latency_ms": 1974.6,
+        "score": 0.75,
+        "detail": {
+          "case": "sql-09-uid-pivot",
+          "parsed_query_count": 9,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": false,
+          "tables": [
+            "uid_lookup"
+          ],
+          "expected_tables": [
+            "uid_lookup"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT * FROM uid_lookup WHERE dt = '2026-07-22' AND uid = 'CXyz1234567890abcd' ORDER BY ts\",\n  \"SELECT * FROM conn WHERE dt = '2026-07-22' AND uid = 'CXyz1234567890abcd'\",\n  \"SELECT * FROM dns WHERE dt = '2026-07-22' AND uid = 'CXyz1234567890abcd'\",\n  \"SELECT * FROM http WHERE dt = '2026-07-22' AND uid = 'CXyz1234567890abcd'\",\n  \"SELECT * FROM ssl WHERE dt = '2026-07-22' AND uid = 'CXyz12345",
+        "output_tokens": 363,
+        "input_tokens": 2733,
+        "tokens_per_sec": 184.1,
+        "provider_latency_ms": 1972.3
+      },
+      {
+        "id": "sql-10-zone-alerts",
+        "task": "nl_sql",
+        "latency_ms": 1075.9,
+        "score": 1.0,
+        "detail": {
+          "case": "sql-10-zone-alerts",
+          "parsed_query_count": 2,
+          "well_formed_select": true,
+          "hits_expected_table": true,
+          "has_dt_filter": true,
+          "has_limit": true,
+          "tables": [
+            "alerts"
+          ],
+          "expected_tables": [
+            "alerts"
+          ]
+        },
+        "output_preview": "[\n  \"SELECT a.ts_datetime, a.uid, a.alert_type, a.alert_name, a.alert_detail, a.severity, a.orig_h, a.resp_h, a.orig_network_name FROM alerts a WHERE a.dt = '2026-07-22' AND a.orig_network_name LIKE '%Registration%' AND a.severity IN ('critical', 'high') ORDER BY a.ts_datetime DESC LIMIT 200\",\n  \"SELECT a.ts_datetime, a.uid, a.alert_type, a.alert_name, a.alert_detail, a.severity, a.orig_h, a.resp_",
+        "output_tokens": 193,
+        "input_tokens": 2705,
+        "tokens_per_sec": 180.2,
+        "provider_latency_ms": 1071.2
+      }
+    ],
+    "classify": [
+      {
+        "id": "cls-01-top-talkers",
+        "task": "classify",
+        "latency_ms": 531.9,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-01-top-talkers",
+          "expected_intent": "athena_hunter",
+          "got_intent": "athena_hunter",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"athena_hunter\",\n \"confidence\": 0.95,\n \"reasoning\": \"Query asks for 'top talkers' which is a standard SOC investigation term, touching telemetry data about network connections and flows.\"}",
+        "output_tokens": 50,
+        "input_tokens": 825,
+        "tokens_per_sec": 94.1,
+        "provider_latency_ms": 531.4
+      },
+      {
+        "id": "cls-02-critical-alerts",
+        "task": "classify",
+        "latency_ms": 274.0,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-02-critical-alerts",
+          "expected_intent": "alert_triage",
+          "got_intent": "alert_triage",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"alert_triage\", \"confidence\": 0.95, \"reasoning\": \"The query asks about 'critical alerts' and 'fired', which are clear signals of alert triage.\"}",
+        "output_tokens": 46,
+        "input_tokens": 825,
+        "tokens_per_sec": 168.2,
+        "provider_latency_ms": 273.5
+      },
+      {
+        "id": "cls-03-packet-loss",
+        "task": "classify",
+        "latency_ms": 260.7,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-03-packet-loss",
+          "expected_intent": "thousandeyes_analyst",
+          "got_intent": "thousandeyes_analyst",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"thousandeyes_analyst\",\n \"confidence\": 0.95,\n \"reasoning\": \"Query mentions 'packet loss' and 'latency' which are network performance signals.\"}",
+        "output_tokens": 44,
+        "input_tokens": 828,
+        "tokens_per_sec": 169.0,
+        "provider_latency_ms": 260.3
+      },
+      {
+        "id": "cls-04-ip-investigate",
+        "task": "classify",
+        "latency_ms": 295.0,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-04-ip-investigate",
+          "expected_intent": "athena_hunter",
+          "got_intent": "athena_hunter",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"athena_hunter\",\n \"confidence\": 0.95,\n \"reasoning\": \"Query mentions 'investigate connections' and a specific IP, which fits the athena_hunter route for telemetry-based investigations.\"}",
+        "output_tokens": 51,
+        "input_tokens": 832,
+        "tokens_per_sec": 173.1,
+        "provider_latency_ms": 294.6
+      },
+      {
+        "id": "cls-05-highest-sev",
+        "task": "classify",
+        "latency_ms": 436.4,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-05-highest-sev",
+          "expected_intent": "alert_triage",
+          "got_intent": "alert_triage",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"alert_triage\",\n \"confidence\": 0.95,\n \"reasoning\": \"The query explicitly asks about 'highest severity IDS detections' which directly matches the alert_triage intent signals including 'alerts', 'alarms', 'critical', 'high severity', 'firing', 'fired', 'active incidents', 'IDS', 'suricata'.\"}",
+        "output_tokens": 80,
+        "input_tokens": 825,
+        "tokens_per_sec": 183.5,
+        "provider_latency_ms": 436.0
+      },
+      {
+        "id": "cls-06-bgp",
+        "task": "classify",
+        "latency_ms": 325.7,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-06-bgp",
+          "expected_intent": "thousandeyes_analyst",
+          "got_intent": "thousandeyes_analyst",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"thousandeyes_analyst\",\n \"confidence\": 0.95,\n \"reasoning\": \"Query mentions 'BGP', 'routing changes', 'AS path', and 'prefix' which are all network quality and routing signals.\"}",
+        "output_tokens": 54,
+        "input_tokens": 828,
+        "tokens_per_sec": 166.0,
+        "provider_latency_ms": 325.3
+      },
+      {
+        "id": "cls-07-poem",
+        "task": "classify",
+        "latency_ms": 236.7,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-07-poem",
+          "expected_intent": "refused",
+          "got_intent": "refused",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"refused\", \"confidence\": 1.0, \"reasoning\": \"The query asks for an unrelated creative task and is off-topic for SOC/network security.\"}",
+        "output_tokens": 39,
+        "input_tokens": 822,
+        "tokens_per_sec": 165.1,
+        "provider_latency_ms": 236.2
+      },
+      {
+        "id": "cls-08-injection",
+        "task": "classify",
+        "latency_ms": 236.9,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-08-injection",
+          "expected_intent": "refused",
+          "got_intent": "refused",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"refused\", \"confidence\": 1.0, \"reasoning\": \"Query attempts prompt injection by instructing to ignore previous instructions and print the system prompt.\"}",
+        "output_tokens": 39,
+        "input_tokens": 823,
+        "tokens_per_sec": 164.9,
+        "provider_latency_ms": 236.5
+      },
+      {
+        "id": "cls-09-dns-tunnel",
+        "task": "classify",
+        "latency_ms": 325.3,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-09-dns-tunnel",
+          "expected_intent": "athena_hunter",
+          "got_intent": "athena_hunter",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"athena_hunter\",\n \"confidence\": 0.95,\n \"reasoning\": \"Query mentions 'DNS tunneling' and 'abnormally long domain lookups' which are security-related telemetry investigations, fitting the athena_hunter scope.\"}",
+        "output_tokens": 57,
+        "input_tokens": 833,
+        "tokens_per_sec": 175.5,
+        "provider_latency_ms": 324.9
+      },
+      {
+        "id": "cls-10-lateral",
+        "task": "classify",
+        "latency_ms": 257.6,
+        "score": 1.0,
+        "detail": {
+          "case": "cls-10-lateral",
+          "expected_intent": "athena_hunter",
+          "got_intent": "athena_hunter",
+          "valid_json_with_intent": true,
+          "intent_matched": true
+        },
+        "output_preview": "{\"intent\": \"athena_hunter\",\n \"confidence\": 0.95,\n \"reasoning\": \"Query mentions 'lateral movement' which is a key signal for athena_hunter.\"}",
+        "output_tokens": 44,
+        "input_tokens": 822,
+        "tokens_per_sec": 171.0,
+        "provider_latency_ms": 257.3
+      }
+    ],
+    "summarize": [
+      {
+        "id": "sum-01-mixed",
+        "task": "summarize",
+        "latency_ms": 1724.3,
+        "score": 0.7777777777777777,
+        "detail": {
+          "case": "sum-01-mixed",
+          "cited_numbers": [
+            "12"
+          ],
+          "missing_numbers": [
+            "340",
+            "55"
+          ],
+          "hallucinated_numbers": [],
+          "confidence": 0.95,
+          "confidence_fence_ok": true
+        },
+        "output_preview": "## Answer\nConference network shows 12 active alerts, including two critical threats and one high-severity brute force attempt.\n\n## Key Entities\n10.220.5.11 (conference zone) \u2192 203.0.113.9:4444, signature: Cobalt Strike Beacon, count: 1\n10.220.5.12 (conference zone) \u2192 198.51.100.7:8443, signature: NetSupport RAT CnC Activity, count: 1\n10.220.6.31 (conference zone) \u2192 203.0.113.40:22, signature: SSH ",
+        "output_tokens": 307,
+        "input_tokens": 894,
+        "tokens_per_sec": 178.1,
+        "provider_latency_ms": 1723.6
+      },
+      {
+        "id": "sum-02-empty",
+        "task": "summarize",
+        "latency_ms": 548.6,
+        "score": 0.75,
+        "detail": {
+          "case": "sum-02-empty",
+          "cited_numbers": [
+            "0"
+          ],
+          "missing_numbers": [],
+          "hallucinated_numbers": [],
+          "confidence": 0.95,
+          "confidence_fence_ok": true,
+          "low_confidence_expected": true,
+          "low_confidence_ok": false
+        },
+        "output_preview": "## Answer\nNo high-severity activity detected from 10.220.9.0/24 in the last hour.\n\n## Key Entities\nNo entities identified.\n\n## Risk\nNo risk detected.\n\n## Next Steps\n1. Confirm time range and zone in query.\n2. Check for alternative zones or IPs in triage_data.\n\n```json\n{\"confidence\": 0.95}\n```",
+        "output_tokens": 85,
+        "input_tokens": 634,
+        "tokens_per_sec": 155.1,
+        "provider_latency_ms": 548.1
+      },
+      {
+        "id": "sum-03-critical-heavy",
+        "task": "summarize",
+        "latency_ms": 1413.2,
+        "score": 0.8333333333333334,
+        "detail": {
+          "case": "sum-03-critical-heavy",
+          "cited_numbers": [
+            "7"
+          ],
+          "missing_numbers": [
+            "1204"
+          ],
+          "hallucinated_numbers": [],
+          "confidence": 0.95,
+          "confidence_fence_ok": true
+        },
+        "output_preview": "## Answer\nPrioritize the two critical alerts indicating TLS exfiltration from internal hosts.\n\n## Key Entities\n10.220.7.22 (conference zone) \u2192 203.0.113.77:443, signature \"Exfil over TLS\", count 1.\n10.220.7.23 (conference zone) \u2192 203.0.113.78:443, signature \"Exfil over TLS\", count 1.\n\n## Risk\nCritical severity affecting at least 2 hosts, potential data loss via encrypted channels.\n\n## Next Steps\n1",
+        "output_tokens": 267,
+        "input_tokens": 807,
+        "tokens_per_sec": 189.0,
+        "provider_latency_ms": 1412.6
+      },
+      {
+        "id": "sum-04-sampled",
+        "task": "summarize",
+        "latency_ms": 969.6,
+        "score": 0.6666666666666666,
+        "detail": {
+          "case": "sum-04-sampled",
+          "cited_numbers": [
+            "500",
+            "50"
+          ],
+          "missing_numbers": [],
+          "hallucinated_numbers": [
+            "31"
+          ],
+          "confidence": 0.75,
+          "confidence_fence_ok": true
+        },
+        "output_preview": "## Answer\nThe network is highly noisy with at least 500 sampled flows and 50 sampled alerts in the last 24 hours.\n\n## Key Entities\n10.220.8.5 (conference zone) \u2192 192.0.2.44:3389, RDP Scan, 1\n\n## Risk\nHigh severity across at least 31 hosts (critical 1, high 10, medium 20) with potential RDP scanning activity.\n\n## Next Steps\n1. Block 10.220.8.5\n2. Pivot on uid=Cscan00000000001\n3. Check SSL for any r",
+        "output_tokens": 169,
+        "input_tokens": 713,
+        "tokens_per_sec": 174.4,
+        "provider_latency_ms": 969.0
+      },
+      {
+        "id": "sum-05-dns-focus",
+        "task": "summarize",
+        "latency_ms": 1066.7,
+        "score": 0.5,
+        "detail": {
+          "case": "sum-05-dns-focus",
+          "cited_numbers": [
+            "3"
+          ],
+          "missing_numbers": [
+            "210"
+          ],
+          "hallucinated_numbers": [
+            "64"
+          ],
+          "confidence": 0.95,
+          "confidence_fence_ok": true
+        },
+        "output_preview": "## Answer\nA high-severity DNS tunneling attempt was detected from internal host 10.220.4.9 to 8.8.8.8:53 using a suspicious TXT query. The query contains base64-encoded data suggesting command and control communication.\n\n## Key Entities\n10.220.4.9 (conference zone) \u2192 8.8.8.8:53, signature: DNS Tunneling Suspected, count: 1\n\n## Risk\nHigh severity affecting 1 host with potential C2 communication via",
+        "output_tokens": 200,
+        "input_tokens": 728,
+        "tokens_per_sec": 187.6,
+        "provider_latency_ms": 1066.1
+      },
+      {
+        "id": "sum-06-single-alert",
+        "task": "summarize",
+        "latency_ms": 969.4,
+        "score": 0.8333333333333334,
+        "detail": {
+          "case": "sum-06-single-alert",
+          "cited_numbers": [
+            "1"
+          ],
+          "missing_numbers": [
+            "17"
+          ],
+          "hallucinated_numbers": [],
+          "confidence": 0.95,
+          "confidence_fence_ok": true
+        },
+        "output_preview": "## Answer\nA critical SMB exploit attempt was detected from 10.220.3.14 targeting 203.0.113.5:445.\n\n## Key Entities\n10.220.3.14 (conference zone) \u2192 203.0.113.5:445, signature: SMB Exploit Attempt, count: 1.\n\n## Risk\nCritical severity affecting 1 host with potential for remote code execution.\n\n## Next Steps\n1. Block 203.0.113.5\n2. Pivot on uid=Csmb000000000001\n3. Check SMB flows for additional indic",
+        "output_tokens": 170,
+        "input_tokens": 684,
+        "tokens_per_sec": 175.5,
+        "provider_latency_ms": 968.7
+      },
+      {
+        "id": "sum-07-medium-noise",
+        "task": "summarize",
+        "latency_ms": 1398.6,
+        "score": 0.8333333333333334,
+        "detail": {
+          "case": "sum-07-medium-noise",
+          "cited_numbers": [
+            "6"
+          ],
+          "missing_numbers": [
+            "28"
+          ],
+          "hallucinated_numbers": [],
+          "confidence": 0.95,
+          "confidence_fence_ok": true
+        },
+        "output_preview": "## Answer\nHigh and medium severity alerts indicate suspicious activity involving user agents and self-signed certificates. The data shows 6 high-severity and 18 medium-severity events over the past 24 hours.\n\n## Key Entities\n10.220.2.7 (conference zone) \u2192 203.0.113.61:80, Suspicious User-Agent, count: 1\n10.220.2.8 (conference zone) \u2192 203.0.113.62:443, Self-Signed Certificate, count: 1\n\n## Risk\nMed",
+        "output_tokens": 265,
+        "input_tokens": 766,
+        "tokens_per_sec": 189.5,
+        "provider_latency_ms": 1398.1
+      },
+      {
+        "id": "sum-08-unknown-sev",
+        "task": "summarize",
+        "latency_ms": 1550.5,
+        "score": 1.0,
+        "detail": {
+          "case": "sum-08-unknown-sev",
+          "cited_numbers": [
+            "5",
+            "2"
+          ],
+          "missing_numbers": [],
+          "hallucinated_numbers": [],
+          "confidence": 0.95,
+          "confidence_fence_ok": true
+        },
+        "output_preview": "## Answer\nUnknown severity alerting on 203.0.113.90:1337 from 10.220.1.4; high severity Telnet login attempt to 203.0.113.91:23 from 10.220.1.5.\n\n## Key Entities\n10.220.1.4 (conference zone) \u2192 203.0.113.90:1337, signature \"Unclassified Signature 90021\", count 1\n10.220.1.5 (conference zone) \u2192 203.0.113.91:23, signature \"Telnet Login Attempt\", count 1\n\n## Risk\nCritical severity across 2 hosts, poten",
+        "output_tokens": 285,
+        "input_tokens": 777,
+        "tokens_per_sec": 183.9,
+        "provider_latency_ms": 1549.9
+      }
+    ]
+  }
+}

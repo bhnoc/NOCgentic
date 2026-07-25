@@ -57,7 +57,12 @@ BENCH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCH_DIR.parent
 AGENTS_DIR = REPO_ROOT / "agents"
 SHARED_DIR = AGENTS_DIR / "shared"
-RESULTS_DIR = BENCH_DIR / "results"
+# Default results dir is bench/results, BUT on the deploy box that path is inside
+# /opt/bhasia/app which deploy.sh rsyncs with --delete, so results get wiped on the
+# next deploy. Set BENCH_RESULTS_DIR to a deploy-safe path (e.g. /home/ubuntu/bench-results)
+# to keep raw result JSON across deploys.
+import os as _os
+RESULTS_DIR = Path(_os.getenv("BENCH_RESULTS_DIR") or (BENCH_DIR / "results"))
 
 # The agent main.py modules compute _SHARED as parents[2]/"shared", which is
 # correct only inside a container layout. To import the REAL prompts + REAL
