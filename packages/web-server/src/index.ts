@@ -17,6 +17,11 @@ const SESSION_COOKIE = 'bh_sid';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 const ALLOWED_WS_ORIGIN = process.env.ALLOWED_ORIGIN ?? 'https://aing.bhnoc.com';
 
+// Matches a single well-formed IPv4 or IPv6 address (no lists, no whitespace).
+// Used to decide whether a client-appendable X-Real-IP header is trustworthy as
+// a rate-limit key (see keyGenerator below).
+const SINGLE_IP_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^[0-9a-fA-F:]+$/;
+
 // Content-Security-Policy for the served UI. The page uses an inline <style>,
 // an inline <script>, and inline onclick handlers, so 'unsafe-inline' is
 // required for style-src and script-src (acceptable: the UI is first-party and
@@ -74,8 +79,16 @@ async function main() {
     // otherwise mint a new bucket and bypass the limit entirely. X-Real-IP can't be
     // spoofed past the edge. Fall back to request.ip only if the header is absent.
     keyGenerator: (req) => {
-      const realIp = req.headers['x-real-ip'];
-      return (Array.isArray(realIp) ? realIp[0] : realIp) || req.ip;
+      // Defense-in-depth: nginx OVERWRITES X-Real-IP at the edge, so behind the
+      // proxy this is always a single trusted client IP. But a direct hit to the
+      // container (bypassing nginx / SSRF) lets an attacker rotate X-Real-IP to
+      // mint unlimited buckets. So only trust it when it's a single well-formed
+      // IP; a list ("a, b") or garbage falls back to req.ip. The edge remains the
+      // primary control -- this just denies the trivial direct-hit bypass.
+      const header = req.headers['x-real-ip'];
+      const realIp = (Array.isArray(header) ? header[0] : header)?.trim();
+      const isSingleIp = !!realIp && SINGLE_IP_RE.test(realIp);
+      return isSingleIp ? realIp : req.ip;
     },
     allowList: (req) => {
       // Exempt health checks and GET polling endpoints from rate limiting
@@ -84,8 +97,13 @@ async function main() {
       if (req.url === '/ws') return true;
       return false;
     },
+    // Must carry statusCode: @fastify/rate-limit hands this object to Fastify's
+    // error path, and without an explicit statusCode Fastify defaults it to 500
+    // (which breaks client backoff and trips the ">1% API error rate" alarm).
     errorResponseBuilder: () => ({
-      error: 'Rate limit exceeded. Please wait before sending more queries.',
+      statusCode: 429,
+      error: 'Too Many Requests',
+      message: 'Rate limit exceeded. Please wait before sending more queries.',
     }),
   });
 

@@ -128,6 +128,14 @@ checkout into `/opt/bhasia/app` (preserving `.env`/`.env.s3`/`node_modules`/logs
 IMDS creds into `.env.s3`, rebuilds the compose stack, and health-checks `/health`.
 Watch it: `gh run watch <id>` / `gh run list --branch main`.
 
+> ⚠️ **Rate-limit correctness depends on the topology (QA sweep 5).** The web-server
+> rate limiter keys on `X-Real-IP`, which nginx OVERWRITES with `$remote_addr` on
+> every proxied request. This is only safe because web-server is `expose:`-only
+> (never published to the host), so it is unreachable except through nginx. If you
+> ever add a `ports:` mapping that publishes web-server (or orchestrator/agents)
+> to the host, the rate limit becomes bypassable by spoofing `X-Real-IP` directly.
+> Keep the agent + web-server services internal-only.
+>
 > ⚠️ **Two deploy gotchas (learned 2026-07-24, cost an hour):**
 > 1. **`nginx/nginx-ssl.conf` edits need `--force-recreate nginx`, NOT a reload.** The
 >    config is bind-mounted (`./nginx/nginx-ssl.conf:/etc/nginx/nginx.conf:ro`). rsync

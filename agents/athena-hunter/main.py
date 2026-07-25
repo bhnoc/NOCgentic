@@ -773,30 +773,31 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 # Raw alerts endpoint (feeds the web-server alert cache)
 # ---------------------------------------------------------------------------
 
-_VALID_SEVERITIES = {"critical", "high", "medium", "low", "informational"}
+# Mirrors of alert-triage._norm_sev's tables (NUM_SEV / _WORD_SEV) and its valid
+# bucket set (SEVERITY_SCORE keys). alert-triage._norm_sev is the source of truth;
+# these are kept in lockstep so the same event is labeled the same on the live
+# /alerts/recent feed and in the triage view.
+_NUM_SEV = {"1": "high", "2": "medium", "3": "low"}
+_WORD_SEV = {
+    "informational (default)": "informational",
+    "notification":            "low",
+    "error":                   "high",
+}
+_VALID_SEVERITIES = {"critical", "high", "medium", "unknown", "low", "informational"}
 
 
 def _normalize_severity(raw: str | None) -> str:
-    if not raw:
-        return "low"
+    # Behaviorally identical to alert-triage._norm_sev for all shared inputs:
+    # numeric 1/2/3 -> high/medium/low; recognized words pass through; the word
+    # aliases above are folded; and any unrecognized / blank / None / 4+ value
+    # returns "unknown" (NOT "low") so it stays visible instead of being buried.
     s = str(raw).strip().lower()
-    if s in _VALID_SEVERITIES:
-        return s
-    # Suricata/Corelight numeric severities. Canonical mapping (source of truth
-    # is alert-triage._norm_sev / NUM_SEV): 1=high, 2=medium, 3=low, 4+=low.
-    # Kept identical so the same event isn't labeled differently across surfaces.
-    try:
-        n = int(s)
-        return {1: "high", 2: "medium", 3: "low"}.get(n, "low")
-    except ValueError:
-        pass
-    if s in {"crit", "severe"}:
-        return "critical"
-    if s in {"warn", "warning"}:
-        return "medium"
-    if s in {"info", "notice"}:
-        return "informational"
-    return "low"
+    if s in _NUM_SEV:
+        return _NUM_SEV[s]
+    s = _WORD_SEV.get(s, s)
+    if s not in _VALID_SEVERITIES:
+        return "unknown"
+    return s
 
 
 _RE_ET_PREFIX = re.compile(r"^(ETPRO|ET)\s+[A-Z0-9_-]+\s+", re.IGNORECASE)

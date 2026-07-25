@@ -23,7 +23,7 @@ export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 export interface Alert {
   id: string;
   timestamp: string;
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'informational';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'informational' | 'unknown';
   source: string;
   description: string;
   srcIp?: string;

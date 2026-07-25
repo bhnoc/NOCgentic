@@ -173,8 +173,11 @@ def _get_gemini_model(
     if thinking_budget is not None:
         # gemini-3.5-flash-lite (and the 3.x lite line generally) rejects
         # thinkingBudget=0 with 400 INVALID_ARGUMENT — it cannot fully disable
-        # thinking the way 3.1-flash-lite-preview could. Use -1 (dynamic/minimal)
-        # instead so callers can keep expressing "don't think much" as 0.
+        # thinking the way 3.1-flash-lite-preview could. Use -1 (DYNAMIC: the model
+        # decides how much to think) as the closest "don't think much" fallback.
+        # Caveat: -1 is model-decided, NOT guaranteed minimal. Dynamic thinking can
+        # be large and shares max_output_tokens, so callers needing bounded output
+        # (e.g. athena-hunter SQL gen) must pass an explicit positive budget, not -1.
         if thinking_budget == 0 and "flash-lite" in model_name:
             thinking_budget = -1
         kwargs["thinking_budget"] = thinking_budget

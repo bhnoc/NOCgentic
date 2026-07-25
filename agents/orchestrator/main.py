@@ -110,7 +110,10 @@ _RESTRICTED_IP_RE  = re.compile(r"\b10\.220\.(\d{1,3})\.(\d{1,3})\b")
 _DECOY_THIRD_OCTET = 69  # target for rewrites
 
 # Zone-name scrubbing — re-label these areas as generic "internal".
-_ZONE_RE = re.compile(r"\b(Registration|Tools?)\b")
+# Case-insensitive so lowercase "tools"/"registration" can't evade the scrub.
+# Match "Tools" (plural, the actual zone name) exactly, NOT the singular English
+# word "tool" (e.g. "attack tool"), which must not false-trigger a scrub.
+_ZONE_RE = re.compile(r"\b(Registration|Tools)\b", re.IGNORECASE)
 
 # Service-name scrubbing — re-label specific protocols / databases as
 # generic "Network Service" so user-facing responses don't enumerate
@@ -898,8 +901,10 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         answer = sanitize_output_text(answer)
         data   = sanitize_output_obj(data)
 
-        # Fire-and-forget hints generation in background — skip for error / refused
-        if agent_used not in ("error", "orchestrator", "guardrail"):
+        # Fire-and-forget hints generation in background; skip for error only.
+        # ("orchestrator" is always reassigned before here; refused/kill-switch cover
+        # paths and the never-assigned "guardrail" sentinel return earlier, so those are dead here.)
+        if agent_used != "error":
             task = asyncio.create_task(_generate_hints_bg(req.job_id, req.query, answer, agent_used))
             _bg_hint_tasks.add(task)
             task.add_done_callback(_bg_hint_tasks.discard)
