@@ -254,6 +254,31 @@ async def athena_suricata(
     return await _athena_query(sql, "suricata")
 
 
+async def athena_suricata_src_profile(
+    src_ip: str,
+    hours: int = 24,
+) -> list[dict]:
+    """Aggregate a source's suricata alerts by signature: TRUE counts, no row cap.
+
+    Row-limited sampling makes a real 880-hit scan look like '4 alerts'. For alert
+    validation we need the actual volume and the full spread of signatures the source
+    fired (scan + password-cracking + SSH-scan). This GROUP BY returns real totals so
+    the verdict rests on '880 MySQL-scan + 45 password-cracking', not a sampled floor.
+    """
+    dt = date_filter(hours)
+    src = sanitize_value(src_ip)
+    sql = (
+        f"SELECT alert_signature, alert_category, "
+        f"MIN(id_resp_h) AS a_dst, MIN(CAST(id_resp_p AS VARCHAR)) AS a_dport, "
+        f"COUNT(*) AS hits, COUNT(DISTINCT id_resp_h) AS distinct_dsts "
+        f"FROM suricata_corelight "
+        f"WHERE {dt} AND id_orig_h = '{src}' "
+        f"GROUP BY alert_signature, alert_category "
+        f"ORDER BY hits DESC LIMIT 25"
+    )
+    return await _athena_query(sql, "suricata")
+
+
 async def athena_conn(
     hours: int = 24,
     src_ip: str | None = None,
@@ -810,6 +835,7 @@ async def triage(req: TriageRequest) -> TriageResponse:
         # firing password-cracking + SSH-scan alerts alongside the MySQL scan proves
         # intent). When we found a signature hit while validating, pull all alerts from
         # that source so the LLM sees the full attacker behaviour, not one line.
+        same_source_profile: dict[str, Any] | None = None
         if (llm_keywords or llm_port) and suricata_alerts:
             # Pick the DOMINANT source among the matched alerts, not just the first
             # row (rows are ordered by recency, so the first hit is often an unrelated
@@ -823,26 +849,36 @@ async def triage(req: TriageRequest) -> TriageResponse:
             scan_src = src_counts.most_common(1)[0][0] if src_counts else None
             if scan_src:
                 try:
-                    corro = await athena_suricata(hours=hours, src_ip=scan_src, limit=200)
-                    if corro:
-                        seen = {r.get("uid") for r in suricata_alerts if r.get("uid")}
-                        # Append corroborating alerts (distinct signatures from the same src)
-                        # after the signature hits so the LLM sees the fuller behaviour.
-                        suricata_alerts = suricata_alerts + [r for r in corro if r.get("uid") not in seen]
-                        # Surface a compact "same-source alert" summary so the signal is
-                        # not lost in the row cap: distinct signatures + counts from this src.
-                        from collections import Counter as _Counter
-                        sig_counts = _Counter(
-                            r.get("alert_signature") or r.get("alert_name") or "?"
-                            for r in corro
-                        )
-                        extra_log_data["same_source_alert_summary"] = {
+                    # TRUE counts by signature (GROUP BY, no row-limit sampling). A
+                    # sampled fetch made the 880-hit scan look like ~4 alerts, so the
+                    # LLM read it as benign. This gives real volume + the full spread
+                    # of signatures the source fired (scan + password-cracking + SSH).
+                    profile = await athena_suricata_src_profile(scan_src, hours=hours)
+                    if profile:
+                        total_hits = sum(int(r.get("hits", 0) or 0) for r in profile)
+                        same_source_profile = {
                             "source": scan_src,
-                            "distinct_signatures": len(sig_counts),
-                            "top_signatures": sig_counts.most_common(8),
+                            "note": (
+                                "TRUE aggregate counts for this source (not sampled). "
+                                "Multiple attack signatures from one source corroborate a "
+                                "real attacker, not a false positive."
+                            ),
+                            "total_alerts_from_source": total_hits,
+                            "distinct_signatures": len(profile),
+                            "signatures": [
+                                {
+                                    "signature": r.get("alert_signature"),
+                                    "category": r.get("alert_category"),
+                                    "hits": int(r.get("hits", 0) or 0),
+                                    "distinct_dsts": int(r.get("distinct_dsts", 0) or 0),
+                                    "example_dst": r.get("a_dst"),
+                                    "example_dport": r.get("a_dport"),
+                                }
+                                for r in profile[:12]
+                            ],
                         }
-                        logger.info("Phase 2b: corroboration for src=%s -> %d alerts, %d distinct sigs",
-                                    scan_src, len(corro), len(sig_counts))
+                        logger.info("Phase 2b: src=%s profile -> %d hits across %d signatures",
+                                    scan_src, total_hits, len(profile))
                 except Exception as exc:
                     logger.warning("Phase 2b corroboration failed: %s", exc)
 
@@ -860,7 +896,7 @@ async def triage(req: TriageRequest) -> TriageResponse:
         # do NOT contain the original signature keywords, so a keyword filter here
         # would strip the very evidence that decides the verdict. Skip the alert
         # keyword-filter when corroboration ran; keep it for non-validation queries.
-        did_corroborate = "same_source_alert_summary" in extra_log_data
+        did_corroborate = same_source_profile is not None
         if keywords and not did_corroborate:
             all_alerts = _apply_keyword_filter(all_alerts, keywords)
             conn_flows = _apply_keyword_filter(conn_flows, keywords)
@@ -902,6 +938,10 @@ async def triage(req: TriageRequest) -> TriageResponse:
 
         triage_data: dict[str, Any] = {
             "analyst_focus":      qf.get("focus", req.query),
+            # source_attack_profile goes FIRST (right after focus) so the true-count
+            # corroboration survives llm_triage's 10k-char truncation and the LLM
+            # leads its verdict with real volume, not sampled rows. Omitted when null.
+            **({"source_attack_profile": same_source_profile} if same_source_profile else {}),
             "query_filters":      {k: v for k, v in qf.items() if v and k != "focus"},
             "time_range_hours":   hours,
             "data_source":        "athena",
