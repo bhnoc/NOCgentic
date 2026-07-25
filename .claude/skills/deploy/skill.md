@@ -45,7 +45,7 @@ over Corelight logs in S3 (`blackhat-pope-dev-logs`). LLM: **Gemini** by default
 | Public IP | ephemeral — changes on every stop/start (currently `44.248.50.25`) |
 | DNS | `aing.bhnoc.com` (Cloudflare zone) |
 | IAM role | `blackhat-pope-dev-ec2-role` (has Athena/Glue/S3) |
-| SSH | `ssh ubuntu@aing.bhnoc.com` (or the current IP) |
+| SSH | `ssh aing` (shorthand; = `ubuntu@aing.bhnoc.com` via the 1Password agent, biometric-gated) |
 | Security group | `sg-022b87911ecf12539` — 443 restricted to allow-listed IPs |
 | App dir | `/opt/bhasia/app` |
 

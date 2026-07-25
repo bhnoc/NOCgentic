@@ -23,7 +23,7 @@ Living document — append incidents, fixes, and gotchas as they happen.
 | DNS | `aing.bhnoc.com` (Cloudflare) → ephemeral public IP |
 | Security group | `sg-022b87911ecf12539` |
 | IAM role | `blackhat-pope-dev-ec2-role` |
-| SSH | `ssh ubuntu@aing.bhnoc.com` (or current IP) |
+| SSH | `ssh aing` (shorthand; = `ubuntu@aing.bhnoc.com` via the 1Password agent, biometric-gated) |
 | AWS profile | `VirtualPOC-users` (`-admins` for infra changes) |
 
 > **Cost discipline:** it's a GPU box the app doesn't need. **Stop it whenever it's

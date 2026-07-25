@@ -147,5 +147,8 @@ Accepted residuals (documented, by-design): sanitize_sql OR-1=1 (LLM-fronted, RO
 topology-dependent (keep services expose-only); LLM prose sometimes omits unknown-count clause.
 Data re-dates daily (slice ages out at UTC midnight) — re-run redate_slice.py; now at 2026-07-25 (92-day shift).
 
-## STILL OPEN OPS ISSUE: SSH to box with ~/.ssh/blackhat = Permission denied (publickey) since ~sweep 4.
-CI runner unaffected (own auth); all verification via HTTPS + AWS. Check box authorized_keys/sshd.
+## SSH: `ssh aing` works (fixed 2026-07-25). Added lowercase `aing` + `aing.bhnoc.com` to the
+`Host AING` block in ~/.ssh/config (SSH Host matching is case-sensitive, so `ssh aing` didn't
+match `Host AING` before). Resolves to `ubuntu@aing.bhnoc.com` via the 1Password agent
+(biometric-gated TME key). Claude runs `ssh aing '<cmd>'` directly; James approves the bio prompt.
+Do NOT use `-i ~/.ssh/blackhat`/`IdentitiesOnly` (wrong key).
