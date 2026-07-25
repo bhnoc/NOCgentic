@@ -44,7 +44,19 @@ The GPU stack is now live on the box (full runbook in the deploy skill):
 - **Verified working:** loads to ~43GB VRAM (fits 46GB), and on a Presto test prompt it generated a CORRECT Athena statement (`SELECT COUNT(*) FROM conn WHERE dt = '2026-07-25';`) at **~197 tokens/sec generation, 172 t/s prompt**. The local inference path works end to end.
 - Download note: the box network does ~1GB/min, so an 18GB pull takes ~15-20 min. Run it DETACHED (nohup) on the box, not through a client with a timeout, or it gets killed mid-download (a partial `.downloadInProgress` blob; llama.cpp resumes on re-run).
 
-Next: capture the Gemini baseline with `bench/`, then benchmark this model (and Qwen2.5-Coder-32B + the XiYanSQL control) against it; wire GBNF grammars for the JSON + SQL paths.
+### Second model downloaded: a Presto-SQL specialist (2026-07-25)
+`cnatale/Mistral-7B-Instruct-v0.1-Txt-2-Presto-SQL-lo-lora-GGUF` (Q4_0, ~4GB). A Mistral-7B-Instruct-v0.1 LoRA fine-tuned specifically for text-to-**Presto** SQL, which is the dialect specialist the general research said didn't exist publicly. Downloaded + verified generating at ~151 tok/s.
+
+Its first test already shows the specialist-vs-generalist tradeoff clearly. Prompt: "count connections per source IP in table conn for today, top 5." It produced:
+```sql
+SELECT source_ip, COUNT(*) FROM conn AS table1
+WHERE dt = today() GROUP BY source_ip ORDER BY COUNT(*) DESC LIMIT 5
+```
+Right Presto *shape* (no SQLite idioms), but WRONG for our Athena schema: `dt = today()` is not how our partitions work (needs a literal `'YYYY-MM-DD'` string, which the Qwen generalist got right with the schema in-prompt), and `source_ip` is not the real column (`id_orig_h`). It knows generic Presto syntax but not the Corelight schema. That is the crux the benchmark will quantify: dialect-fluency (this model) vs schema-grounding (Qwen + prompt).
+
+Caveats: base is Mistral-7B-Instruct-v0.1 (2023, old) and only 7B, so expect weaker reasoning on complex joins. Repo lists **no license** (base is Apache 2.0 and a LoRA merge usually inherits it, but the repo declares nothing) so treat as **eval-only** until licensing is confirmed for any conference deploy.
+
+Next: capture the Gemini baseline with `bench/`, then benchmark all candidates (Qwen3-Coder-30B, Qwen2.5-Coder-32B, XiYanSQL-32B control, this Presto-Mistral) against it; wire GBNF grammars for the JSON + SQL paths.
 
 ## Flagged uncertainties
 - LiveSQLBench leaderboard last updated 2026-03-02, so it may lag the very latest July 2026 releases; Qwen3-Coder-30B-A3B is not yet on it, so its SQL score is inferred from family lineage, not measured.
