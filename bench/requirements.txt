@@ -1,0 +1,25 @@
+# NOCgentic benchmark harness deps.
+# The harness calls the REAL llm_complete from agents/shared, so it needs the
+# same LLM client deps the agents use, plus sqlparse for structural SQL scoring.
+#
+# Simplest path: install the agent shared requirements, then this file:
+#   pip install -r agents/shared/requirements.txt -r bench/requirements.txt
+
+# LLM client (LangChain): required for real runs (gemini | openrouter | local).
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langchain-openai>=0.2.0
+langsmith[otel]>=0.3.18
+
+# Imported at load time by the agent main.py modules whose prompts we import.
+fastapi>=0.110.0
+pydantic>=2.0.0
+httpx>=0.27.0
+
+# Structural SQL scoring for the NL->SQL task. If absent, the harness falls
+# back to a regex single-SELECT check, so this is recommended but not required.
+sqlparse>=0.4.4
+
+# NOTE: --dry-run needs NONE of the above. It stubs fastapi/pydantic/httpx and
+# replaces llm_complete, so `python bench/run_bench.py --dry-run` works on a
+# bare interpreter to validate scoring, timing, and output files.

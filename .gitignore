@@ -44,3 +44,6 @@ temp/
 
 # Python regression-test virtualenv
 tests/python/.venv/
+
+### benchmark run artifacts (keep the dir, ignore results)
+bench/results/*.json
