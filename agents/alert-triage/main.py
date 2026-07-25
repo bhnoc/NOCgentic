@@ -228,7 +228,13 @@ async def athena_suricata(
     if dst_ip:
         conditions.append(f"(id_orig_h = '{sanitize_value(dst_ip)}' OR id_resp_h = '{sanitize_value(dst_ip)}')")
     if port:
-        conditions.append(f"(id_resp_p = {int(port)} OR id_orig_p = {int(port)})")
+        # id_resp_p/id_orig_p are varchar in these tables, so compare as strings.
+        # An integer comparison throws TYPE_MISMATCH and fails the whole query,
+        # which made the alert-under-validation read as "absent from telemetry".
+        conditions.append(
+            f"(CAST(id_resp_p AS VARCHAR) = '{int(port)}' "
+            f"OR CAST(id_orig_p AS VARCHAR) = '{int(port)}')"
+        )
     if keywords:
         kw_terms = [
             f"(LOWER(alert_signature) LIKE '%{sanitize_like_value(k.lower())}%' ESCAPE '\\' "
@@ -805,12 +811,16 @@ async def triage(req: TriageRequest) -> TriageResponse:
         # intent). When we found a signature hit while validating, pull all alerts from
         # that source so the LLM sees the full attacker behaviour, not one line.
         if (llm_keywords or llm_port) and suricata_alerts:
-            scan_src = None
+            # Pick the DOMINANT source among the matched alerts, not just the first
+            # row (rows are ordered by recency, so the first hit is often an unrelated
+            # low-volume source). The scanner is the source firing the most matches.
+            from collections import Counter as _SrcCounter
+            src_counts = _SrcCounter()
             for a in suricata_alerts:
                 s = a.get("id_orig_h") or a.get("orig_h")
                 if s and not str(s).startswith(("0.", "255.")):
-                    scan_src = s
-                    break
+                    src_counts[s] += 1
+            scan_src = src_counts.most_common(1)[0][0] if src_counts else None
             if scan_src:
                 try:
                     corro = await athena_suricata(hours=hours, src_ip=scan_src, limit=200)
