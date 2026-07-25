@@ -261,6 +261,55 @@ copy-paste smoke-test loop and good default queries.
 - [ ] `https://.../health` returns 200 from an allow-listed IP
 - [ ] Cost note: if GPU instance, remember it bills ~$3+/hr — stop when idle
 
+## Local LLM on the GPU box (llama.cpp, optional; set up 2026-07-25)
+
+The g6e.4xlarge has an **NVIDIA L40S (48GB, Ada)**. To run a local model instead of
+the Gemini cloud baseline (air-gapped / no-cloud posture), set up the GPU + a local
+OpenAI-compatible server and point the app at it with `LLM_PROVIDER=local`. The base
+AMI ships with NO NVIDIA driver, so this is a one-time host setup:
+
+```bash
+ssh aing
+# 1. NVIDIA driver + CUDA toolkit (kernel headers for the running -aws kernel are needed;
+#    they were already present). The CUDA apt repo gives matched driver + toolkit.
+cd /tmp && curl -fsSL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb && sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-610-open cuda-toolkit
+sudo systemctl reboot        # REQUIRED: the module won't bind until a clean boot.
+# After reboot (containers + runner auto-start, unless-stopped/enabled):
+nvidia-smi                   # want: NVIDIA L40S, ~46GB, driver 610.x
+
+# 2. Build llama.cpp with CUDA
+sudo apt-get install -y cmake git libcurl4-openssl-dev
+cd /home/ubuntu && git clone --depth 1 https://github.com/ggml-org/llama.cpp.git && cd llama.cpp
+export PATH=/usr/local/cuda/bin:$PATH
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=ON
+cmake --build build --config Release -j"$(nproc)" --target llama-server llama-cli
+
+# 3. Pull a model GGUF (llama.cpp's built-in -hf fetch; no python/HF-cli needed).
+#    Shortlist (see docs/llm/local-model-research-2026-07-25.md): Qwen3-Coder-30B-A3B
+#    (top), Qwen2.5-Coder-32B, Qwen3-32B. Apache 2.0, ~18-21GB at Q4_K_M/Q5, fit 48GB.
+export LLAMA_CACHE=/home/ubuntu/models
+# 4. Serve it (OpenAI-compatible on :8080), full GPU offload:
+./build/bin/llama-server -hf unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M \
+  -ngl 999 --host 0.0.0.0 --port 8080 --ctx-size 16384 &
+
+# 5. Point the app at it (per-box env, NOT committed): in .env.s3 set
+#    LLM_PROVIDER=local, LOCAL_LLM_BASE_URL=http://<host-or-docker-bridge>:8080/v1,
+#    LOCAL_LLM_MODEL=<served name>. NOTE: agent containers reach the host via the
+#    docker bridge, so use the bridge gateway IP or run llama-server in the compose
+#    network, not localhost. Then recreate the stack.
+```
+
+- **Benchmark before switching:** `bench/` harness compares any provider/model vs the
+  Gemini baseline on the 3 real tasks (NL->SQL, JSON classify, summarize). Capture the
+  Gemini baseline first (`LLM_PROVIDER=gemini ... python bench/run_bench.py`), then the
+  local model, then `bench/compare.py`. Expect a text-to-SQL accuracy trade vs cloud.
+- **GBNF grammar** (llama.cpp) guarantees valid JSON for the classify path and single
+  statement SQL: a bigger quality lever than model choice. Wire it once a model is picked.
+- **Cost:** the GPU is the reason the box bills ~$3+/hr. Stop it when idle. `LLM_PROVIDER`
+  is per-box, so a CPU host stays on `gemini`; only this GPU box uses `local`.
+
 ## CI auto-deploy — how it's wired (2026-07-22)
 - `.github/workflows/deploy.yml`: `on: push [main]` + `workflow_dispatch`,
   `runs-on: [self-hosted, nocgentic]`, `concurrency: deploy-nocgentic` (no racing deploys).

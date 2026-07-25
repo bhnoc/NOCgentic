@@ -44,5 +44,20 @@ The L40S is present (confirmed via lspci: NVIDIA AD102GL [L40S]) but the box has
 - Some Qwen3-Coder-Next GGUF page date fields were inconsistent (Feb references), a minor flag on exact release timing.
 - Gemma 4 Apache-license claim should be re-verified against the official model card before relying on it.
 
+## SQL-specialist follow-up (does a purpose-built text-to-SQL model beat the generalists for Athena?)
+Second research pass, 2026-07-25. Verdict: **stick with the Qwen-Coder generalists.** Reasons:
+- **No open text-to-SQL specialist or major benchmark targets the Presto/Trino/Athena dialect.** BIRD, Spider 2.0, and LiveSQLBench all score SQLite/PostgreSQL/MySQL. XiYanSQL's own README says it supports "SQLite, PostgreSQL, and MySQL" only. So a specialist's edge is on dialects we don't use.
+- **Narrow SQL models overfit SQLite idioms** (`strftime`, `||` concat, LIMIT semantics) that are wrong or suboptimal in Presto. Our dialect needs (`date_parse`, `from_unixtime`, `approx_distinct`, `UNNEST`, `dt=` Hive-partition filters) are closer to general code-reasoning + prompt-injected dialect rules.
+- On Spider 2.0 the open-weight baseline used is literally Spider-Agent + **Qwen2.5-Coder-32B**; on LiveSQLBench the open ranking is Qwen-dominated. The generalist coder is already the reference.
+- **Defog SQLCoder is dead** (newest is llama-3-sqlcoder-8b, 2024-07; no 2025/2026 successor). CodeS, DTS-SQL are 2024 SQLite-tuned academic artifacts. Skip.
+
+One specialist worth a **control-group** benchmark slot only:
+- **XiYanSQL-QwenCoder-32B-2504** (Apache 2.0, 2025-04). It IS Qwen2.5-Coder-32B SQL-SFT'd, so it's a clean A/B against its own base. GGUF: `mradermacher/XiYanSQL-QwenCoder-32B-2504-GGUF` (~19-20GB Q4_K_M). Prediction: it won't beat its base on Presto because its SFT was SQLite/Postgres/MySQL. Keep only if it does.
+
+Verify-later flag: **AWS "Q-SQL" (30B-A3B MoE)** leads BIRD (76.47%, 2025-12) and would be directly relevant to an AWS/Athena stack, but an open-weight release / license / GGUF was NOT confirmed. Worth a targeted check before assuming it's downloadable.
+
+## Bigger lever than model choice: GBNF grammar-constrained decoding
+For our two hard constraints (valid JSON intent routing + well-formed single-statement SQL), **llama.cpp GBNF grammar constraints matter more than which model we pick.** A GBNF grammar *guarantees* syntactically valid JSON and can force SQL to a single statement / no markdown fences. This is a local-runtime capability the cloud API does not give us. Plan: once a model is chosen, invest in GBNF grammars for the classify (JSON) and SQL-gen paths rather than more model hunting.
+
 ## Sources
-LiveSQLBench (https://livesqlbench.ai), Qwen HF cards (huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct, Qwen3-Coder-Next), Unsloth GGUF cards + Dynamic 2.0 docs (unsloth.ai), QwenLM/Qwen3-Coder GitHub. Full per-claim sources in the research transcript.
+LiveSQLBench (https://livesqlbench.ai), BIRD (bird-bench.github.io), Spider 2.0 (spider2-sql.github.io), Qwen HF cards, XiYanSQL/XGenerationLab + mradermacher GGUF cards, Unsloth Dynamic 2.0 docs, Defog HF. Full per-claim sources in the research transcripts.
