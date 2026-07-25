@@ -1,0 +1,26 @@
+# NOCgentic END-TO-END prompt eval harness deps.
+#
+# The harness drives the LIVE app over HTTP (stdlib urllib, no dep needed) and
+# scores relevance with an LLM judge panel that reuses the app's own llm_complete
+# from agents/shared. So the only hard deps are the LLM client (LangChain) libs
+# the judge needs.
+#
+# Simplest path: install the agent shared requirements, then this file:
+#   pip install -r agents/shared/requirements.txt -r bench/prompt_eval/requirements.txt
+
+# LLM client (LangChain): required for the judge panel on real runs.
+# Judges default to OpenRouter/Claude if OPENROUTER_API_KEY is set (a different
+# model than the Gemini under test), else fall back to a single Gemini judge.
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langchain-openai>=0.2.0
+langsmith[otel]>=0.3.18
+
+# Optional: requests is a nicer HTTP client than stdlib urllib. The harness uses
+# urllib so this is NOT required, but it is here if you prefer to extend with it.
+# requests>=2.31.0
+# httpx>=0.27.0
+
+# NOTE: --dry-run needs NONE of the above. It stubs the HTTP client + the judge,
+# so `python bench/prompt_eval/run_eval.py --dry-run` runs on a bare interpreter
+# to validate the 3-channel scoring, timing, and the results file.
