@@ -330,23 +330,36 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
             _hashes = [sanitize_value(v) for v in (iocs["md5s"] + iocs["sha256s"])[:3]]
             ioc_ctx += f"Hashes: {', '.join(_hashes)}\n"
 
-        from datetime import datetime as _dt, timedelta as _td
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
         _today = _dt.strptime(today, "%Y-%m-%d")
         _yesterday = (_today - _td(days=1)).strftime("%Y-%m-%d")
         _week_ago = (_today - _td(days=7)).strftime("%Y-%m-%d")
         _month_ago = (_today - _td(days=30)).strftime("%Y-%m-%d")
+        # Real epoch cutoff for a rolling 24h window. The dt partition list is a
+        # whole-day PRUNE: a "last 24h" query spans two partitions (today+yesterday)
+        # and, without a ts bound, returns up to ~48h of rows, double-counting on
+        # real data (two capture days) and exactly doubling on the redated dev slice.
+        # Give the model the literal so it can bound the window precisely.
+        _now = _dt.now(_tz.utc)
+        _epoch_24h = int((_now - _td(hours=24)).timestamp())
 
         user_content = (
             f"Partition dates you may use:\n"
             f"- today: {today}\n"
             f"- yesterday: {_yesterday}\n"
             f"- 7 days ago: {_week_ago}\n"
-            f"- 30 days ago: {_month_ago}\n\n"
+            f"- 30 days ago: {_month_ago}\n"
+            f"- epoch cutoff for exactly the last 24h (ts >= this): {_epoch_24h}\n\n"
             f"Analyst query: {query}\n\n"
             f"{ioc_ctx}"
             "Build the date filter based on the analyst's time scope. "
             "For single-day queries use `dt = 'today'`. For multi-day ranges use "
-            "`dt >= 'START' AND dt <= 'today'`."
+            "`dt >= 'START' AND dt <= 'today'`.\n"
+            "IMPORTANT, precise 24h window: whenever you use the 2-day partition prune "
+            f"`dt IN ('{today}','{_yesterday}')`, you MUST also add `AND ts >= {_epoch_24h}` "
+            "so the result is exactly the last 24 hours and not ~48h. This matters most for "
+            "COUNT/total/'how many' queries and any 'last 24 hours' phrasing. For a pure "
+            "existence check ('are there ANY X') the extra bound is harmless, so add it too."
         )
 
         try:
@@ -428,6 +441,23 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
                         )
                     else:
                         sql = f"{body} WHERE dt = '{today}'"
+            # Safety net for the count-doubling window bug: if the query prunes with
+            # the 2-day partition form (dt IN ('a','b')) but the model omitted the ts
+            # bound the prompt asked for, inject it so "last 24h" is truly 24h, not
+            # ~48h. Only when there is no ts predicate already and no JOIN (a JOIN
+            # makes the bare column `ts` ambiguous across aliases; leave those to the
+            # prompt). The dt tokens were already substituted to real YYYY-MM-DD above.
+            low = sql.lower()
+            has_two_day_prune = re.search(r"dt\s+in\s*\(", low) is not None
+            has_ts_bound = re.search(r"\bts\s*>=", low) is not None
+            has_join = " join " in low
+            if has_two_day_prune and not has_ts_bound and not has_join:
+                sql = re.sub(
+                    r"(?i)(dt\s+IN\s*\([^)]*\))",
+                    rf"\1 AND ts >= {_epoch_24h}",
+                    sql,
+                    count=1,
+                )
             if "LIMIT" not in sql.upper():
                 sql = sql.rstrip().rstrip(";") + " LIMIT 200"
             validated.append(sql)
