@@ -21,9 +21,9 @@ WG       = "blackhat-pope-dev"
 BUCKET   = "blackhat-pope-parquet"
 
 SRC_DT   = "2026-04-24"
-DST_DT   = "2026-07-25"
-SHIFT_S  = 7_948_800          # 92 days in seconds
-SHIFT_D  = "92"               # days, for interval literal
+DST_DT   = "2026-07-26"
+SHIFT_S  = 8_035_200          # 93 days in seconds
+SHIFT_D  = "93"               # days, for interval literal
 WIN_FROM = f"{SRC_DT} 00:00:00"
 WIN_TO   = f"{SRC_DT} 03:00:00"
 
@@ -71,27 +71,43 @@ def columns(table):
     return [(c["Name"], c["Type"]) for c in t["StorageDescriptor"]["Columns"]]
 
 
+class ClearFailed(Exception):
+    """The destination partition could NOT be cleared (e.g. no permission).
+
+    Raised so the caller skips the INSERT entirely. Nothing was deleted, so this is
+    NOT data loss; it is a no-op that must be reported as such, not as a wiped table.
+    """
+
+
 def clear_dst_partition(table):
-    """Drop the destination dt=<DST_DT> partition (Glue) and delete its S3 objects, if present."""
+    """Drop the destination dt=<DST_DT> partition (Glue) and delete its S3 objects.
+
+    Returns silently only if the partition is genuinely clear afterward. Raises
+    ClearFailed if a delete was denied/errored, so the caller does NOT then run an
+    INSERT it cannot commit and does NOT print a false DATA LOSS warning.
+    """
     # Glue partition
     try:
         glue.delete_partition(DatabaseName=DB, TableName=table, PartitionValues=[DST_DT])
     except glue.exceptions.EntityNotFoundException:
         pass
     except Exception as e:
-        print(f"    (glue partition drop: {e})")
+        raise ClearFailed(f"glue delete_partition: {e}") from e
     # S3 objects
     prefix = f"{table}/dt={DST_DT}/"
     paginator = s3.get_paginator("list_objects_v2")
     to_del = []
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            to_del.append({"Key": obj["Key"]})
-            if len(to_del) == 1000:
-                s3.delete_objects(Bucket=BUCKET, Delete={"Objects": to_del})
-                to_del = []
-    if to_del:
-        s3.delete_objects(Bucket=BUCKET, Delete={"Objects": to_del})
+    try:
+        for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                to_del.append({"Key": obj["Key"]})
+                if len(to_del) == 1000:
+                    s3.delete_objects(Bucket=BUCKET, Delete={"Objects": to_del})
+                    to_del = []
+        if to_del:
+            s3.delete_objects(Bucket=BUCKET, Delete={"Objects": to_del})
+    except Exception as e:
+        raise ClearFailed(f"s3 delete_objects: {e}") from e
 
 
 def build_insert(table, cols):
@@ -140,14 +156,27 @@ def main():
     print(f"Re-dating {SRC_DT} [{WIN_FROM}..{WIN_TO}) -> {DST_DT} across {len(tables)} tables")
     print(f"This DELETES and rewrites the dt={DST_DT} partition of each table in {BUCKET}.\n")
     total_scanned = 0
-    ok = skipped = failed = 0
+    ok = failed = wiped = 0
     for i, t in enumerate(sorted(tables), 1):
         cols = columns(t)
         sql, has_win = build_insert(t, cols)
         print(f"[{i}/{len(tables)}] {t} (win={'y' if has_win else 'n'}) ... ", end="", flush=True)
-        # Destructive: this deletes the existing dt=<DST_DT> partition. If the
-        # INSERT below fails the partition is left EMPTY, so shout about it.
-        clear_dst_partition(t)
+        # Clear FIRST. If the clear is denied/errors, nothing was deleted, so skip the
+        # INSERT and report a clean no-op (not data loss). This also fails fast on a
+        # credentials problem: if the very first table cannot be cleared, the role is
+        # read-only (run locally with the write-capable profile), so stop immediately.
+        try:
+            clear_dst_partition(t)
+        except ClearFailed as e:
+            print(f"SKIP (clear failed, nothing deleted): {e}")
+            if i == 1:
+                sys.exit("\nABORT: cannot clear the destination partition. The current "
+                         "credentials are read-only. Run this locally with the "
+                         "write-capable profile (AWS_PROFILE=VirtualPOC-users), NOT on "
+                         "the box's instance role.")
+            failed += 1
+            continue
+        # Partition is now clear. If the INSERT fails, the partition IS left empty.
         st, reason, scanned, qid = q(sql)
         total_scanned += scanned
         if st == "SUCCEEDED":
@@ -155,6 +184,7 @@ def main():
             print(f"OK  ({scanned/1e6:.0f} MB scanned)")
         else:
             failed += 1
+            wiped += 1
             print(f"{st}: {reason[:160]}")
             print(f"    !! DATA LOSS: dt={DST_DT} for '{t}' was cleared but the INSERT "
                   f"failed, so the partition is now EMPTY. Re-run for this table "
@@ -162,10 +192,9 @@ def main():
                   file=sys.stderr)
     print(f"\nDone. ok={ok} failed={failed}  total scanned={total_scanned/1e9:.2f} GB "
           f"(~${total_scanned/1e12*5:.2f})")
-    if failed:
-        print(f"WARNING: {failed} table(s) failed to insert after their partition was "
-              f"cleared. Those partitions are empty until you re-run them.",
-              file=sys.stderr)
+    if wiped:
+        print(f"WARNING: {wiped} table(s) were cleared but their INSERT failed, so those "
+              f"partitions are EMPTY until you re-run them.", file=sys.stderr)
 
 
 if __name__ == "__main__":
