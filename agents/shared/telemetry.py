@@ -39,8 +39,16 @@ _initialized = False
 # per-agent sanitize() (see agents/*/main.py).
 # ---------------------------------------------------------------------------
 
+# Each private-range branch must consume all four octets. The 10/8 branch is
+# spelled out with its own three trailing octets — an earlier form shared one
+# `\.\d{1,3}\.\d{1,3}` suffix across all branches, which left the 10/8 case one
+# octet short and leaked the final octet (10.0.0.5 -> "[INTERNAL-IP].5").
 _RE_INTERNAL_IP = re.compile(
-    r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
+    r"\b(?:"
+    r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r")\b"
 )
 # Catch long base64-ish secret tokens (API keys, JWT segments, etc.) but NOT
 # pure-hex strings, which are almost always legitimate hash IOCs (MD5=32,
@@ -54,6 +62,10 @@ _RE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
 
 # Span attribute keys that may carry sensitive free text (LLM prompts/
 # completions, HTTP bodies, raw SQL). Matched case-insensitively by substring.
+# The input.value/output.value/message.content/tool.parameters keys are the
+# OpenInference semantic-convention slots where LangChain LLM prompts+completions
+# and our manually-stamped agent/tool I/O now land — they MUST be redacted here
+# because, unlike before, real prompt/SQL/response text now reaches Manifold.
 _SENSITIVE_ATTR_HINTS = (
     "gen_ai.prompt",
     "gen_ai.completion",
@@ -63,6 +75,10 @@ _SENSITIVE_ATTR_HINTS = (
     "http.response.body",
     "db.statement",
     "sql",
+    "input.value",
+    "output.value",
+    "message.content",
+    "tool.parameters",
 )
 
 
@@ -287,14 +303,36 @@ def init_telemetry(service_name: str | None = None) -> None:
     trace.set_tracer_provider(trace_provider)
     _tracer = trace.get_tracer(svc_name)
 
-    # --- LangSmith OTEL integration ---
-    # Set these BEFORE any LangChain import so LangSmith uses our TracerProvider
-    # to export LLM traces (prompts, completions, token usage) via OTEL.
-    os.environ.setdefault("LANGSMITH_TRACING", "true")
-    os.environ.setdefault("LANGSMITH_OTEL_ENABLED", "true")
-    # Prevent LangSmith from also trying to send to its cloud API (we only want OTEL)
-    os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
-    logger.info("LangSmith OTEL enabled — LangChain LLM traces will export via our TracerProvider")
+    # --- LLM instrumentation: OpenInference (LangChain) ---
+    # The old LangSmith OTEL bridge (LANGSMITH_TRACING/LANGSMITH_OTEL_ENABLED)
+    # emitted ZERO LLM spans in practice — a 9,025-span archive audit found no
+    # gen_ai.* / langsmith.* attributes at all — so Manifold's Activity/Agent-Graph
+    # views had no real trace data to render. We now instrument LangChain directly
+    # with OpenInference, which hooks LangChain's callback manager: even our bare
+    # ChatModel.ainvoke() calls (no AgentExecutor) produce standards-compliant
+    # OpenInference LLM spans (openinference.span.kind=LLM, llm.model_name,
+    # llm.token_count.*, input.value/output.value) through OUR TracerProvider — so
+    # they reach Manifold AND the S3 archive with no per-call wrapping.
+    #
+    # Explicitly DISABLE the LangSmith bridge (do not use setdefault — a stale
+    # container env must be overridden) so we never double-emit. Manifold's own
+    # guidance: never run LangSmith-OTEL and OpenInference at the same time.
+    os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGSMITH_OTEL_ENABLED"] = "false"
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    try:
+        from openinference.instrumentation.langchain import LangChainInstrumentor
+        LangChainInstrumentor().instrument(tracer_provider=trace_provider)
+        logger.info(
+            "OpenInference LangChain instrumentation enabled — LLM spans export via our TracerProvider"
+        )
+    except ImportError:
+        logger.warning(
+            "openinference-instrumentation-langchain NOT installed — LLM spans will NOT be "
+            "captured. Add it to agents/shared/requirements.txt and rebuild the agent images."
+        )
+    except Exception as exc:
+        logger.warning("OpenInference LangChain instrumentation failed: %s", exc)
 
     # --- Metrics ---
     meter_provider = MeterProvider(
@@ -415,6 +453,104 @@ def inject_trace_headers(headers: dict | None = None) -> dict:
     except ImportError:
         pass
     return headers
+
+
+# ---------------------------------------------------------------------------
+# OpenInference semantic-convention helpers
+# ---------------------------------------------------------------------------
+# Manifold's Activity, Inventory, and Agent Graph views key off OpenInference
+# span semantics: openinference.span.kind (AGENT / CHAIN / LLM / TOOL), plus
+# input.value / output.value / tool.name. The OpenInference LangChain
+# instrumentor only classifies the LLM ainvoke() calls; our agents are hand-
+# rolled (not LangChain agents), so these helpers stamp AGENT/CHAIN/TOOL kinds
+# and I/O on the MANUAL spans. That is what makes the graph edges populate:
+#   AGENT span parent of an LLM span  -> Agent → Model  CALLS
+#   AGENT/CHAIN span parent of a TOOL -> Agent → Tool   INVOKES
+#   TOOL span with a resource identity-> Tool  → Resource ACCESSES
+# All helpers are safe on the no-op span (set_attribute is a no-op there) and
+# never raise — telemetry must never break request handling.
+
+_OI_SPAN_KIND = "openinference.span.kind"
+_OI_MAX_VALUE_LEN = 4000  # cap prompt/SQL/result blobs stamped onto span I/O
+
+
+def _oi_set(span, key: str, value) -> None:
+    """set_attribute that skips None and truncates oversized strings."""
+    if value is None:
+        return
+    try:
+        if isinstance(value, str) and len(value) > _OI_MAX_VALUE_LEN:
+            value = value[:_OI_MAX_VALUE_LEN]
+        span.set_attribute(key, value)
+    except Exception:
+        pass
+
+
+def set_agent_span(span, *, input_value=None, output_value=None, name: str | None = None) -> None:
+    """Mark a span as an OpenInference AGENT (a top-level request handler)."""
+    _oi_set(span, _OI_SPAN_KIND, "AGENT")
+    _oi_set(span, "graph.node.id", name)
+    _oi_set(span, "input.value", input_value)
+    _oi_set(span, "output.value", output_value)
+
+
+def set_chain_span(span, *, input_value=None, output_value=None) -> None:
+    """Mark a span as an OpenInference CHAIN (an orchestration/aggregation step,
+    e.g. a wrapper around an LLM call whose real LLM span is auto-emitted)."""
+    _oi_set(span, _OI_SPAN_KIND, "CHAIN")
+    _oi_set(span, "input.value", input_value)
+    _oi_set(span, "output.value", output_value)
+
+
+def set_tool_span(
+    span,
+    *,
+    name: str,
+    description: str | None = None,
+    parameters=None,
+    input_value=None,
+    output_value=None,
+) -> None:
+    """Mark a span as an OpenInference TOOL invocation.
+
+    `name` becomes the tool entity in Manifold's Inventory (e.g. "athena.query",
+    "thousandeyes.api"). `parameters` (dict or str) is JSON-encoded. Pair with
+    set_tool_resource() so Manifold draws the Tool → Resource ACCESSES edge.
+    """
+    _oi_set(span, _OI_SPAN_KIND, "TOOL")
+    _oi_set(span, "tool.name", name)
+    _oi_set(span, "tool.description", description)
+    if parameters is not None:
+        if isinstance(parameters, str):
+            _oi_set(span, "tool.parameters", parameters)
+        else:
+            try:
+                import json as _json
+                _oi_set(span, "tool.parameters", _json.dumps(parameters, default=str))
+            except Exception:
+                pass
+    _oi_set(span, "input.value", input_value)
+    _oi_set(span, "output.value", output_value)
+
+
+def set_tool_resource(
+    span,
+    *,
+    db_system: str | None = None,
+    db_name: str | None = None,
+    server_address: str | None = None,
+    peer_service: str | None = None,
+) -> None:
+    """Attach the external resource a TOOL span touches, using OTel resource keys
+    Manifold recognises, so the Tool → Resource ACCESSES edge appears.
+
+    Use db_system/db_name for datastores (Athena, S3), server_address/peer_service
+    for external HTTP APIs (ThousandEyes).
+    """
+    _oi_set(span, "db.system", db_system)
+    _oi_set(span, "db.name", db_name)
+    _oi_set(span, "server.address", server_address)
+    _oi_set(span, "peer.service", peer_service)
 
 
 def get_tracer():

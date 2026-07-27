@@ -33,7 +33,10 @@ if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
 from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
-from telemetry import init_telemetry, get_tracer, get_meter, instrument_fastapi_app  # noqa: E402
+from telemetry import (  # noqa: E402
+    init_telemetry, get_tracer, get_meter, instrument_fastapi_app,
+    set_agent_span, set_chain_span, set_tool_span, set_tool_resource,
+)
 
 init_telemetry(service_name="bhnocgentic-thousandeyes-analyst")
 
@@ -347,7 +350,12 @@ async def gather_te_context(query: str) -> dict[str, Any]:
 
     tracer = get_tracer()
     async with httpx.AsyncClient(timeout=TE_TIMEOUT) as client:
-        with tracer.start_as_current_span("te.fetch_tests_and_alerts"):
+        with tracer.start_as_current_span("te.fetch_tests_and_alerts") as te_span:
+            # TOOL invocation against the ThousandEyes v7 API (external resource).
+            set_tool_span(te_span, name="thousandeyes.api",
+                          description="Fetch test inventory + active alerts")
+            set_tool_resource(te_span, server_address="api.thousandeyes.com",
+                              peer_service="thousandeyes")
             tests, alerts = await asyncio.gather(
                 fetch_all_tests(client),
                 fetch_alerts(client),
@@ -389,6 +397,10 @@ async def gather_te_context(query: str) -> dict[str, Any]:
             return _extract_metrics(t, r)
 
         with tracer.start_as_current_span("te.fetch_all_results") as r_span:
+            set_tool_span(r_span, name="thousandeyes.api",
+                          description="Fetch latest per-test results")
+            set_tool_resource(r_span, server_address="api.thousandeyes.com",
+                              peer_service="thousandeyes")
             per_test = [rec for rec in await asyncio.gather(*[_one(t) for t in tests]) if rec]
             r_span.set_attribute("tests.processed", len(per_test))
 
@@ -569,11 +581,13 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     with tracer.start_as_current_span("thousandeyes_analyst.analyze") as span:
         span.set_attribute("query.length", len(req.query))
         span.set_attribute("query.text", req.query[:500])
+        set_agent_span(span, input_value=req.query, name="thousandeyes-analyst")
 
         start = time.monotonic()
         logger.info("analyze query_len=%d", len(req.query))
 
         with tracer.start_as_current_span("thousandeyes_analyst.gather_context") as ctx_span:
+            set_chain_span(ctx_span, input_value=req.query)
             context = await gather_te_context(req.query)
             ctx_span.set_attribute("context.total_tests", context.get("total_tests", 0))
             ctx_span.set_attribute("context.alert_count", context.get("active_alert_count", 0))
@@ -588,6 +602,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         span.set_attribute("response.elapsed_ms", elapsed_ms)
         span.set_attribute("response.length", len(answer))
         span.set_attribute("response.text", (answer or "")[:2000])
+        set_agent_span(span, output_value=answer, name="thousandeyes-analyst")
         _request_counter.add(1)
         _request_duration.record(elapsed_ms)
         logger.info(

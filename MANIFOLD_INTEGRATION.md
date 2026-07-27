@@ -13,7 +13,8 @@ How BHNOCgentic ships LLM and agent traces, metrics, and logs to **Manifold Secu
 - **Paths:** `/v1/traces`, `/v1/metrics`, `/v1/logs`
 - **Auth:** `Authorization: Bearer ${OTEL_EXPORTER_OTLP_API_KEY}` header
 - **Wire-up:** every Python agent calls `init_telemetry(service_name=...)` at startup (see `agents/shared/telemetry.py`), which registers OTLP exporters for traces+metrics+logs, plus a parallel `S3SpanExporter`.
-- **LLM tracing:** done by the **LangSmith OTEL bridge** — setting `LANGSMITH_TRACING=true` + `LANGSMITH_OTEL_ENABLED=true` before `langchain` is imported makes every `ChatGoogleGenerativeAI.ainvoke()` emit GenAI spans (prompt, completion, token counts, finish reason) through *our* `TracerProvider`.
+- **LLM tracing:** done by the **OpenInference LangChain instrumentor** (`openinference-instrumentation-langchain`). `LangChainInstrumentor().instrument(tracer_provider=...)` in `init_telemetry()` hooks LangChain's callback manager, so every `ChatGoogleGenerativeAI.ainvoke()` / `ChatOpenAI.ainvoke()` emits an OpenInference LLM span (`openinference.span.kind=LLM`, `llm.model_name`, `llm.token_count.*`, `input.value`/`output.value`) through *our* `TracerProvider`. This **replaced the LangSmith OTEL bridge**, which emitted zero LLM spans in practice — see §3.
+- **Agent-graph semantics:** hand-rolled request/tool spans are stamped with OpenInference span kinds (`AGENT` on root handlers, `CHAIN` on wrappers, `TOOL` on Athena/ThousandEyes calls) via helpers in `telemetry.py` (`set_agent_span`/`set_chain_span`/`set_tool_span`/`set_tool_resource`). This is what populates Manifold's **Inventory** (agents/models/tools) and **Agent Graph** (Agent→Model CALLS, Agent→Tool INVOKES, Tool→Resource ACCESSES).
 - **Sister exporter:** every span is *also* gzipped to `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/service=<svc>/dt=YYYY-MM-DD/hour=HH/...jsonl.gz` (Hive-partitioned, Athena-queryable).
 - **Live admin view:** `tools/audit-monitor/` (FastAPI + SSE swim-lane dashboard at `/bh/1337/thetraces/`) tails the S3 archive every 2 s.
 
@@ -38,7 +39,7 @@ For each, Manifold receives:
 2. **HTTP spans** from auto-instrumentation:
    - **inbound:** `FastAPIInstrumentor.instrument_app(app)` — tags every request with method, route, status, and extracts `traceparent` from headers so caller traces are stitched in.
    - **outbound:** `HTTPXClientInstrumentor().instrument()` — injects `traceparent` into every outbound httpx request, which is how orchestrator → agent → Athena hops end up on one flame graph.
-3. **LLM spans** from the LangSmith OTEL bridge (see §3). These are the GenAI semantic-convention spans Manifold's LLM panel keys off.
+3. **LLM spans** from the OpenInference LangChain instrumentor (see §3). These are the OpenInference semantic-convention spans (`openinference.span.kind=LLM`, `llm.*`) Manifold's LLM/Activity panel keys off.
 4. **Metrics** — see §4.
 5. **Python logs** — `LoggingHandler` on the root logger forwards every `INFO+` record to `/v1/logs`. Records are auto-tagged with the active `trace_id`/`span_id`, so logs land next to the span that produced them.
 
@@ -60,9 +61,9 @@ Span attributes carry full context — every root `orchestrator.query` span is t
 | `OTEL_METRICS_INTERVAL_MS` | `60000` | `PeriodicExportingMetricReader` cadence; floored at 1000ms |
 | `OTEL_LOG_LEVEL` | `INFO` | minimum level forwarded to `/v1/logs` |
 | `OTEL_CONSOLE_TRACES` | `true` | also dump spans to stderr (visible via `docker logs`) |
-| `LANGSMITH_TRACING` | set to `true` by `init_telemetry` | required for LangSmith OTEL bridge |
-| `LANGSMITH_OTEL_ENABLED` | set to `true` by `init_telemetry` | required for LangSmith OTEL bridge |
-| `LANGCHAIN_TRACING_V2` | set to `false` by `init_telemetry` | belt-and-suspenders to keep LangChain off the LangSmith *cloud* API |
+| `LANGSMITH_TRACING` | forced `false` by `init_telemetry` | old bridge disabled — LLM tracing is via OpenInference now (§3) |
+| `LANGSMITH_OTEL_ENABLED` | forced `false` by `init_telemetry` | old bridge disabled; prevents duplicate spans alongside OpenInference |
+| `LANGCHAIN_TRACING_V2` | forced `false` by `init_telemetry` | keep LangChain off the LangSmith *cloud* API |
 | `TRACE_S3_ENABLED` | `true` | toggles the S3 sister exporter only |
 | `TRACE_S3_BUCKET` | `blackhat-pope-dev-logs` | |
 | `TRACE_S3_PREFIX` | `bh-asia-26/aing-trace` | |
@@ -72,33 +73,54 @@ Every agent's compose service block sets the first two via `${...}` substitution
 
 ---
 
-## 3. The LangSmith OTEL bridge — the load-bearing trick
+## 3. LLM tracing: OpenInference (replaced the dead LangSmith bridge)
 
-The cleanest part of the integration is also the most surprising: we don't write any LLM-specific span code. Instead, *one block* in `init_telemetry()` does the entire wire-up:
+### 3.1 What we do now
+
+`init_telemetry()` instruments LangChain with OpenInference, *after* setting our provider:
 
 ```python
-trace.set_tracer_provider(trace_provider)               # our provider, with OTLP+S3+console processors
+trace.set_tracer_provider(trace_provider)      # our provider: OTLP + S3 + console + redaction
 
-os.environ.setdefault("LANGSMITH_TRACING", "true")
-os.environ.setdefault("LANGSMITH_OTEL_ENABLED", "true")
-os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")  # don't ALSO send to LangSmith cloud
+os.environ["LANGSMITH_TRACING"] = "false"       # force the old bridge OFF (no double-emit)
+os.environ["LANGSMITH_OTEL_ENABLED"] = "false"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
+from openinference.instrumentation.langchain import LangChainInstrumentor
+LangChainInstrumentor().instrument(tracer_provider=trace_provider)
 ```
 
-`agents/shared/llm_client.py` then just calls `await llm.ainvoke(messages)` (LangChain `ChatGoogleGenerativeAI` or `ChatOpenAI`). The LangSmith OTEL bridge intercepts those calls and emits standards-compliant GenAI spans through whatever `TracerProvider` is current — i.e. ours — so they end up at Manifold *and* in the S3 archive without any manual wrapping.
+`agents/shared/llm_client.py` still just calls `await llm.ainvoke(messages)`. OpenInference hooks LangChain's **callback manager**, so even our bare `ChatGoogleGenerativeAI`/`ChatOpenAI` calls (we use no `AgentExecutor`/LangGraph) emit LLM spans through *our* `TracerProvider` — reaching Manifold *and* the S3 archive without any manual wrapping.
 
-The order matters: `init_telemetry()` MUST run before `langchain*` is imported, otherwise LangSmith never sees those env vars and falls back to no-op or to the cloud API. That's why `init_telemetry(service_name=...)` is called at the very top of every agent's `main.py`, immediately after `sys.path` munging.
+The order still matters: `init_telemetry()` MUST run before `langchain*` is imported. That's why it's called at the very top of every agent's `main.py`.
 
-The captured spans include:
+Captured LLM-span attributes (OpenInference semantic conventions, which is what Manifold's LLM/Activity panels read):
 
-- `gen_ai.system` (e.g. `google`)
-- `gen_ai.request.model` (e.g. `gemini-3.1-flash-lite-preview`)
-- `gen_ai.request.max_tokens`
-- `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
-- `gen_ai.response.finish_reason`
-- LangSmith-specific: `langsmith.span.kind` (`llm`, `chain`, `tool`, `retriever`)
-- Events: `gen_ai.content.prompt` (JSON message array), `gen_ai.content.completion`
+- `openinference.span.kind = LLM`
+- `llm.model_name` (e.g. `gemini-3.5-flash-lite`)
+- `llm.token_count.prompt`, `llm.token_count.completion`, `llm.token_count.total`
+- `llm.invocation_parameters`
+- `input.value` / `output.value` (prompt + completion; **redacted** at the export boundary — see §0/redaction)
 
-Manifold's LLM panel reads `gen_ai.*`; the audit monitor displays the prompt event verbatim in the click-to-expand drawer.
+### 3.2 Why the LangSmith bridge was replaced (postmortem)
+
+The prior design set `LANGSMITH_TRACING=true` + `LANGSMITH_OTEL_ENABLED=true` and assumed LangSmith's OTEL bridge would auto-emit `gen_ai.*` spans through our provider. **It never did.** A 2026-07-27 audit of the S3 span archive (`backups/aing-trace-*/`, which contains the exact spans shipped to Manifold) found **9,025 spans with zero `gen_ai.*`, zero `langsmith.*`, and empty `events: []` on every LLM-wrapper span.** The bridge silently no-op'd — most likely because LangSmith's OTEL export path needs an active LangSmith tracing pipeline (an API key / run tree) that was deliberately never configured, and `os.environ.setdefault` won't override a stale container env.
+
+The visible symptom in Manifold: **"Most Active Agents" and "Most Invoked Assets" populated** (from HTTP/FastAPI spans + the `bhnoc.*` metrics, which *do* export) **but the "Activity" trace view was blank** — no real agent/LLM trace data ever arrived in a shape the trace explorer renders.
+
+OpenInference fixes both halves: it actually produces LLM spans, and it produces them in the OpenInference shape Manifold's Activity + Agent Graph key off. Per Manifold's own guidance, we never run both LangSmith-OTEL and OpenInference at once (duplicate spans), so the LangSmith flags are force-disabled above.
+
+### 3.3 Agent/tool/chain graph semantics
+
+Because our agents are hand-rolled (not LangChain agents), the OpenInference instrumentor only classifies the *LLM* calls. To populate Manifold's **Inventory** and **Agent Graph**, the manual spans are stamped with OpenInference kinds via helpers in `telemetry.py`:
+
+| Helper | Span kind | Applied to |
+|---|---|---|
+| `set_agent_span` | `AGENT` | root handlers: `orchestrator.query`, `athena_hunter.analyze`, `alert_triage.triage`, `thousandeyes_analyst.analyze` |
+| `set_chain_span` | `CHAIN` | wrappers: `*.classify`, `*.generate_sql`, `*.gather_context`, `*.llm_analyze`, `orchestrator.route.*` |
+| `set_tool_span` + `set_tool_resource` | `TOOL` | resource calls: `athena_hunter.execute_sql_*`, `athena_hunter.alerts_recent`, `alert_triage.athena.*` (Athena), `te.fetch_*` (ThousandEyes API) |
+
+Nesting already exists (tools run inside the agent's `with` span), so stamping the kinds is what draws the edges: **Agent→Model CALLS** (AGENT parent of an LLM span), **Agent→Tool INVOKES** (AGENT/CHAIN parent of a TOOL span), **Tool→Resource ACCESSES** (TOOL span carrying `db.system`/`server.address`).
 
 ---
 
@@ -443,7 +465,9 @@ The agent that summarised the transcript reported `OTEL_CONSOLE_TRACES` defaults
 
 - Every agent's `init_telemetry()` reaches Manifold without error on container start.
 - S3 trace prefix populates every ~5 s (BatchSpanProcessor `schedule_delay_millis=5000`).
-- LangSmith OTEL bridge produces GenAI-tagged spans visible in the audit monitor and S3.
+- OpenInference LangChain instrumentor produces LLM spans (`openinference.span.kind=LLM`, `llm.*`) — **replaces the LangSmith bridge, which produced none** (§3.2). Verify post-deploy per §11.
+- Manual spans carry OpenInference `AGENT`/`CHAIN`/`TOOL` kinds so Manifold's Inventory + Agent Graph populate.
+- Internal-IP redaction covers the full RFC-1918 space (fixed a bug where the 10/8 branch leaked the final octet).
 - Distributed traces stitch orchestrator → agent → Athena/HTTP into a single trace via `httpx` + `FastAPI` auto-instrumentation.
 - Custom metrics (`bhnoc.tokens`, `bhnoc.cost.usd`, `bhnoc.llm.duration_ms`) exporting to `/v1/metrics`.
 - Python `INFO+` logs forwarded to `/v1/logs` with trace correlation.
@@ -517,3 +541,67 @@ aws s3 ls s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/ --recursive \
 python tools/trace-export.py            # uses newest local backup
 python tools/trace-export.py --by-session  # also prints per-session summary
 ```
+
+---
+
+## 11. Deploying & verifying the OpenInference fix (2026-07-27)
+
+The LLM-span fix requires **rebuilding the agent images** (new pip dep
+`openinference-instrumentation-langchain`) — a plain container restart is not
+enough. A restart alone still gets the manual AGENT/TOOL/CHAIN span kinds (those
+need no new package), but not the LLM spans.
+
+### 11.1 Deploy
+
+```bash
+# From the repo root, rebuild + restart the agent fleet (see README for the
+# canonical rsync + `docker compose up -d --build` invocation; do NOT use the
+# broken scripts/deploy-agents.sh — CLAUDE.md Operational Gotcha §4).
+docker compose -f docker-compose.agents.yml up -d --build
+```
+
+### 11.2 Confirm the instrumentor loaded (per container)
+
+```bash
+docker logs bhnocgentic-athena-hunter 2>&1 | grep -i openinference
+# want: "OpenInference LangChain instrumentation enabled — LLM spans export via our TracerProvider"
+# a "NOT installed" warning here means the image wasn't rebuilt with the new dep.
+```
+
+### 11.3 Confirm real LLM + graph spans are now emitted
+
+Run one query through the site, then inspect a fresh S3 span (same data Manifold
+gets). This is the definitive check — it's how the original breakage was found.
+
+```bash
+# newest object under any service prefix
+aws s3 ls s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/ --recursive | sort | tail -1
+aws s3 cp s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/<key>.jsonl.gz - | zcat | \
+  python3 -c "import sys,json,collections
+c=collections.Counter()
+for l in sys.stdin:
+    s=json.loads(l); a=s.get('attributes',{})
+    if 'openinference.span.kind' in a: c[a['openinference.span.kind']]+=1
+print(c)"
+# BEFORE fix: Counter()            (no openinference kinds, no LLM spans)
+# AFTER fix:  Counter({'LLM': N, 'AGENT': M, 'TOOL': K, 'CHAIN': J})
+```
+
+### 11.4 Confirm in Manifold
+
+1. **Activity** — should now stream nested traces (AGENT → CHAIN → LLM/TOOL) with
+   timing + token counts, instead of being blank.
+2. **Inventory** — agents (`bhnocgentic-*`), models (`gemini-3.5-flash-lite`),
+   and tools (`athena.query`, `thousandeyes.api`) appear as entities.
+3. **Agent Graph** — edges appear: Agent→Model CALLS, Agent→Tool INVOKES,
+   Tool→Resource ACCESSES (Athena `blackhat_pope_logs`, `api.thousandeyes.com`).
+
+### 11.5 If Activity is still thin
+
+- Duplicate LLM spans → something re-enabled the LangSmith bridge; confirm
+  `LANGSMITH_OTEL_ENABLED=false` in the container env (we force it in code, but a
+  compose/env override could fight it).
+- No LLM spans but AGENT/TOOL present → the `openinference-*` dep didn't install;
+  re-check §11.2.
+- Prompts look over-redacted → that's intentional; internal IPs/secrets are
+  scrubbed at the export boundary (redaction §0). Loosen only via policy change.

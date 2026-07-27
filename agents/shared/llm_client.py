@@ -1,15 +1,15 @@
 """
-llm_client.py — Unified LLM client using LangChain + LangSmith OTEL tracing.
+llm_client.py — Unified LLM client using LangChain + OpenInference OTEL tracing.
 
-LangSmith's native OTEL integration automatically captures all LangChain calls
-(prompts, completions, token usage, latency) and exports them as OpenTelemetry
-spans via the TracerProvider configured in telemetry.py.
+The OpenInference LangChain instrumentor (wired up in telemetry.py via
+LangChainInstrumentor().instrument()) hooks LangChain's callback manager, so
+every ainvoke() below is auto-captured as an OpenInference LLM span (prompts,
+completions, token usage, latency) and exported via the TracerProvider
+configured in telemetry.py — no manual span creation needed here.
 
-No manual span creation needed — just set LANGSMITH_TRACING=true and
-LANGSMITH_OTEL_ENABLED=true before importing LangChain (done in telemetry.py).
-
-Native spans include langsmith.span.kind (llm, chain, tool, retriever),
-GenAI attributes (gen_ai.system, gen_ai.usage.*), and LangSmith metadata.
+Spans include openinference.span.kind=LLM, llm.model_name, llm.token_count.*,
+and input.value/output.value. (This replaced the LangSmith OTEL bridge, which
+emitted no LLM spans in practice — see MANIFOLD_INTEGRATION.md §3.)
 
 Usage:
     from llm_client import llm_complete

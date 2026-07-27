@@ -9,4 +9,9 @@ opentelemetry-instrumentation-httpx>=0.46b0
 langchain-core>=0.3.0
 langchain-google-genai>=2.0.0
 langchain-openai>=0.2.0
-langsmith[otel]>=0.3.18
+# LLM tracing: OpenInference LangChain instrumentor emits OpenInference-shaped
+# LLM spans (openinference.span.kind=LLM, llm.*, input/output.value) that
+# Manifold's Activity/Agent-Graph views require. Replaces the LangSmith OTEL
+# bridge, which emitted zero LLM spans in practice (see telemetry.py). langsmith
+# stays as a transitive langchain-core dep, but its OTEL export is force-disabled.
+openinference-instrumentation-langchain>=0.1.29

@@ -39,7 +39,10 @@ if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
 from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
-from telemetry import init_telemetry, get_tracer, get_meter, instrument_fastapi_app  # noqa: E402
+from telemetry import (  # noqa: E402
+    init_telemetry, get_tracer, get_meter, instrument_fastapi_app,
+    set_agent_span, set_chain_span, set_tool_span, set_tool_resource,
+)
 from athena_client import (  # noqa: E402
     execute_query,
     date_filter,
@@ -154,16 +157,29 @@ def extract_query_hints(query: str) -> dict[str, Any]:
 
 async def _athena_query(sql: str, label: str = "query") -> list[dict[str, str]]:
     """Execute an Athena query, log timing, return rows."""
-    try:
-        rows, meta = await execute_query(sql, timeout=15)
-        _athena_query_count.add(1)
-        _athena_duration.record(meta["execution_time_ms"])
-        logger.info("athena[%s] %d rows in %dms (%.1fMB scanned)",
-                     label, len(rows), meta["execution_time_ms"], meta["data_scanned_mb"])
-        return rows
-    except Exception as exc:
-        logger.warning("athena[%s] failed: %s", label, exc)
-        return []
+    tracer = get_tracer()
+    # Every alert-triage Athena call funnels through here, so this is the single
+    # place to stamp the TOOL → Resource (Athena) span. Each becomes a child of
+    # the alert_triage.triage AGENT span → Agent → Tool INVOKES / Tool → Resource
+    # ACCESSES edges in Manifold's graph, even though these run concurrently.
+    with tracer.start_as_current_span(f"alert_triage.athena.{label}") as qspan:
+        set_tool_span(qspan, name="athena.query", input_value=sql,
+                      parameters={"label": label})
+        set_tool_resource(qspan, db_system="athena", db_name="blackhat_pope_logs")
+        try:
+            rows, meta = await execute_query(sql, timeout=15)
+            _athena_query_count.add(1)
+            _athena_duration.record(meta["execution_time_ms"])
+            qspan.set_attribute("sql.row_count", len(rows))
+            qspan.set_attribute("sql.execution_time_ms", meta["execution_time_ms"])
+            qspan.set_attribute("output.value", f"{len(rows)} rows")
+            logger.info("athena[%s] %d rows in %dms (%.1fMB scanned)",
+                         label, len(rows), meta["execution_time_ms"], meta["data_scanned_mb"])
+            return rows
+        except Exception as exc:
+            qspan.set_attribute("error", str(exc))
+            logger.warning("athena[%s] failed: %s", label, exc)
+            return []
 
 
 async def athena_alerts(
@@ -742,6 +758,7 @@ async def triage(req: TriageRequest) -> TriageResponse:
         span.set_attribute("query.text", req.query[:500])
         span.set_attribute("triage.hours", req.time_range_hours)
         span.set_attribute("triage.data_source", "athena")
+        set_agent_span(span, input_value=req.query, name="alert-triage")
 
         start = time.monotonic()
         hours = req.time_range_hours
@@ -1057,6 +1074,7 @@ async def triage(req: TriageRequest) -> TriageResponse:
         span.set_attribute("response.elapsed_ms", elapsed_ms)
         span.set_attribute("response.length", len(answer))
         span.set_attribute("response.text", (answer or "")[:2000])
+        set_agent_span(span, output_value=answer, name="alert-triage")
         _request_counter.add(1)
         _request_duration.record(elapsed_ms)
         logger.info("triage done elapsed=%.1fms alerts=%d flows=%d dns=%d confidence=%.2f",

@@ -31,7 +31,10 @@ if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
 from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
-from telemetry import init_telemetry, get_tracer, get_meter, instrument_fastapi_app  # noqa: E402
+from telemetry import (  # noqa: E402
+    init_telemetry, get_tracer, get_meter, instrument_fastapi_app,
+    set_agent_span, set_chain_span, set_tool_span, set_tool_resource,
+)
 from athena_client import (  # noqa: E402
     execute_custom_sql,
     date_filter,
@@ -350,6 +353,8 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
     with tracer.start_as_current_span("athena_hunter.generate_sql") as span:
         span.set_attribute("query.length", len(query))
         span.set_attribute("query.text", query[:500])
+        # CHAIN wrapper around the NL→SQL LLM call (LLM span auto-emitted as child).
+        set_chain_span(span, input_value=query)
 
         # Sanitize every IOC before interpolating into the prompt (mirrors what
         # _fallback_queries does) — defense-in-depth against injection via a
@@ -606,6 +611,7 @@ async def gather_athena_context(
         span.set_attribute("iocs.ips", len(classified["ips"]))
         span.set_attribute("iocs.domains", len(classified["domains"]))
         span.set_attribute("partition.date", today)
+        set_chain_span(span, input_value=query)
 
         # Generate SQL via LLM
         sql_queries = await generate_sql(query, classified, today)
@@ -629,9 +635,14 @@ async def gather_athena_context(
         for i, sql in enumerate(sql_queries):
             with tracer.start_as_current_span(f"athena_hunter.execute_sql_{i}") as qspan:
                 qspan.set_attribute("sql.query", sql[:500])
+                # TOOL invocation against the Athena data lake — drives the
+                # Agent → Tool INVOKES and Tool → Resource ACCESSES graph edges.
+                set_tool_span(qspan, name="athena.query", input_value=sql)
+                set_tool_resource(qspan, db_system="athena", db_name="blackhat_pope_logs")
                 try:
                     rows, meta = await execute_custom_sql(sql)
                     qspan.set_attribute("sql.row_count", len(rows))
+                    qspan.set_attribute("output.value", f"{len(rows)} rows")
                     qspan.set_attribute("sql.execution_time_ms", meta["execution_time_ms"])
                     qspan.set_attribute("sql.data_scanned_mb", meta["data_scanned_mb"])
 
@@ -714,6 +725,7 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
     """Send Athena results to LLM for analysis."""
     tracer = get_tracer()
     with tracer.start_as_current_span("athena_hunter.llm_analyze") as span:
+        set_chain_span(span, input_value=query)
         # Build context string from query results
         results_str = ""
         for qr in context.get("query_results", []):
@@ -807,6 +819,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         span.set_attribute("query.length", len(req.query))
         span.set_attribute("query.text", req.query[:500])
         span.set_attribute("iocs.count", len(req.extracted_iocs))
+        set_agent_span(span, input_value=req.query, name="athena-hunter")
 
         start = time.monotonic()
         logger.info("analyze query_len=%d iocs=%d", len(req.query), len(req.extracted_iocs))
@@ -825,6 +838,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         span.set_attribute("response.text", (answer or "")[:2000])
         span.set_attribute("athena.total_rows", context["total_rows"])
         span.set_attribute("athena.total_query_time_ms", context["total_query_time_ms"])
+        set_agent_span(span, output_value=answer, name="athena-hunter")
         _request_counter.add(1)
         _request_duration.record(elapsed_ms)
         logger.info(
@@ -955,6 +969,8 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
         limit = max(1, min(int(limit), 500))
         span.set_attribute("hours", hours)
         span.set_attribute("limit", limit)
+        set_tool_span(span, name="athena.query", parameters={"hours": hours, "limit": limit})
+        set_tool_resource(span, db_system="athena", db_name="blackhat_pope_logs")
 
         dt = date_filter(hours)
         # Exclude noisy ET INFO signatures — they're informational, not

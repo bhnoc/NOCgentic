@@ -38,7 +38,10 @@ if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
 from llm_client import llm_complete  # noqa: E402
-from telemetry import init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app  # noqa: E402
+from telemetry import (  # noqa: E402
+    init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
+    set_agent_span, set_chain_span,
+)
 
 # Initialize OTel tracing + metrics before anything else
 init_telemetry(service_name="bhnocgentic-orchestrator")
@@ -720,6 +723,11 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         span.set_attribute("job.id", req.job_id)
         span.set_attribute("query.length", len(req.query))
         span.set_attribute("query.text", req.query[:500])
+        # OpenInference: this root handler is the AGENT node in Manifold's graph.
+        # Stamp kind+input here so EVERY return path (cover/refused/kill-switch
+        # early returns included) registers as agent activity; output.value is
+        # stamped at the single success exit below.
+        set_agent_span(span, input_value=req.query, name="orchestrator")
         if req.client:
             if req.client.ip:         span.set_attribute("client.ip", req.client.ip)
             if req.client.user_agent: span.set_attribute("client.user_agent", req.client.user_agent[:300])
@@ -772,6 +780,9 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
             cls_span.set_attribute("classification.intent", intent)
             cls_span.set_attribute("classification.confidence", confidence)
             cls_span.set_attribute("classification.reasoning", classification.get("reasoning", ""))
+            # CHAIN wrapper around the classifier LLM call (the LLM span itself is
+            # auto-emitted as a child by OpenInference).
+            set_chain_span(cls_span, input_value=req.query, output_value=intent)
 
         span.set_attribute("routing.intent", intent)
         logger.info(
@@ -823,7 +834,11 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                 )
 
             elif intent == "thousandeyes_analyst":
-                with tracer.start_as_current_span("orchestrator.route.thousandeyes_analyst"):
+                with tracer.start_as_current_span("orchestrator.route.thousandeyes_analyst") as rt_span:
+                    # CHAIN: delegation to a downstream agent. The handoff edge to
+                    # thousandeyes-analyst's own AGENT span is drawn via W3C trace
+                    # context propagated on the httpx call below.
+                    set_chain_span(rt_span, input_value=req.query)
                     result = await call_thousandeyes_analyst(req.query, trace_headers=inject_trace_headers())
                     answer     = result.get("answer", "No answer returned by thousandeyes-analyst.")
                     confidence = float(result.get("confidence", confidence))
@@ -838,6 +853,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                         if m:
                             hours = min(int(m.group(1)), 168)
                     rt_span.set_attribute("triage.hours", hours)
+                    set_chain_span(rt_span, input_value=req.query)
                     result = await call_alert_triage(req.query, time_range_hours=hours, trace_headers=inject_trace_headers())
                     answer     = result.get("answer", "No answer returned by alert-triage.")
                     confidence = float(result.get("confidence", confidence))
@@ -873,6 +889,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                 with tracer.start_as_current_span("orchestrator.route.athena_hunter") as rt_span:
                     iocs = extract_iocs(req.query)
                     rt_span.set_attribute("iocs.count", len(iocs))
+                    set_chain_span(rt_span, input_value=req.query)
                     result = await call_athena_hunter(req.query, iocs, trace_headers=inject_trace_headers())
                     answer     = result.get("answer", "No answer returned by athena-hunter.")
                     confidence = float(result.get("confidence", confidence))
@@ -897,6 +914,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         span.set_attribute("response.elapsed_ms", elapsed_ms)
         span.set_attribute("response.length", len(answer))
         span.set_attribute("response.text", (answer or "")[:2000])
+        set_agent_span(span, output_value=answer, name="orchestrator")
         _request_counter.add(1, {"agent.used": agent_used})
         _request_duration.record(elapsed_ms, {"agent.used": agent_used})
         logger.info("job=%s agent=%s elapsed=%.2fs", req.job_id, agent_used, elapsed)
