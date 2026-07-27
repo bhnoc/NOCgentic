@@ -277,8 +277,17 @@ def score_accuracy(scenario: dict[str, Any], job: dict[str, Any]) -> tuple[float
     low_answer = answer.lower()
     agent_used = normalize_intent(job.get("agentUsed"))
     expected = normalize_intent(scenario.get("expected_intent"))
+    # Some queries are legitimately answerable by more than one agent (e.g. "are there
+    # Kali boxes on the network?" is both an alert-signature question and a DHCP-hostname
+    # hunt). acceptable_intents lists the alternates that also count as correct routing,
+    # so a defensible route is not scored as a MISS. expected_intent stays the primary.
+    accepted = {expected} | {
+        normalize_intent(i) for i in scenario.get("acceptable_intents", [])
+    }
     detail["agent_used"] = agent_used
     detail["expected_intent"] = expected
+    if len(accepted) > 1:
+        detail["acceptable_intents"] = sorted(a for a in accepted if a)
 
     # --- routing ---
     is_refusal_scenario = expected in _REFUSAL_INTENTS
@@ -295,7 +304,7 @@ def score_accuracy(scenario: dict[str, Any], job: dict[str, Any]) -> tuple[float
         detail["refused_by_text"] = refused_by_text
         detail["refused_by_cover"] = _looks_like_cover(answer)
     else:
-        routing_ok = (agent_used == expected) if expected else True
+        routing_ok = (agent_used in accepted) if expected else True
     detail["routing_ok"] = routing_ok
 
     # --- must_include ---
@@ -329,6 +338,13 @@ def score_accuracy(scenario: dict[str, Any], job: dict[str, Any]) -> tuple[float
 # ---------------------------------------------------------------------------
 # CHANNEL 2: RELEVANCE / "answered what was asked" (LLM JUDGE PANEL, 0..1)
 # ---------------------------------------------------------------------------
+
+# Number of times each judge scores a scenario; the per-judge score is the MEDIAN of
+# these samples, so a lone flash-lite outlier (a real 0.9 answer that scores 0.0 on one
+# call) cannot swing the result. Override with JUDGE_SAMPLES env. Odd numbers give a
+# clean median. Cost scales linearly, so keep it small (3 is plenty for outlier rejection).
+JUDGE_SAMPLES = max(1, int(os.getenv("JUDGE_SAMPLES", "3")))
+
 
 JUDGE_SYSTEM_PROMPT = (
     "You are a strict evaluator for a Security Operations Center assistant. "
@@ -439,24 +455,40 @@ async def score_relevance(
 
     user_content = build_judge_user_content(scenario, answer)
 
+    # Judge noise control: even at temperature 0, flash-lite is not deterministic
+    # (dynamic thinking + sampling), so a single call swings run-to-run (e.g. a real
+    # 0.9 answer scored 0.0 on one run). Sample each judge JUDGE_SAMPLES times and take
+    # the MEDIAN per judge, which discards a lone outlier without inflating the score.
+    # The panel score is then the mean of per-judge medians.
     scores: list[float] = []
     for provider, model in judges:
         entry: dict[str, Any] = {"provider": provider, "model": model}
-        try:
-            raw = await complete(
-                system_prompt=JUDGE_SYSTEM_PROMPT,
-                user_content=user_content,
-                provider=provider,
-                model=(model or None),
-                max_tokens=512,
-                temperature=0.0,
-                thinking_budget=256,
-            )
-            parsed = _parse_judge_json(raw)
-            entry.update({"score": parsed["score"], "reason": parsed["reason"]})
-            scores.append(parsed["score"])
-        except Exception as exc:  # a broken judge must not sink the scenario
-            entry.update({"error": f"{type(exc).__name__}: {exc}"})
+        samples: list[float] = []
+        reasons: list[str] = []
+        for _ in range(JUDGE_SAMPLES):
+            try:
+                raw = await complete(
+                    system_prompt=JUDGE_SYSTEM_PROMPT,
+                    user_content=user_content,
+                    provider=provider,
+                    model=(model or None),
+                    max_tokens=512,
+                    temperature=0.0,
+                    thinking_budget=256,
+                )
+                parsed = _parse_judge_json(raw)
+                samples.append(parsed["score"])
+                reasons.append(parsed["reason"])
+            except Exception as exc:  # a broken sample must not sink the judge
+                entry.setdefault("errors", []).append(f"{type(exc).__name__}: {exc}")
+        if samples:
+            med = statistics.median(samples)
+            entry.update({
+                "score": round(med, 3),
+                "samples": [round(s, 3) for s in samples],
+                "reason": reasons[len(samples) // 2] if reasons else "",
+            })
+            scores.append(med)
         detail["panel"].append(entry)
 
     if not scores:
@@ -466,6 +498,7 @@ async def score_relevance(
     avg = sum(scores) / len(scores)
     detail["relevance"] = round(avg, 3)
     detail["judges_used"] = len(scores)
+    detail["judge_samples_each"] = JUDGE_SAMPLES
     detail["available"] = True
     return avg, detail
 
