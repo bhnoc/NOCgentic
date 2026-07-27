@@ -1,9 +1,9 @@
 """
 redate_slice.py destructive-path guard regression (sweep-4-fix).
 
-main() runs clear_dst_partition() which DELETES the dt=<DST_DT> partition
+main() runs clear_dst_partition() which DELETES the dt=<target> partition
 (Glue + S3) before each INSERT. Two hard stops guard that:
-  1. REFUSE if DST_DT == SRC_DT   (would delete the SOURCE before reading it).
+  1. REFUSE if SRC_DT is among the target days (would delete the SOURCE before reading).
   2. REFUSE if BUCKET != the demo bucket (would touch non-demo data).
 Both call sys.exit(...) BEFORE any AWS/Glue call, so no flag can override them.
 
@@ -36,15 +36,15 @@ def _tripwire(monkeypatch):
     monkeypatch.setattr("sys.argv", ["redate_slice.py"])
 
 
-def test_refuses_when_dst_equals_src(monkeypatch):
-    """REVERT-CHECK: remove the `if DST_DT == SRC_DT: sys.exit(...)` guard and
+def test_refuses_when_src_is_a_target_day(monkeypatch):
+    """REVERT-CHECK: remove the `if SRC_DT in DST_DTS: sys.exit(...)` guard and
     main() would proceed to clear_dst_partition on the SOURCE partition and
     delete live data. With the guard, main() raises SystemExit before the
     tripwire fires."""
-    monkeypatch.setattr(rs, "DST_DT", rs.SRC_DT)
+    monkeypatch.setattr(rs, "DST_DTS", [rs.SRC_DT])
     with pytest.raises(SystemExit) as exc:
         rs.main()
-    # sys.exit(msg) -> code is the message string; confirm it's the SRC==DST guard.
+    # sys.exit(msg) -> code is the message string; confirm it's the SRC-in-targets guard.
     assert "SRC_DT" in str(exc.value)
 
 
@@ -58,6 +58,9 @@ def test_refuses_when_bucket_is_not_demo_bucket(monkeypatch):
 
 
 def test_default_constants_are_the_safe_demo_values():
-    # The shipped defaults must be internally safe: DST != SRC and the demo bucket.
-    assert rs.DST_DT != rs.SRC_DT
+    # The shipped defaults must be internally safe: no target day equals SRC, and the
+    # demo bucket. DST_DTS derives from today (UTC), so SRC (2026-04-24) can never be in
+    # it in practice, but assert it explicitly as the guard's precondition.
+    assert rs.SRC_DT not in rs.DST_DTS
+    assert len(rs.DST_DTS) >= 1
     assert rs.BUCKET == "blackhat-pope-parquet"

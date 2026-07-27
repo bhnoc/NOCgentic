@@ -181,21 +181,30 @@ def test_date_partitions_are_sorted_and_valid_dates():
 # over-counts every metric. The ts lower bound corrects the true window.
 # ---------------------------------------------------------------------------
 
-def test_date_filter_adds_ts_lower_bound_for_positive_hours():
+def test_date_filter_bounds_both_ends_for_positive_hours():
     frag = ac.date_filter(24)
-    # partition prune present AND an explicit epoch lower bound on ts
+    # partition prune present AND explicit epoch bounds on BOTH ends of the window
     assert "dt " in frag
     assert "ts >=" in frag
-    # a 24h bound is ~86400s below now; assert it's a sane recent epoch, not 0
-    m = re.search(r"ts >= (\d+)", frag)
-    assert m, frag
-    epoch = int(m.group(1))
+    assert "ts <=" in frag
     now = int(datetime.now(timezone.utc).timestamp())
-    # within the last ~24h + a minute of slack, and not in the future
-    assert now - 24 * 3600 - 60 <= epoch <= now
+    # lower bound: ~24h below now, sane recent epoch, not 0, not future
+    mlo = re.search(r"ts >= (\d+)", frag)
+    assert mlo, frag
+    lo = int(mlo.group(1))
+    assert now - 24 * 3600 - 60 <= lo <= now
+    # upper bound: ~now (a rolling window is [now-24h, now], not open-ended). This is
+    # what stops FUTURE-stamped rows (e.g. the dev demo's today 00:00-03:00 block) from
+    # double-counting against a prior day's copy.
+    mhi = re.search(r"ts <= (\d+)", frag)
+    assert mhi, frag
+    hi = int(mhi.group(1))
+    assert now - 60 <= hi <= now + 60
+    assert hi > lo
 
 
 def test_date_filter_no_ts_bound_when_hours_le_zero():
     # hours<=0 means "today only", no meaningful rolling window to bound.
     assert "ts >=" not in ac.date_filter(0)
+    assert "ts <=" not in ac.date_filter(0)
     assert "ts >=" not in ac.date_filter(-3)

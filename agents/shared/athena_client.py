@@ -180,9 +180,13 @@ def date_filter(hours: int = 24) -> str:
     window: "last 24h" spans two partitions (yesterday + today), so partition-only
     filtering returns up to ~48h of rows. That over-counts every metric on real data
     (two distinct capture days summed) and, in the redated dev slice, doubles counts
-    exactly (each partition holds a full copy of the window). Add an explicit
-    `ts >= now - hours` lower bound so the answer reflects the true window regardless
-    of how many partitions it touches. ts is epoch seconds (double) in every table.
+    exactly (each partition holds a full copy of the window). Bound BOTH ends of the
+    window: `ts >= now - hours` AND `ts <= now`. The upper bound matters as much as the
+    lower one: a rolling window is [now-hours, now], not [now-hours, infinity). Without
+    it, any rows stamped in the FUTURE relative to now still match (e.g. the dev demo
+    seeds today's 00:00-03:00 block, which is in the future when queried at 01:00, so a
+    lower-only bound double-counted it against yesterday's copy). ts is epoch seconds
+    (double) in every table.
     """
     parts = date_partitions(hours)
     if len(parts) == 1:
@@ -191,8 +195,10 @@ def date_filter(hours: int = 24) -> str:
         part_clause = f"dt IN ({', '.join(repr(d) for d in parts)})"
     if hours <= 0:
         return part_clause
-    epoch_start = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
-    return f"({part_clause} AND ts >= {epoch_start:.0f})"
+    now = datetime.now(timezone.utc)
+    epoch_start = (now - timedelta(hours=hours)).timestamp()
+    epoch_end = now.timestamp()
+    return f"({part_clause} AND ts >= {epoch_start:.0f} AND ts <= {epoch_end:.0f})"
 
 
 # ---------------------------------------------------------------------------
