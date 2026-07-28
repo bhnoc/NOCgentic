@@ -40,18 +40,67 @@ over Corelight logs in S3 (`blackhat-pope-dev-logs`). LLM: **Gemini** by default
 | Property | Value |
 |----------|-------|
 | Instance ID | `i-0430224b1ac82701e` (nickname **AING**) |
+| Account | `552440750419` |
+| VPC / Subnet | `vpc-06a6a29e7d0aecab3` / `subnet-076f03e8454c7bb70` (us-west-2a) |
 | Type | g6e.4xlarge (GPU — **overspec'd**, the app is pure Athena/HTTP; see [[../ops/skill.md]]) |
 | Region | `us-west-2` |
 | Public IP | ephemeral — changes on every stop/start (currently `44.248.50.25`) |
 | DNS | `aing.bhnoc.com` (Cloudflare zone) |
 | IAM role | `blackhat-pope-dev-ec2-role` (has Athena/Glue/S3) |
 | SSH | `ssh aing` (shorthand; = `ubuntu@aing.bhnoc.com` via the 1Password agent, biometric-gated) |
-| Security group | `sg-022b87911ecf12539` — 443 restricted to allow-listed IPs |
+| Security groups | `sg-022b87911ecf12539` (`blackhat-asia-dev-sg`, the primary allow-list) + `sg-0a24a0bef5a92acca` (`aing-https-443-allowlist`, per-guest 443 rules) |
 | App dir | `/opt/bhasia/app` |
+
+### AWS access (read this before any `aws` command)
+
+- **Profiles:** `VirtualPOC-users` for READS (describe/list), `VirtualPOC-admins` for
+  WRITES to infra (security groups, `modify-instance-attribute`, launch/stop). Both SSO,
+  both account `552440750419`. `bhasia-deploy` in the top-level CLAUDE.md is stale; it is
+  not what this box uses.
+- **If a token is expired:** `aws sso login --profile VirtualPOC-admins` (or `-users`).
+  Just run it; it opens a browser and lands creds in-session.
+- **PASS `--profile X --region us-west-2` AS FLAGS. Do NOT `export AWS_PROFILE`.** An
+  exported var persists across shell calls in this harness and silently poisons later
+  commands. A wrong/stale export makes correct by-ID lookups return
+  `InvalidInstanceID.NotFound` / `InvalidVpcID.NotFound`, which reads as "the box moved
+  accounts" when nothing moved. Every NotFound chase in this project has traced back to a
+  stray export, not missing resources.
+- **Ground truth when in doubt:** ask the box itself, not the API guesswork:
+  `ssh aing 'TOK=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60"); curl -s -H "X-aws-ec2-metadata-token: $TOK" http://169.254.169.254/latest/dynamic/instance-identity/document'`
+  returns the real account, region, instance ID, and AZ.
 
 > Note: the box **also** hosts PostCog at `/home/ubuntu/PostCog` (systemd service). Different
 > app; see its skills. Relevant here only because both have a process named `python app.py`
 > — never `pkill -f app.py` on this host (see [[../ops/skill.md]]).
+
+## Grant someone 443 access (per-guest allow-list)
+
+Guest 443 rules live on their OWN SG (`sg-0a24a0bef5a92acca`, `aing-https-443-allowlist`),
+attached alongside the primary `sg-022b87911ecf12539`, so adding/removing a guest never
+touches the primary rules. To add a person, one command (WRITE → `-admins`, flags not
+exports):
+
+```bash
+aws ec2 authorize-security-group-ingress --profile VirtualPOC-admins --region us-west-2 \
+  --group-id sg-0a24a0bef5a92acca \
+  --ip-permissions 'IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=<IP>/32,Description="<name>"}]'
+```
+
+- **CIDR gotcha:** AWS does NOT reject a host-bit-set CIDR; it SILENTLY normalizes it to
+  the network address. Send `66.205.200.65/29` and it stores `66.205.200.64/29` (the whole
+  8-IP block `.64` to `.71`), not the single host. So confirm intent: a single host is
+  `/32` (`.65/32`); a `/29` is always an 8-address range regardless of which host you
+  typed. If someone hands you `x.x.x.65/29` and means one machine, they want `/32`.
+- **Remove a guest:** same command with `revoke-security-group-ingress`.
+- **List current guests:** `aws ec2 describe-security-groups --profile VirtualPOC-admins
+  --region us-west-2 --group-ids sg-0a24a0bef5a92acca --query
+  'SecurityGroups[].IpPermissions[].IpRanges[].[CidrIp,Description]' --output text`.
+- This opens **443 only**. SSH (22) is a separate rule on the primary SG; don't assume it.
+- **If the guest SG ever needs recreating** (fresh box): `create-security-group
+  --group-name aing-https-443-allowlist --vpc-id vpc-06a6a29e7d0aecab3`, add the 443 rules,
+  then `modify-instance-attribute --instance-id i-0430224b1ac82701e --groups
+  sg-022b87911ecf12539 <new-sg>` (list BOTH, because `--groups` REPLACES the set: include
+  the primary or you'll detach it).
 
 ## ⚠️ Known stale artifacts in the repo
 
