@@ -28,7 +28,7 @@ Environment variables:
     GEMINI_MODEL        default: gemini-3.5-flash-lite
     OPENROUTER_MODEL    default: anthropic/claude-3-haiku
     LOCAL_LLM_BASE_URL  OpenAI-compatible local server (llama.cpp/Ollama/vLLM). Default http://localhost:8080/v1
-    LOCAL_LLM_MODEL     served model name for the local provider. Default "local-model"
+    LOCAL_LLM_MODEL     served model name for the local provider. Default "AQLight"
     LOCAL_LLM_API_KEY   placeholder key for local servers. Default "not-needed"
 
 Provider selection is per-box: a CPU/no-GPU host runs LLM_PROVIDER=gemini (cloud),
@@ -159,8 +159,13 @@ OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku"
 # is where that server listens; the API key is usually a placeholder for local
 # servers (llama.cpp ignores it, Ollama accepts anything). Set LOCAL_LLM_MODEL to
 # the served model name (e.g. the GGUF alias for llama.cpp, or "qwen3:8b" for Ollama).
+# Default model name is AQLight (the fine-tuned Qwen2.5-Coder-7B NL->SQL model served
+# on the AING box via llama.cpp; see docs/llm/AQLight-integration.md). AQLight is a SQL
+# SPECIALIST, great for athena-hunter's NL->SQL, but it does not do routing/classify,
+# answer synthesis, or triage prose, so LLM_PROVIDER=local across ALL agents is not a
+# drop-in for Gemini. Point only the SQL path at it, or run a general local model too.
 LOCAL_LLM_BASE_URL: str = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8080/v1")
-LOCAL_LLM_MODEL: str = os.getenv("LOCAL_LLM_MODEL", "local-model")
+LOCAL_LLM_MODEL: str = os.getenv("LOCAL_LLM_MODEL", "AQLight")
 LOCAL_LLM_API_KEY: str = os.getenv("LOCAL_LLM_API_KEY", "not-needed")
 
 

@@ -13,6 +13,14 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      # Local model (AQLight = fine-tuned Qwen2.5-Coder-7B NL->SQL, served on the box
+      # via llama.cpp). Active only when LLM_PROVIDER=local. Default base URL points at
+      # the host's llama-server via the docker bridge gateway (host.docker.internal on
+      # Docker Desktop; on Linux add an extra_hosts mapping or set LOCAL_LLM_BASE_URL to
+      # the host IP). See docs/llm/AQLight-integration.md.
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
       - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
       - ALERT_TRIAGE_URL=http://alert-triage:8003
       - THOUSANDEYES_ANALYST_URL=http://thousandeyes-analyst:8004
@@ -24,6 +32,11 @@ services:
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
+    # Resolve host.docker.internal to the host on Linux, so the default
+    # LOCAL_LLM_BASE_URL can reach the host's llama-server (AQLight) when
+    # LLM_PROVIDER=local. Harmless when the local provider is not used.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - alert-triage
       - thousandeyes-analyst
@@ -41,6 +54,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
       - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
       - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
       - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
@@ -48,6 +64,8 @@ services:
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_SERVICE_NAME=bhnocgentic-alert-triage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   athena-hunter:
@@ -61,6 +79,10 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      # athena-hunter is AQLight's home: NL->SQL is exactly what it was trained for.
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
       - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
       - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
       - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
@@ -68,6 +90,8 @@ services:
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_SERVICE_NAME=bhnocgentic-athena-hunter
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   thousandeyes-analyst:
@@ -82,10 +106,15 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_SERVICE_NAME=bhnocgentic-thousandeyes-analyst
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   audit-monitor:
