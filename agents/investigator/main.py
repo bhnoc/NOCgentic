@@ -434,6 +434,26 @@ async def _run_investigation(
         "Iterate: query, read results, pivot to follow-up queries, until you have enough evidence to answer. "
         "Do NOT write SQL in prose — always use the tool."
     )
+
+    # Inject sanitized operational-context memory (learned facts: test IP ranges,
+    # approved scanners, maintenance windows) so investigations reflect what the
+    # platform has learned and produce fewer false positives. In-process + guarded:
+    # if the memory table/rows are absent or the store is down, the block is empty
+    # and the investigator behaves exactly as before. Memory text is sanitized by
+    # build_memory_block (prompt-injection defense) before it can reach the prompt.
+    mem_block = ""
+    try:
+        from memory_prompt import build_memory_block
+        mems = store.active_memories("investigator", limit=40)
+        mem_block = build_memory_block(mems)
+        if mems:
+            store.bump_memory_usage([m["id"] for m in mems])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("investigator: memory context unavailable: %s", exc)
+    if mem_block:
+        system_prompt = system_prompt + "\n\n" + mem_block
+        store.emit(run_id, "memory_write", {"injected": mem_block.count("\n- ") or mem_block.count("- ")})
+
     user_message = f"{query}\n\n{dt_hint}"
 
     messages = [

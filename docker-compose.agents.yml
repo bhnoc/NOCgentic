@@ -97,6 +97,26 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Memory: operational-context / semantic store (facts, lessons, prompt refinements)
+  # with a draft->candidate->active->retired lifecycle. Active memories are injected
+  # (sanitized) into agent prompts to cut false positives. Internal only.
+  memory:
+    build:
+      context: .
+      dockerfile: agents/memory/Dockerfile
+    expose:
+      - "8009"
+    environment:
+      - PG_DSN=${PG_DSN:-postgresql://nocgentic:nocgentic@postgres:5432/nocgentic}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=bhnocgentic-memory
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   orchestrator:
     build:
       context: .

@@ -217,13 +217,19 @@ class FixtureProvider:
     def __init__(self, script: list[dict]) -> None:
         self._script = list(script)
         self._pos = 0
+        # Records the messages list passed to each chat() call, so tests can
+        # assert what system/user content the loop actually sent to the model
+        # (e.g. that injected operational memory reached the system prompt).
+        self.seen_messages: list[list] = []
 
     async def chat(
         self,
-        messages: list,  # noqa: ARG002
+        messages: list,
         use_tools: bool = True,  # noqa: ARG002
         temperature: float = 0.3,  # noqa: ARG002
     ) -> tuple[str, list[ToolCall]]:
+        # Deep-ish snapshot of the message contents for assertions.
+        self.seen_messages.append([dict(m) if isinstance(m, dict) else m for m in messages])
         if self._pos >= len(self._script):
             raise IndexError(
                 f"FixtureProvider script exhausted at position {self._pos} "

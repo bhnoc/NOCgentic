@@ -652,3 +652,288 @@ def alert_transitions(alert_id: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Memory: operational-context memory store
+# ---------------------------------------------------------------------------
+
+MEMORY_STATUSES: set[str] = {"draft", "candidate", "active", "retired"}
+
+MEMORY_CATEGORIES: set[str] = {"fact", "prompt_refinement", "preference", "lesson_learned"}
+
+MEMORY_LIFECYCLE: dict[str, set[str]] = {
+    "draft":     {"candidate", "retired"},
+    "candidate": {"active", "retired", "draft"},
+    "active":    {"retired", "candidate"},
+    "retired":   set(),
+}
+
+
+def upsert_memory(
+    agent_slug: str,
+    key: str,
+    value: Any,
+    category: str = "fact",
+    context: str | None = None,
+    rationale: str | None = None,
+    confidence_pct: int | None = None,
+    run_id: str | None = None,
+) -> dict:
+    """Insert a new memory or create a new version for an existing (agent_slug, key).
+
+    If (agent_slug, key) already exists, inserts a new row with version = max(version)+1
+    and status 'draft'. Otherwise inserts version 1.
+
+    Raises ValueError if category is not in MEMORY_CATEGORIES.
+    Returns {id, agent_slug, key, version, memory_status}.
+    """
+    if category not in MEMORY_CATEGORIES:
+        raise ValueError(f"unknown category: {category}")
+
+    memory_id = uuid4().hex
+    pool = _get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO agent_memory
+                (id, agent_slug, key, value, context, category, memory_status,
+                 version, rationale, confidence_pct, run_id)
+            VALUES (
+                %s, %s, %s, %s, %s, %s, 'draft',
+                COALESCE(
+                    (SELECT MAX(version) + 1 FROM agent_memory
+                     WHERE agent_slug = %s AND key = %s),
+                    1
+                ),
+                %s, %s, %s
+            )
+            RETURNING id, agent_slug, key, version, memory_status
+            """,
+            (
+                memory_id, agent_slug, key, Jsonb(value), context, category,
+                agent_slug, key,
+                rationale, confidence_pct, run_id,
+            ),
+        ).fetchone()
+        conn.commit()
+    assert row is not None
+    return {
+        "id": row[0],
+        "agent_slug": row[1],
+        "key": row[2],
+        "version": row[3],
+        "memory_status": row[4],
+    }
+
+
+def get_memory(memory_id: str) -> dict | None:
+    """Return all columns for a memory row, or None if not found."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, agent_slug, key, value, context, category, memory_status,
+                   version, rationale, confidence_pct, run_id, usage_count,
+                   drift_score_pct, promoted_at, retired_at, created_at, updated_at
+            FROM agent_memory
+            WHERE id = %s
+            """,
+            (memory_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "agent_slug": row[1],
+        "key": row[2],
+        "value": row[3],
+        "context": row[4],
+        "category": row[5],
+        "memory_status": row[6],
+        "version": row[7],
+        "rationale": row[8],
+        "confidence_pct": row[9],
+        "run_id": row[10],
+        "usage_count": row[11],
+        "drift_score_pct": row[12],
+        "promoted_at": row[13],
+        "retired_at": row[14],
+        "created_at": row[15],
+        "updated_at": row[16],
+    }
+
+
+def list_memories(
+    agent_slug: str | None = None,
+    status: str | None = None,
+    category: str | None = None,
+) -> list[dict]:
+    """Return memories, optionally filtered by agent_slug, status, and/or category.
+
+    Ordered by confidence_pct DESC NULLS LAST, usage_count DESC, updated_at DESC.
+    """
+    pool = _get_pool()
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if agent_slug is not None:
+        conditions.append("agent_slug = %s")
+        params.append(agent_slug)
+    if status is not None:
+        conditions.append("memory_status = %s")
+        params.append(status)
+    if category is not None:
+        conditions.append("category = %s")
+        params.append(category)
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, agent_slug, key, value, context, category, memory_status,
+                   version, rationale, confidence_pct, run_id, usage_count,
+                   drift_score_pct, promoted_at, retired_at, created_at, updated_at
+            FROM agent_memory
+            {where_clause}
+            ORDER BY confidence_pct DESC NULLS LAST, usage_count DESC, updated_at DESC
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "agent_slug": r[1],
+            "key": r[2],
+            "value": r[3],
+            "context": r[4],
+            "category": r[5],
+            "memory_status": r[6],
+            "version": r[7],
+            "rationale": r[8],
+            "confidence_pct": r[9],
+            "run_id": r[10],
+            "usage_count": r[11],
+            "drift_score_pct": r[12],
+            "promoted_at": r[13],
+            "retired_at": r[14],
+            "created_at": r[15],
+            "updated_at": r[16],
+        }
+        for r in rows
+    ]
+
+
+def transition_memory(
+    memory_id: str,
+    to_status: str,
+    actor: str = "api",
+) -> dict:
+    """Move a memory to a new status, writing an audit row in memory_events.
+
+    Validates the edge against MEMORY_LIFECYCLE.
+    Raises ValueError for unknown status or illegal edge.
+    Returns {memory_id, from_status, to_status}.
+    """
+    if to_status not in MEMORY_STATUSES:
+        raise ValueError(f"unknown status: {to_status}")
+
+    pool = _get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT memory_status FROM agent_memory WHERE id = %s",
+            (memory_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"memory not found: {memory_id}")
+
+        from_status = row[0]
+
+        if to_status not in MEMORY_LIFECYCLE.get(from_status, set()):
+            raise ValueError(f"illegal memory transition {from_status}->{to_status}")
+
+        event_id = uuid4().hex
+
+        # Timestamps for terminal/promoted states
+        extra_sets = ["memory_status = %s", "updated_at = now()"]
+        extra_params: list[Any] = [to_status]
+        if to_status == "active":
+            extra_sets.append("promoted_at = now()")
+        elif to_status == "retired":
+            extra_sets.append("retired_at = now()")
+
+        conn.execute(
+            f"UPDATE agent_memory SET {', '.join(extra_sets)} WHERE id = %s",
+            extra_params + [memory_id],
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_events (id, memory_id, from_status, to_status, actor)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (event_id, memory_id, from_status, to_status, actor),
+        )
+        conn.commit()
+
+    return {
+        "memory_id": memory_id,
+        "from_status": from_status,
+        "to_status": to_status,
+    }
+
+
+def active_memories(agent_slug: str, limit: int = 40) -> list[dict]:
+    """Return active memories for an agent, ranked by confidence, usage, recency.
+
+    Returns rows with at least {id, key, value, context, category, confidence_pct, usage_count}.
+    """
+    pool = _get_pool()
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, key, value, context, category, confidence_pct, usage_count,
+                   agent_slug, memory_status, version, rationale, run_id,
+                   drift_score_pct, promoted_at, retired_at, created_at, updated_at
+            FROM agent_memory
+            WHERE agent_slug = %s AND memory_status = 'active'
+            ORDER BY confidence_pct DESC NULLS LAST, usage_count DESC, updated_at DESC
+            LIMIT %s
+            """,
+            (agent_slug, limit),
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "key": r[1],
+            "value": r[2],
+            "context": r[3],
+            "category": r[4],
+            "confidence_pct": r[5],
+            "usage_count": r[6],
+            "agent_slug": r[7],
+            "memory_status": r[8],
+            "version": r[9],
+            "rationale": r[10],
+            "run_id": r[11],
+            "drift_score_pct": r[12],
+            "promoted_at": r[13],
+            "retired_at": r[14],
+            "created_at": r[15],
+            "updated_at": r[16],
+        }
+        for r in rows
+    ]
+
+
+def bump_memory_usage(ids: list[str]) -> None:
+    """Increment usage_count for a list of memory ids. No-op on empty list."""
+    if not ids:
+        return
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE agent_memory SET usage_count = usage_count + 1 WHERE id = ANY(%s)",
+            (ids,),
+        )
+        conn.commit()
