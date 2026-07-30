@@ -98,15 +98,22 @@ def _get_pool() -> psycopg_pool.ConnectionPool:
 def init_schema() -> None:
     """Idempotent schema initialisation.
 
-    Reads agents/shared/migrations/0000_recall.sql and executes it.
-    Safe to call multiple times (all DDL is IF NOT EXISTS).
+    Runs every agents/shared/migrations/*.sql in sorted (lexical) order, so
+    numbered migrations (0000_recall.sql, 0001_triage.sql, ...) apply in sequence.
+    Safe to call multiple times (all DDL is IF NOT EXISTS / additive).
     """
-    sql = _MIGRATION_PATH.read_text()
+    migrations_dir = _MIGRATION_PATH.parent
+    files = sorted(migrations_dir.glob("*.sql"))
+    if not files:
+        # Fall back to the single resolved path so the error names a sensible file.
+        files = [_MIGRATION_PATH]
     pool = _get_pool()
     with pool.connection() as conn:
-        conn.execute(sql)
+        for f in files:
+            conn.execute(f.read_text())
         conn.commit()
-    logger.info("store: schema initialised from %s", _MIGRATION_PATH)
+    logger.info("store: schema initialised from %s (%d migration(s))",
+                migrations_dir, len(files))
 
 
 # ---------------------------------------------------------------------------
@@ -406,3 +413,242 @@ def get_run(run_id: str) -> dict:
         for r in event_rows
     ]
     return {"run": run, "events": events}
+
+
+# ---------------------------------------------------------------------------
+# Triage: alert bucket state machine
+# ---------------------------------------------------------------------------
+
+BUCKETS: set[str] = {
+    "alerts",
+    "validating",
+    "validated_true_positive",
+    "validated_false_positive",
+    "validated_bad_hygiene",
+    "tuning_queue",
+    "dismissed",
+}
+
+LEGAL_EDGES: dict[str, set[str]] = {
+    "alerts": {"validating", "dismissed"},
+    "validating": {"validated_true_positive", "validated_false_positive", "validated_bad_hygiene", "alerts"},
+    "validated_false_positive": {"tuning_queue", "dismissed"},
+    "validated_true_positive": {"dismissed"},
+    "validated_bad_hygiene": {"dismissed", "tuning_queue"},
+    "tuning_queue": {"dismissed"},
+    "dismissed": set(),
+}
+
+
+def upsert_alert(
+    dedup_key: str,
+    severity: int,
+    source_ip: str | None = None,
+    dest_ip: str | None = None,
+    alert_type: str | None = None,
+    signature: str | None = None,
+    raw_data: Any = None,
+    connector_source: str | None = None,
+) -> str:
+    """Insert or increment an alert by dedup_key.
+
+    ON CONFLICT increments count, keeps highest severity, refreshes last_seen.
+    Returns the alert id (uuid4 hex).
+    """
+    alert_id = uuid4().hex
+    pool = _get_pool()
+    raw_jsonb = Jsonb(raw_data) if raw_data is not None else None
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO alerts
+                (id, dedup_key, severity, source_ip, dest_ip, alert_type,
+                 signature, raw_data, connector_source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (dedup_key) DO UPDATE SET
+                count      = alerts.count + 1,
+                last_seen  = now(),
+                severity   = GREATEST(alerts.severity, EXCLUDED.severity),
+                updated_at = now()
+            RETURNING id
+            """,
+            (
+                alert_id, dedup_key, severity, source_ip, dest_ip,
+                alert_type, signature, raw_jsonb, connector_source,
+            ),
+        ).fetchone()
+        conn.commit()
+    assert row is not None
+    return row[0]
+
+
+def get_alert(alert_id: str) -> dict | None:
+    """Return all columns for an alert, or None if not found."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, dedup_key, bucket, severity, source_ip, dest_ip,
+                   alert_type, signature, count, raw_data, first_seen,
+                   last_seen, connector_source, created_at, updated_at
+            FROM alerts
+            WHERE id = %s
+            """,
+            (alert_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "dedup_key": row[1],
+        "bucket": row[2],
+        "severity": row[3],
+        "source_ip": row[4],
+        "dest_ip": row[5],
+        "alert_type": row[6],
+        "signature": row[7],
+        "count": row[8],
+        "raw_data": row[9],
+        "first_seen": row[10],
+        "last_seen": row[11],
+        "connector_source": row[12],
+        "created_at": row[13],
+        "updated_at": row[14],
+    }
+
+
+def list_alerts(bucket: str | None = None, severity_min: int | None = None) -> list[dict]:
+    """Return alerts, optionally filtered by bucket and/or minimum severity.
+
+    Ordered by severity DESC, last_seen DESC.
+    """
+    pool = _get_pool()
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if bucket is not None:
+        conditions.append("bucket = %s")
+        params.append(bucket)
+    if severity_min is not None:
+        conditions.append("severity >= %s")
+        params.append(severity_min)
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, dedup_key, bucket, severity, source_ip, dest_ip,
+                   alert_type, signature, count, raw_data, first_seen,
+                   last_seen, connector_source, created_at, updated_at
+            FROM alerts
+            {where_clause}
+            ORDER BY severity DESC, last_seen DESC
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "dedup_key": r[1],
+            "bucket": r[2],
+            "severity": r[3],
+            "source_ip": r[4],
+            "dest_ip": r[5],
+            "alert_type": r[6],
+            "signature": r[7],
+            "count": r[8],
+            "raw_data": r[9],
+            "first_seen": r[10],
+            "last_seen": r[11],
+            "connector_source": r[12],
+            "created_at": r[13],
+            "updated_at": r[14],
+        }
+        for r in rows
+    ]
+
+
+def transition_alert(
+    alert_id: str,
+    to_bucket: str,
+    reason: str | None = None,
+    investigation_run_id: str | None = None,
+    force: bool = False,
+) -> dict:
+    """Move an alert to a new bucket, writing an audit row in bucket_transitions.
+
+    Validates the edge against LEGAL_EDGES unless force=True.
+    Raises ValueError for unknown bucket or illegal edge (without force).
+    Returns {alert_id, from_bucket, to_bucket, forced}.
+    """
+    if to_bucket not in BUCKETS:
+        raise ValueError(f"unknown bucket: {to_bucket}")
+
+    pool = _get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT bucket FROM alerts WHERE id = %s",
+            (alert_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"alert not found: {alert_id}")
+
+        from_bucket = row[0]
+
+        if not force and to_bucket not in LEGAL_EDGES.get(from_bucket, set()):
+            raise ValueError(f"illegal transition {from_bucket}->{to_bucket}")
+
+        transition_id = uuid4().hex
+        conn.execute(
+            """
+            INSERT INTO bucket_transitions
+                (id, alert_id, from_bucket, to_bucket, reason, investigation_run_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (transition_id, alert_id, from_bucket, to_bucket, reason, investigation_run_id),
+        )
+        conn.execute(
+            """
+            UPDATE alerts
+            SET bucket = %s, updated_at = now()
+            WHERE id = %s
+            """,
+            (to_bucket, alert_id),
+        )
+        conn.commit()
+
+    return {
+        "alert_id": alert_id,
+        "from_bucket": from_bucket,
+        "to_bucket": to_bucket,
+        "forced": force,
+    }
+
+
+def alert_transitions(alert_id: str) -> list[dict]:
+    """Return all bucket_transitions for an alert, ordered by transitioned_at."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, alert_id, from_bucket, to_bucket, reason,
+                   investigation_run_id, transitioned_at
+            FROM bucket_transitions
+            WHERE alert_id = %s
+            ORDER BY transitioned_at
+            """,
+            (alert_id,),
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "alert_id": r[1],
+            "from_bucket": r[2],
+            "to_bucket": r[3],
+            "reason": r[4],
+            "investigation_run_id": r[5],
+            "transitioned_at": r[6],
+        }
+        for r in rows
+    ]

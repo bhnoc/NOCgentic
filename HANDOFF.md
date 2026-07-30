@@ -102,7 +102,16 @@ Persistence decided: **Postgres+pgvector** container. First slice: **vector sear
 - ROBUSTNESS FIX: /investigate creates the run + emits "plan" BEFORE constructing the provider, so an immediate provider failure still leaves an auditable trace; provider-init failure → 503 (config problem) not 500 (bug).
 - NOT yet wired into orchestrator/UI (deferred, same as root-cause).
 
-### SLICE 3 — NEXT: triage hub + alert bucket state machine.
+### SLICE 3 — DONE & GREEN (2026-07-30). Triage hub + alert bucket state machine.
+- New migration `agents/shared/migrations/0001_triage.sql`: `alerts` (dedup_key unique, bucket TEXT, severity, ips, signature, count, raw_data) + `bucket_transitions` (from/to bucket, reason, investigation_run_id). init_schema() now globs migrations/*.sql sorted (runs 0000+0001).
+- store.py: added BUCKETS + LEGAL_EDGES state machine + upsert_alert/get_alert/list_alerts/transition_alert(guard+force)/alert_transitions.
+- New service `agents/triage/` (FastAPI :8008): POST /alerts (dedup), GET /triage/queue, POST /triage/{id}/investigate (alerts→validating→verdict, calls investigator, files bucket + 2 audited transitions linked to run_id), GET /triage/{id}, POST /triage/{id}/transition (guarded, force overrides+audits). InvestigatorClient seam (HttpInvestigatorClient prod / Fake for tests). ZERO LLM calls — pure deterministic orchestration + code verdict→bucket mapping.
+- docker-compose: `triage` service (:8008, INVESTIGATOR_URL=http://investigator:8007).
+- Gates: added test_triage.py to acid. Full suite now **82 green** (20+13+11+12+7+19).
+- **Verified from CLEAN**: acid 82 green; guard gate PROVEN to bite (patched LEGAL_EDGES → illegal-edge test fails, restored → passes). Cold `docker compose up postgres investigator triage` → both migrations init in-container; live HTTP: ingest+dedup(count→2), queue ordered, illegal edge→409, unknown→400, force→200+audit, investigate w/ keyless investigator→502 + alert rolled back alerts→validating→alerts (both audited).
+- NOT yet wired into orchestrator/UI (deferred).
+
+### SLICE 3 (original heading, superseded):
 Port VR's alert `bucket` lifecycle (alerts→validating→validated_TP/FP/bad_hygiene + hunting_*) +
 `bucket_transitions` audit + finding contract, with an autonomous triage worker that pulls alerts
 (alert-triage agent / Athena alerts table), runs the investigator loop per alert, and files a

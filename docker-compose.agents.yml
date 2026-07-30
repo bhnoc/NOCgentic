@@ -75,6 +75,28 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Triage hub: alert queue + bucket state machine. An autonomous worker runs the
+  # investigator per alert and files a verdict into a bucket, auditing every move.
+  triage:
+    build:
+      context: .
+      dockerfile: agents/triage/Dockerfile
+    expose:
+      - "8008"
+    environment:
+      - PG_DSN=${PG_DSN:-postgresql://nocgentic:nocgentic@postgres:5432/nocgentic}
+      - INVESTIGATOR_URL=http://investigator:8007
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=bhnocgentic-triage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   orchestrator:
     build:
       context: .
