@@ -1032,6 +1032,344 @@
       75%  { text-shadow: -1px 0 var(--accent-red), 1px 0 var(--frost); }
       100% { text-shadow: 0 0 10px rgba(30,144,255,0.4); }
     }
+
+    /* ---- View Switcher ---- */
+    .view-tabs {
+      display: flex;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+    .view-tab {
+      padding: 8px 18px;
+      font-size: 10px;
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-muted);
+      border: 1px solid transparent;
+      border-bottom: none;
+      cursor: pointer;
+      background: transparent;
+      position: relative;
+      top: 1px;
+      transition: all var(--transition);
+    }
+    .view-tab.active {
+      color: var(--ice-300);
+      border-color: var(--border);
+      background: var(--bg-primary);
+      border-bottom-color: var(--bg-primary);
+    }
+    .view-tab:hover:not(.active) { color: var(--text-secondary); }
+
+    /* ---- Triage Panel ---- */
+    .triage-panel {
+      display: none;
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      flex-direction: column;
+      gap: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .triage-panel.active { display: flex; }
+    .triage-panel-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .triage-title {
+      font-family: var(--font-display);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--ice-400);
+      flex: 1;
+      min-width: 80px;
+    }
+    .trace-load-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .triage-trace-input {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 5px 10px;
+      color: var(--ice-100);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      width: 200px;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+    .triage-trace-input:focus { border-color: var(--ice-500); }
+    .triage-btn {
+      background: transparent;
+      border: 1px solid var(--ice-500);
+      border-radius: var(--radius);
+      padding: 5px 12px;
+      color: var(--ice-300);
+      font-family: var(--font-display);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      transition: all var(--transition);
+      white-space: nowrap;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+    }
+    .triage-btn:hover:not(:disabled) {
+      background: rgba(30,144,255,0.12);
+      color: var(--ice-100);
+      box-shadow: 0 0 10px rgba(30,144,255,0.15);
+    }
+    .triage-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .triage-bucket-group { display: flex; flex-direction: column; gap: 4px; }
+    .triage-bucket-header {
+      font-family: var(--font-display);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--text-muted);
+      padding: 6px 0 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 4px;
+    }
+    .triage-alert-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      transition: border-color var(--transition);
+    }
+    .triage-alert-row:hover { border-color: var(--border-bright); }
+    .triage-alert-sig {
+      flex: 1;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .triage-alert-flow { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+    .triage-alert-count { font-family: var(--font-mono); font-size: 10px; color: var(--ice-400); white-space: nowrap; }
+    .triage-alert-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .triage-verdict-chip {
+      font-size: 9px;
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 1px;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      background: rgba(30,144,255,0.06);
+    }
+    .triage-error-notice {
+      padding: 10px 14px;
+      background: rgba(255,48,80,0.06);
+      border: 1px solid rgba(255,48,80,0.25);
+      border-radius: var(--radius);
+      font-size: 12px;
+      color: #ff6080;
+      font-family: var(--font-mono);
+    }
+    .triage-empty {
+      padding: 30px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-family: var(--font-mono);
+    }
+
+    /* ---- Glass Box Panel ---- */
+    .glass-box-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(0,0,0,0.7);
+      align-items: stretch;
+      justify-content: flex-end;
+    }
+    .glass-box-overlay.open { display: flex; }
+    .glass-box-panel {
+      width: 480px;
+      max-width: 100vw;
+      background: var(--bg-secondary);
+      border-left: 1px solid var(--border-bright);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: slideInRight 0.22s ease;
+    }
+    @keyframes slideInRight {
+      from { transform: translateX(40px); opacity: 0; }
+      to   { transform: translateX(0); opacity: 1; }
+    }
+    .glass-box-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      background: var(--bg-primary);
+    }
+    .glass-box-title {
+      font-family: var(--font-display);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--ice-400);
+    }
+    .glass-box-run-id {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 340px;
+    }
+    .glass-box-close {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-secondary);
+      padding: 4px 10px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      transition: all var(--transition);
+      flex-shrink: 0;
+    }
+    .glass-box-close:hover { border-color: var(--ice-500); color: var(--ice-100); }
+    .glass-box-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .glass-box-body::-webkit-scrollbar { width: 3px; }
+    .glass-box-body::-webkit-scrollbar-thumb { background: var(--border-bright); }
+    .glass-box-status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .glass-box-status-badge {
+      padding: 2px 8px;
+      border-radius: 1px;
+      font-size: 9px;
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .gb-status-running  { background: rgba(0,212,255,0.1); color: var(--frost); border: 1px solid rgba(0,212,255,0.3); animation: pulse 2s infinite; }
+    .gb-status-done     { background: rgba(0,255,136,0.1); color: var(--accent-green); border: 1px solid rgba(0,255,136,0.3); }
+    .gb-status-error    { background: rgba(255,48,80,0.1); color: #ff6080; border: 1px solid rgba(255,48,80,0.3); }
+    .gb-status-pending  { background: rgba(100,120,140,0.15); color: var(--text-muted); border: 1px solid var(--border); }
+    .glass-box-finding {
+      padding: 10px 14px;
+      background: rgba(30,144,255,0.06);
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius);
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-primary);
+    }
+    .glass-box-finding-label {
+      font-family: var(--font-display);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--ice-400);
+      margin-bottom: 6px;
+    }
+    .timeline { display: flex; flex-direction: column; }
+    .timeline-item {
+      display: flex;
+      gap: 12px;
+      padding-bottom: 12px;
+    }
+    .timeline-item:last-child { padding-bottom: 0; }
+    .timeline-line {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+      width: 20px;
+    }
+    .timeline-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ice-500);
+      border: 2px solid var(--bg-secondary);
+      box-shadow: 0 0 6px var(--ice-glow);
+      flex-shrink: 0;
+      margin-top: 3px;
+    }
+    .timeline-dot.dot-error   { background: var(--accent-red); box-shadow: 0 0 6px rgba(255,48,80,0.4); }
+    .timeline-dot.dot-verdict { background: var(--accent-green); box-shadow: 0 0 8px rgba(0,255,136,0.4); }
+    .timeline-dot.dot-plan    { background: var(--frost); box-shadow: 0 0 6px var(--frost); }
+    .timeline-connector { flex: 1; width: 1px; background: var(--border); margin-top: 2px; }
+    .timeline-item:last-child .timeline-connector { display: none; }
+    .timeline-content { flex: 1; min-width: 0; }
+    .timeline-event-type {
+      font-family: var(--font-display);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--ice-400);
+      margin-bottom: 3px;
+    }
+    .timeline-data {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .timeline-ts { font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); margin-top: 3px; }
+    .glass-box-loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      padding: 20px 0;
+      font-family: var(--font-mono);
+    }
   </style>
 </head>
 <body>
@@ -1060,6 +1398,12 @@
 
   <!-- ===== MAIN CHAT ===== -->
   <main>
+    <!-- View Switcher -->
+    <div class="view-tabs" id="view-tabs">
+      <button class="view-tab active" id="tab-chat" onclick="switchView('chat')">Chat</button>
+      <button class="view-tab" id="tab-triage" onclick="switchView('triage')">Triage</button>
+    </div>
+
     <div class="chat-messages" id="chat-messages">
       <div class="welcome" id="welcome-banner">
         <img src="https://blackhat.com/images/logo.png" alt="Black Hat" style="height:48px; margin-bottom:8px; filter: brightness(1.2);" />
@@ -1079,7 +1423,7 @@
       </div>
     </div>
 
-    <div class="chat-input-area">
+    <div class="chat-input-area" id="chat-input-area">
       <div class="input-row">
         <textarea
           id="query-input"
@@ -1094,7 +1438,34 @@
       </div>
       <div class="input-hint">ENTER to send // SHIFT+ENTER new line // 5000 char max</div>
     </div>
+
+    <!-- Triage Queue Panel -->
+    <div class="triage-panel" id="triage-panel">
+      <div class="triage-panel-header">
+        <span class="triage-title">Triage Queue</span>
+        <div class="trace-load-row">
+          <input class="triage-trace-input" id="triage-trace-input" placeholder="run_id to trace..." />
+          <button class="triage-btn" onclick="openGlassBoxById()">Load trace</button>
+        </div>
+        <button class="triage-btn" onclick="loadTriageQueue()">Refresh</button>
+      </div>
+      <div id="triage-queue-content"></div>
+    </div>
   </main>
+
+  <!-- Glass Box Overlay -->
+  <div class="glass-box-overlay" id="glass-box-overlay" onclick="closeGlassBoxIfBg(event)">
+    <div class="glass-box-panel" id="glass-box-panel">
+      <div class="glass-box-header">
+        <div>
+          <div class="glass-box-title">Glass Box // Reasoning Trace</div>
+          <div class="glass-box-run-id" id="glass-box-run-id"></div>
+        </div>
+        <button class="glass-box-close" onclick="closeGlassBox()">Close</button>
+      </div>
+      <div class="glass-box-body" id="glass-box-body"></div>
+    </div>
+  </div>
 
   <!-- ===== SIDEBAR ===== -->
   <aside class="sidebar">
@@ -1709,6 +2080,279 @@
   function elapsed(start, end) { const ms = new Date(end) - new Date(start); return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`; }
   function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
 
+  // ========== View Switcher ==========
+  let currentView = 'chat';
+
+  function switchView(view) {
+    currentView = view;
+    const chatMsgs = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input-area');
+    const triagePanel = document.getElementById('triage-panel');
+    const tabChat = document.getElementById('tab-chat');
+    const tabTriage = document.getElementById('tab-triage');
+    if (view === 'chat') {
+      chatMsgs.style.display = '';
+      chatInput.style.display = '';
+      triagePanel.classList.remove('active');
+      tabChat.classList.add('active');
+      tabTriage.classList.remove('active');
+    } else {
+      chatMsgs.style.display = 'none';
+      chatInput.style.display = 'none';
+      triagePanel.classList.add('active');
+      tabChat.classList.remove('active');
+      tabTriage.classList.add('active');
+      loadTriageQueue();
+    }
+  }
+
+  // ========== Triage Queue ==========
+  const BUCKET_LABELS = {
+    alerts: 'Alerts',
+    validating: 'Validating',
+    validated_true_positive: 'True Positive',
+    validated_false_positive: 'False Positive',
+    escalated: 'Escalated',
+    closed: 'Closed',
+  };
+
+  async function loadTriageQueue() {
+    const content = document.getElementById('triage-queue-content');
+    content.innerHTML = '<div class="glass-box-loading"><div class="thinking-dots"><span></span><span></span><span></span></div>Loading queue...</div>';
+    try {
+      const resp = await fetch('/api/v1/triage/queue', { credentials: 'same-origin' });
+      if (!resp.ok) {
+        content.innerHTML = `<div class="triage-error-notice">Failed to load queue: HTTP ${escHtml(String(resp.status))}</div>`;
+        return;
+      }
+      const data = await resp.json();
+      const alerts = data.alerts || [];
+      if (alerts.length === 0) {
+        content.innerHTML = '<div class="triage-empty">No alerts in the queue.</div>';
+        return;
+      }
+      // Group by bucket
+      const grouped = {};
+      alerts.forEach(a => {
+        const b = a.bucket || 'alerts';
+        if (!grouped[b]) grouped[b] = [];
+        grouped[b].push(a);
+      });
+      let html = '';
+      Object.keys(grouped).forEach(bucket => {
+        const label = BUCKET_LABELS[bucket] || escHtml(bucket);
+        html += `<div class="triage-bucket-group"><div class="triage-bucket-header">${escHtml(label)} (${grouped[bucket].length})</div>`;
+        grouped[bucket].forEach(a => {
+          html += buildTriageRow(a);
+        });
+        html += '</div>';
+      });
+      content.innerHTML = html;
+      // Wire up triage buttons after insertion
+      content.querySelectorAll('[data-triage-btn]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-triage-btn');
+          runTriageOnAlert(id, btn);
+        });
+      });
+    } catch (err) {
+      content.innerHTML = `<div class="triage-error-notice">Error: ${escHtml(err && err.message || 'Network error')}</div>`;
+    }
+  }
+
+  // Triage alerts carry a NUMERIC severity from the store (Suricata convention:
+  // 1 = highest ... 4 = low). Map it to a label; also tolerate a string severity.
+  function sevLabel(raw) {
+    if (typeof raw === 'number') return { 1:'critical', 2:'high', 3:'medium', 4:'low' }[raw] || 'informational';
+    return String(raw || 'low').toLowerCase();
+  }
+
+  function buildTriageRow(a) {
+    const sev = sevLabel(a.severity);
+    const sevClass = { critical:'sev-critical', high:'sev-high', medium:'sev-medium', low:'sev-low', informational:'sev-info' }[sev] || 'sev-low';
+    const flow = (a.source_ip || '') + (a.dest_ip ? ' > ' + a.dest_ip : '');
+    const count = a.count ? 'x' + escHtml(String(a.count)) : '';
+    const inAlerts = !a.bucket || a.bucket === 'alerts';
+    const triageBtn = inAlerts
+      ? `<button class="triage-btn" data-triage-btn="${escHtml(String(a.id))}">Run triage</button>`
+      : '';
+    return `<div class="triage-alert-row" id="triage-row-${escHtml(String(a.id))}">
+      <span class="sev-badge ${sevClass}">${escHtml(sev)}</span>
+      <span class="triage-alert-sig">${escHtml(a.signature || a.description || a.id)}</span>
+      ${flow ? `<span class="triage-alert-flow">${escHtml(flow)}</span>` : ''}
+      ${count ? `<span class="triage-alert-count">${count}</span>` : ''}
+      <span class="triage-alert-actions" id="triage-actions-${escHtml(String(a.id))}">${triageBtn}</span>
+    </div>`;
+  }
+
+  async function runTriageOnAlert(alertId, btn) {
+    if (btn) btn.disabled = true;
+    const actions = document.getElementById('triage-actions-' + alertId);
+    if (actions) actions.innerHTML = '<span class="triage-verdict-chip">Running...</span>';
+    try {
+      const resp = await fetch('/api/v1/triage/' + encodeURIComponent(alertId) + '/investigate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({}),
+      });
+      if (!resp.ok) {
+        if (actions) actions.innerHTML = `<span class="triage-verdict-chip" style="color:#ff6080">Error ${escHtml(String(resp.status))}</span>`;
+        return;
+      }
+      const data = await resp.json();
+      const verdict = data.verdict_bucket || 'done';
+      const runId = data.investigation_run_id;
+      let actionsHtml = `<span class="triage-verdict-chip">${escHtml(verdict)}</span>`;
+      if (runId) {
+        actionsHtml += ` <button class="triage-btn" onclick="openGlassBox(${JSON.stringify(String(runId))})">View trace</button>`;
+      }
+      if (actions) actions.innerHTML = actionsHtml;
+    } catch (err) {
+      if (actions) actions.innerHTML = `<span class="triage-verdict-chip" style="color:#ff6080">${escHtml(err && err.message || 'Error')}</span>`;
+    }
+  }
+
+  // ========== Glass Box ==========
+  const EVENT_TYPE_LABELS = {
+    plan: 'Planned investigation',
+    tool_call: 'Queried Athena',
+    tool_result: 'Read results',
+    verdict: 'Reached verdict',
+    synthesis: 'Wrote finding',
+    error: 'Error',
+    anomaly_detected: 'Anomaly detected',
+    cluster: 'Clustered events',
+    recall: 'Recalled context',
+    correlate: 'Correlated events',
+  };
+
+  function openGlassBoxById() {
+    const input = document.getElementById('triage-trace-input');
+    const runId = input ? input.value.trim() : '';
+    if (!runId) return;
+    openGlassBox(runId);
+  }
+
+  async function openGlassBox(runId) {
+    const overlay = document.getElementById('glass-box-overlay');
+    const body = document.getElementById('glass-box-body');
+    const runIdEl = document.getElementById('glass-box-run-id');
+    overlay.classList.add('open');
+    runIdEl.textContent = runId;
+    body.innerHTML = '<div class="glass-box-loading"><div class="thinking-dots"><span></span><span></span><span></span></div>Loading trace...</div>';
+    try {
+      const resp = await fetch('/api/v1/runs/' + encodeURIComponent(runId), { credentials: 'same-origin' });
+      if (!resp.ok) {
+        body.innerHTML = `<div class="triage-error-notice">Failed to load trace: HTTP ${escHtml(String(resp.status))}</div>`;
+        return;
+      }
+      const data = await resp.json();
+      renderGlassBox(data);
+    } catch (err) {
+      body.innerHTML = `<div class="triage-error-notice">Error: ${escHtml(err && err.message || 'Network error')}</div>`;
+    }
+  }
+
+  function renderGlassBox(data) {
+    const body = document.getElementById('glass-box-body');
+    const run = data.run || {};
+    const events = Array.isArray(data.events) ? data.events : [];
+    const status = run.status || 'unknown';
+    const statusClass = status === 'done' || status === 'completed' ? 'gb-status-done'
+      : status === 'error' || status === 'failed' ? 'gb-status-error'
+      : status === 'running' ? 'gb-status-running'
+      : 'gb-status-pending';
+
+    let html = `<div class="glass-box-status-row">
+      <span class="glass-box-status-badge ${statusClass}">${escHtml(status)}</span>
+      <span>Run: ${escHtml(String(run.kind || run.id || ''))}</span>
+    </div>`;
+
+    // Finding summary if present
+    const finding = run.output && (run.output.finding || run.output);
+    const summary = finding && (finding.summary || finding.recommendation);
+    if (summary) {
+      const sev = finding.severity || finding.verdict;
+      html += `<div class="glass-box-finding">
+        <div class="glass-box-finding-label">Finding${sev ? ' // ' + escHtml(String(sev)) : ''}</div>
+        ${escHtml(String(summary))}
+      </div>`;
+    }
+
+    if (events.length === 0) {
+      html += '<div class="triage-empty">No trace events recorded.</div>';
+    } else {
+      html += '<div class="timeline">';
+      events.forEach((ev, idx) => {
+        const evType = ev.event_type || ev.type || 'unknown';
+        const label = EVENT_TYPE_LABELS[evType] || escHtml(evType);
+        const dotClass = evType === 'error' ? 'dot-error'
+          : evType === 'verdict' ? 'dot-verdict'
+          : evType === 'plan' ? 'dot-plan'
+          : '';
+        const dataSnippet = extractEventSnippet(evType, ev.data);
+        const ts = ev.ts ? new Date(ev.ts).toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '';
+        html += `<div class="timeline-item">
+          <div class="timeline-line">
+            <div class="timeline-dot ${dotClass}"></div>
+            <div class="timeline-connector"></div>
+          </div>
+          <div class="timeline-content">
+            <div class="timeline-event-type">${escHtml(label)}</div>
+            ${dataSnippet ? `<div class="timeline-data">${escHtml(dataSnippet)}</div>` : ''}
+            ${ts ? `<div class="timeline-ts">${ts}</div>` : ''}
+          </div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    body.innerHTML = html;
+  }
+
+  function extractEventSnippet(evType, evData) {
+    if (!evData) return '';
+    try {
+      if (evType === 'tool_call') {
+        return evData.sql || evData.query || evData.tool || JSON.stringify(evData).slice(0, 300);
+      }
+      if (evType === 'tool_result') {
+        if (typeof evData.row_count === 'number') return 'rows returned: ' + evData.row_count;
+        if (evData.rejected) return 'rejected: ' + String(evData.rejected);
+        if (Array.isArray(evData.rows)) return 'rows returned: ' + evData.rows.length;
+        return JSON.stringify(evData).slice(0, 300);
+      }
+      if (evType === 'verdict') {
+        const parts = [];
+        if (evData.severity) parts.push('severity: ' + evData.severity);
+        if (evData.verdict) parts.push('verdict: ' + evData.verdict);
+        if (evData.high_signals) parts.push('signals: ' + String(evData.high_signals).slice(0, 150));
+        return parts.join(' | ') || JSON.stringify(evData).slice(0, 200);
+      }
+      if (evType === 'plan') {
+        return evData.plan || evData.description || JSON.stringify(evData).slice(0, 200);
+      }
+      if (evType === 'synthesis') {
+        return evData.summary || evData.text || JSON.stringify(evData).slice(0, 200);
+      }
+      if (evType === 'error') {
+        return evData.message || evData.error || JSON.stringify(evData).slice(0, 200);
+      }
+      const s = typeof evData === 'string' ? evData : JSON.stringify(evData);
+      return s.slice(0, 300);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function closeGlassBox() {
+    document.getElementById('glass-box-overlay').classList.remove('open');
+  }
+
+  function closeGlassBoxIfBg(evt) {
+    if (evt.target === document.getElementById('glass-box-overlay')) closeGlassBox();
+  }
+
   async function checkApiHealth() {
     try {
       const resp = await fetch('/health', { signal: AbortSignal.timeout(3000) });
@@ -1723,6 +2367,16 @@
   connectWS();
   loadInitialAlerts();
   applyMobileAlertMode();
+
+  // Deep links: ?view=triage opens the triage queue; ?trace=<run_id> opens the
+  // glass-box trace. Makes views shareable and lets a headless browser land
+  // directly on a surface.
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('view') === 'triage') switchView('triage');
+    const traceId = params.get('trace');
+    if (traceId && /^[A-Za-z0-9-]{8,64}$/.test(traceId)) openGlassBox(traceId);
+  } catch (e) { /* non-fatal */ }
   // Real alerts now trickle from the Athena-backed cache via WebSocket.
   // Demo ticker is kept as a fallback only if the server feed is silent.
   setTimeout(() => {
