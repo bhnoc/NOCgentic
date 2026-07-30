@@ -372,3 +372,19 @@ export LLAMA_CACHE=/home/ubuntu/models
   `actions.runner.bhnoc-NOCgentic.aing-nocgentic.service`, runs as `ubuntu` (in the `docker`
   group + passwordless sudo). Registered with label `nocgentic`. **Distinct** from the
   `postcog` runner at `/home/ubuntu/actions-runner` — same box, different repo.
+
+---
+
+## level9000 services (branch `level9000`, added 2026-07-30)
+
+The stack gained a `postgres` (pgvector/pgvector:pg16) container plus five internal FastAPI services
+(`investigator` 8007, `triage` 8008, `memory` 8009, `hunter` 8010, `root-cause` 8006). They're all in
+`docker-compose.agents.yml` and come up with the normal `docker compose ... up -d --build`. Extra deploy
+notes:
+- **Postgres has a named volume `pgdata`** — persistent across recreates. First deploy creates the DB;
+  schema auto-migrates on service startup from `agents/shared/migrations/*.sql` (idempotent).
+- Set `PG_PASSWORD` (and optionally `PG_USER`/`PG_DB`) in `.env.s3` for a non-default DB password;
+  the service `PG_DSN` defaults line up with `postgres:5432/nocgentic`.
+- `investigator`/`root-cause` use the existing `GEMINI_API_KEY`; no new secrets. `hunter`'s scheduler
+  auto-runs (`HUNTER_AUTORUN=1` default) — set to `0` to keep it dormant until you want proactive hunts.
+- Day-2 details (sweeps, traces, gotchas) live in [[../ops/skill.md]] under "level9000 services".

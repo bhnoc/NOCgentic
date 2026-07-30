@@ -507,3 +507,62 @@ V=$(ssh ubuntu@<IP> 'sudo docker exec app-athena-hunter-1 python -c "import lang
 python3 -m venv /tmp/t && /tmp/t/bin/pip install "langchain-google-genai==$V" langchain-core
 # then import agents/shared/llm_client.py and call llm_complete(..., thinking_budget=0)
 ```
+
+---
+
+## level9000 services (added 2026-07-30, branch `level9000`)
+
+Six new internal services + a Postgres/pgvector store extend the platform from single-pass Q&A to
+an autonomous SOC. All are `expose:`-only (internal), reached over the docker network.
+
+| Service | Port | Role |
+|---------|------|------|
+| `postgres` | 5432 | pgvector store: reasoning traces, incidents, memory, alerts, hunts. Volume `pgdata`. |
+| `root-cause` | 8006 | Drain template clustering + pgvector recall + agentic root-cause of anomalies |
+| `investigator` | 8007 | Autonomous multi-step Athena tool loop + glass-box trace (the analyst brain) |
+| `triage` | 8008 | Alert queue + bucket state machine; runs investigator per alert, files a verdict |
+| `memory` | 8009 | Operational-context memory (facts/lessons) + self-improving drift sweep |
+| `hunter` | 8010 | Proactive threat-hunting scheduler over MITRE templates |
+
+### Data store
+- One Postgres DB `nocgentic` (user/pw `nocgentic`, override via `PG_USER/PG_PASSWORD/PG_DB`). Schema is
+  code-managed: `agents/shared/migrations/*.sql` run in sorted order by `store.init_schema()` on each
+  service's startup (idempotent, `IF NOT EXISTS`). To add a table, drop a new `NNNN_*.sql` beside them.
+- **The migration files ship inside `agents/shared/`** so every service image that copies `agents/shared/`
+  can init the schema. Do NOT move them back under a single service.
+- `pgdata` is a named volume — it SURVIVES `docker compose down`. For a truly clean reset use
+  `docker compose -f docker-compose.agents.yml down -v` (drops the volume). A stale volume once made a
+  smoke test read wrong; reset it when smoke results look off.
+
+### LLM / creds posture (same as the rest of the app)
+- `investigator` and `root-cause` need `GEMINI_API_KEY` for their live LLM path (tool-calling + embeddings).
+  Without a key they degrade GRACEFULLY: investigator `/investigate` → 503 + a persisted failed run;
+  root-cause embeds via a deterministic stub. `triage`/`memory`/`hunter` do NOT call the LLM directly.
+- Embeddings use Gemini `text-embedding-004` (same `GEMINI_API_KEY`). Force the offline stub with
+  `EMBED_PROVIDER=stub`.
+
+### Common ops
+```bash
+CF="docker compose -f docker-compose.agents.yml"
+# bring up just the level9000 core:
+$CF up -d --build postgres investigator triage memory hunter root-cause
+# health (internal — exec in):
+$CF exec investigator python -c "import urllib.request;print(urllib.request.urlopen('http://localhost:8007/health').read())"
+# hunter scheduler on/off: env HUNTER_AUTORUN=0 disables the background loop; SCHED_TICK_SECONDS sets cadence.
+# run the memory self-improve sweep (safe default is 'off'; 'shadow' proposes; 'live' acts):
+$CF exec memory python -c "import urllib.request,json;r=urllib.request.Request('http://localhost:8009/memory/sweep',data=json.dumps({'mode':'shadow'}).encode(),headers={'content-type':'application/json'});print(urllib.request.urlopen(r).read())"
+# inspect a reasoning trace: GET investigator/triage/root-cause /runs/<id>, or query agent_events directly:
+$CF exec postgres psql -U nocgentic -d nocgentic -c "select event_type,seq from agent_events where run_id='<id>' order by seq;"
+```
+
+### Regression gate (grew to 321 python tests)
+`bash agents/root-cause/qa/acid.sh` runs all 8 python suites (needs a reachable Postgres; it starts a
+throwaway `nocgentic-pgtest` on host:5432 if none). `bash agents/root-cause/qa/smoke.sh` is the fast check.
+web-server: `npm run test --workspace=packages/web-server` (36 vitest, includes the /api/v1 proxy routes).
+
+### NOT wired into the orchestrator yet
+The orchestrator's intent classifier still routes only to alert-triage / thousandeyes / athena-hunter.
+Adding `investigator`/`triage`/`root-cause` as routable intents requires editing the tuned classifier and
+re-passing `bench/prompt_eval/run_eval.py` — which runs against the LIVE app + Gemini. Do that ON/against
+the box, not blind. The services are reachable today via the web-server proxy (`/api/v1/investigate`,
+`/api/v1/triage/*`) and the Triage/Glass-Box UI tabs.

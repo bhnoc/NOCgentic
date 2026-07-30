@@ -138,8 +138,26 @@ Persistence decided: **Postgres+pgvector** container. First slice: **vector sear
 - **Verified from CLEAN**: cold compose up, 7 templates registered, enable/disable live, and a failed hunt (keyless investigator → 502) does NOT set last_run_at → it RETRIES. Confirmed over HTTP.
 - Delivers: Proactive Threat Hunting, 24/7 hunt, MITRE TTP extraction.
 
+### SLICE 7 — DONE & GREEN (2026-07-30). Self-improving memory (drift engine).
+- `agents/shared/drift_stats.py` (PURE): two_proportion_z_test, wilson_interval, cusum_upper (k=0.25,h=5), assess_drift (alert z>Z_99 & ≥5pp / watch z>Z_95 or cusum / improving z<-Z_99 & ≤-5pp), plan_action — EXACT ports of VR driftStats.ts.
+- migration `0004_memory_drift.sql`: memory_outcomes + memory_proposals. store.py: record_memory_outcome, memory_outcomes_split, assess_memory_drift, update_drift_score, create/list_memory_proposals, active_or_candidate_memories.
+- memory service: POST /memory/{id}/outcome, GET /memory/proposals, POST /memory/sweep {off|shadow|live}. off=measure, shadow=proposals no-change, live=transition+audit. Retired excluded (convergence). Zero LLM.
+- Gates: test_drift_stats (44 pure) + test_memory_selfimprove (24 PG). Full acid **321 green**. Alert-decision gate PROVEN to bite (neuter z>z_crit → 4 fail). Note: first neuter attempt was a false pass (sed didn't match `test["z"] > z_crit`) — always confirm the gate actually went red.
+- Delivers: Automated Learning (self-tuning memory by outcome). Outcome feed is API-driven (/outcome); auto-wiring from run results is a light future touch.
+
+## FEATURE COVERAGE vs original ask (2026-07-30)
+DONE (built, tested, container-verified): Autonomous AI SOC Analyst loop (investigator), Proactive Threat
+Hunting (hunter), Glass-Box Transparency (agent_events trace + UI panel), Operational Context Memory +
+Semantic DB (memory), Automated Learning (drift self-improve), Investigations Triage Hub (triage + UI),
+AI Chatbot Interface (existing chat + proxy), Vector search over traces + agentic root-cause (root-cause),
+Intelligent data querying (NL→SQL investigator loop), Customizable policies (memory as operational policy).
+NOT DONE / DEFERRED: Autonomous agent collaboration (orchestrator delegation across new agents — blocked
+on orchestrator wiring), Communicators/AI-interviewer (Slack — that's PostCog's domain), Remediators/
+0-click containment (needs real infra + HITL), 90+ integrations & multi-tenant (explicitly out of scope),
+bundled threat intel. Orchestrator intent-routing of the new services is the key gap (see blocker below).
+
 ## CURRENT STANDING (2026-07-30)
-Branch level9000, 10 commits past main. Python acid **253 green** + web-server vitest 36 green. Docker: colima;
+Branch level9000, 12 commits past main. Python acid **321 green** + web-server vitest 36 green. Docker: colima;
 throwaway `nocgentic-pgtest` on host:5432 for the acid gate (NOTE: compose has a `pgdata` volume — use
 `docker compose down -v` for a truly clean container smoke). NOT deployed to AING box (local only).
 
