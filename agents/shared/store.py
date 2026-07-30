@@ -937,3 +937,231 @@ def bump_memory_usage(ids: list[str]) -> None:
             (ids,),
         )
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Hunter: threat-hunt registry + scheduler state
+# ---------------------------------------------------------------------------
+
+def register_hunts(templates: list[dict]) -> None:
+    """Idempotent upsert of hunt templates by stable id.
+
+    On conflict, updates name/mitre_*/hypothesis/hunt_query/interval_hours
+    from the template but preserves the operator-controlled enabled flag and
+    last_run_at so scheduled state and toggles are not clobbered.
+    """
+    pool = _get_pool()
+    with pool.connection() as conn:
+        for t in templates:
+            conn.execute(
+                """
+                INSERT INTO hunts
+                    (id, name, mitre_tactic, mitre_technique, hypothesis,
+                     hunt_query, enabled, interval_hours)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    name            = EXCLUDED.name,
+                    mitre_tactic    = EXCLUDED.mitre_tactic,
+                    mitre_technique = EXCLUDED.mitre_technique,
+                    hypothesis      = EXCLUDED.hypothesis,
+                    hunt_query      = EXCLUDED.hunt_query,
+                    interval_hours  = EXCLUDED.interval_hours
+                    -- enabled and last_run_at intentionally not updated on conflict
+                """,
+                (
+                    t["id"],
+                    t["name"],
+                    t["mitre_tactic"],
+                    t["mitre_technique"],
+                    t.get("hypothesis"),
+                    t["hunt_query"],
+                    t.get("enabled", True),
+                    t.get("interval_hours", 24),
+                ),
+            )
+        conn.commit()
+    logger.info("store: registered %d hunt template(s)", len(templates))
+
+
+def list_hunts() -> list[dict]:
+    """Return all hunt rows ordered by id."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, mitre_tactic, mitre_technique, hypothesis,
+                   hunt_query, enabled, interval_hours, last_run_at, created_at
+            FROM hunts
+            ORDER BY id
+            """,
+        ).fetchall()
+    return [_hunt_row(r) for r in rows]
+
+
+def get_hunt(hunt_id: str) -> dict | None:
+    """Return a single hunt row, or None if not found."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, name, mitre_tactic, mitre_technique, hypothesis,
+                   hunt_query, enabled, interval_hours, last_run_at, created_at
+            FROM hunts
+            WHERE id = %s
+            """,
+            (hunt_id,),
+        ).fetchone()
+    return _hunt_row(row) if row is not None else None
+
+
+def set_hunt_enabled(hunt_id: str, enabled: bool) -> dict | None:
+    """Toggle the enabled flag for a hunt. Returns updated row or None if not found."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            UPDATE hunts
+            SET enabled = %s
+            WHERE id = %s
+            RETURNING id, name, mitre_tactic, mitre_technique, hypothesis,
+                      hunt_query, enabled, interval_hours, last_run_at, created_at
+            """,
+            (enabled, hunt_id),
+        ).fetchone()
+        conn.commit()
+    return _hunt_row(row) if row is not None else None
+
+
+def mark_hunt_ran(hunt_id: str, ts: datetime) -> None:
+    """Set last_run_at to the supplied ts (caller-injected, not DB now())."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE hunts SET last_run_at = %s WHERE id = %s",
+            (ts, hunt_id),
+        )
+        conn.commit()
+
+
+def due_hunts(now: datetime) -> list[dict]:
+    """Return enabled hunts that are due to run.
+
+    A hunt is due if:
+      - enabled is True, AND
+      - last_run_at IS NULL  (never run), OR
+      - last_run_at + interval_hours <= now
+
+    Pure function over the stored hunt rows — no wall-clock calls inside.
+    `now` is injected by the caller so tests can pass a fixed datetime.
+    """
+    from datetime import timedelta
+
+    all_hunts = list_hunts()
+    result: list[dict] = []
+    for hunt in all_hunts:
+        if not hunt["enabled"]:
+            continue
+        last = hunt["last_run_at"]
+        if last is None:
+            result.append(hunt)
+        else:
+            # Ensure both sides are offset-aware for comparison
+            last_aware: datetime = last
+            if last_aware.tzinfo is None:
+                last_aware = last_aware.replace(tzinfo=timezone.utc)
+            now_aware: datetime = now
+            if now_aware.tzinfo is None:
+                now_aware = now_aware.replace(tzinfo=timezone.utc)
+            deadline = last_aware + timedelta(hours=hunt["interval_hours"])
+            if now_aware >= deadline:
+                result.append(hunt)
+    return result
+
+
+def record_hunt_run(
+    hunt_id: str,
+    investigation_run_id: str | None,
+    verdict: str | None,
+    severity: str | None,
+    mitre_technique: str | None,
+    summary: str | None,
+) -> str:
+    """Insert a hunt_run row and return its id (uuid4 hex)."""
+    run_id = uuid4().hex
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO hunt_runs
+                (id, hunt_id, investigation_run_id, verdict, severity,
+                 mitre_technique, summary)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (run_id, hunt_id, investigation_run_id, verdict, severity,
+             mitre_technique, summary),
+        )
+        conn.commit()
+    return run_id
+
+
+def list_hunt_runs(
+    hunt_id: str | None = None,
+    since: datetime | None = None,
+) -> list[dict]:
+    """Return hunt_run rows, optionally filtered by hunt_id and/or since.
+
+    Ordered by created_at DESC.
+    """
+    pool = _get_pool()
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if hunt_id is not None:
+        conditions.append("hunt_id = %s")
+        params.append(hunt_id)
+    if since is not None:
+        conditions.append("created_at >= %s")
+        params.append(since)
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, hunt_id, investigation_run_id, verdict, severity,
+                   mitre_technique, summary, created_at
+            FROM hunt_runs
+            {where_clause}
+            ORDER BY created_at DESC
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "hunt_id": r[1],
+            "investigation_run_id": r[2],
+            "verdict": r[3],
+            "severity": r[4],
+            "mitre_technique": r[5],
+            "summary": r[6],
+            "created_at": r[7],
+        }
+        for r in rows
+    ]
+
+
+def _hunt_row(row: tuple) -> dict:
+    """Convert a DB tuple (10 columns) to a hunt dict."""
+    return {
+        "id": row[0],
+        "name": row[1],
+        "mitre_tactic": row[2],
+        "mitre_technique": row[3],
+        "hypothesis": row[4],
+        "hunt_query": row[5],
+        "enabled": row[6],
+        "interval_hours": row[7],
+        "last_run_at": row[8],
+        "created_at": row[9],
+    }

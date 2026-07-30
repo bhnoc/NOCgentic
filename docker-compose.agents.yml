@@ -117,6 +117,28 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Hunter: proactive threat-hunting scheduler. Runs MITRE-mapped hunt templates
+  # on an interval via the investigator and files findings. Internal only.
+  hunter:
+    build:
+      context: .
+      dockerfile: agents/hunter/Dockerfile
+    expose:
+      - "8010"
+    environment:
+      - PG_DSN=${PG_DSN:-postgresql://nocgentic:nocgentic@postgres:5432/nocgentic}
+      - INVESTIGATOR_URL=http://investigator:8007
+      - HUNTER_AUTORUN=${HUNTER_AUTORUN:-1}
+      - SCHED_TICK_SECONDS=${SCHED_TICK_SECONDS:-300}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=bhnocgentic-hunter
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   orchestrator:
     build:
       context: .
