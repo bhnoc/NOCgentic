@@ -124,6 +124,8 @@ def _densify_and_score(
             std = 0.0
 
         max_count = max(counts)
+        max_idx = counts.index(max_count)
+        peak_bucket_epoch = all_buckets[max_idx]  # rc-4: epoch of the highest-count hour
         nonzero_buckets = sum(1 for c in counts if c > 0)
 
         if std == 0:
@@ -145,6 +147,7 @@ def _densify_and_score(
             "novel": novel,
             "counts": counts,
             "nonzero_buckets": nonzero_buckets,
+            "peak_bucket": peak_bucket_epoch,  # rc-4: tight marker correlation window
         })
 
     return results
@@ -256,6 +259,8 @@ class AthenaAnomalySource:
                 std = 0.0
 
             max_count = max(counts)
+            max_idx = counts.index(max_count)
+            peak_bucket_epoch = all_buckets[max_idx]  # rc-4: epoch of the highest-count hour
 
             # rc-2: guard std=0 / insufficient baseline before assigning z=99
             nonzero_buckets = sum(1 for c in counts if c > 0)
@@ -277,9 +282,11 @@ class AthenaAnomalySource:
                     "signature": sig,
                     "count": int(max_count),
                     "baseline": round(mean, 2),
-                    "t0": t0,
-                    "t1": t1,
+                    # rc-4: tight marker correlation — use peak bucket epoch, not full window
+                    "t0": peak_bucket_epoch - 300,   # 5 min pre-slack before peak hour
+                    "t1": peak_bucket_epoch + 3600,  # one full hour after peak bucket start
                     "z": round(z, 2),
+                    "peak_bucket": peak_bucket_epoch,
                 })
 
         # Sort by z desc
@@ -842,9 +849,20 @@ async def _run_loop(
     })
 
     # --- 6. Correlate deploy markers ---
-    # Use datetime objects for markers_near
-    t0_dt = datetime.fromtimestamp(spike_t0 - 3600, tz=timezone.utc)
-    t1_dt = datetime.fromtimestamp(spike_t1, tz=timezone.utc)
+    # rc-4: if the spike has a peak_bucket, use a tight window around that peak
+    # (peak_bucket .. peak_bucket+1h, minus a small pre-slack) so marker correlation
+    # is anchored to the actual spiking hour rather than the whole investigation window.
+    peak_bucket = top_spike.get("peak_bucket")
+    if peak_bucket is not None:
+        # tight window: [peak_bucket - 5min pre-slack, peak_bucket + 1h]
+        corr_t0 = peak_bucket - 300
+        corr_t1 = peak_bucket + 3600
+    else:
+        # fallback: use spike window bounds (original behavior)
+        corr_t0 = spike_t0 - 3600
+        corr_t1 = spike_t1
+    t0_dt = datetime.fromtimestamp(corr_t0, tz=timezone.utc)
+    t1_dt = datetime.fromtimestamp(corr_t1, tz=timezone.utc)
     markers = store.markers_near(t0_dt, t1_dt)
 
     # Serialize marker datetimes

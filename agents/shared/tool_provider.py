@@ -11,8 +11,12 @@ Usage:
 
 from __future__ import annotations
 
+import copy
+import logging
 import os
 from typing import Any, Protocol, TypedDict, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -131,12 +135,20 @@ class GeminiToolProvider:
             text = str(raw).strip()
 
         # Extract tool calls — LangChain normalizes to [{name, args, id}]
+        # st-9: args may be explicitly None on some streamed responses; coerce
+        # to {} rather than letting dict(None) raise TypeError.  Also skip any
+        # tool call with an empty name (would be a no-op and confuse the loop).
         tool_calls: list[ToolCall] = []
         for tc in (response.tool_calls or []):
+            name = tc.get("name", "") or ""
+            if not name:
+                logger.warning("GeminiToolProvider: skipping tool call with empty name: %r", tc)
+                continue
+            args = tc.get("args") or {}
             tool_calls.append(ToolCall(
                 id=tc.get("id", "") or "",
-                name=tc.get("name", ""),
-                arguments=dict(tc.get("args", {})),
+                name=name,
+                arguments=dict(args),
             ))
 
         return text, tool_calls
@@ -178,11 +190,17 @@ def _to_langchain_messages(messages: list) -> list:
         elif role == "assistant":
             tool_calls = m.get("tool_calls", [])
             if tool_calls:
-                # Reconstruct AIMessage with tool_calls
+                # Reconstruct AIMessage with tool_calls.
+                # st-9: use .get() for id/name/arguments so a history entry
+                # missing any key doesn't raise KeyError.
                 lc.append(AIMessage(
                     content=content or "",
                     tool_calls=[
-                        {"id": tc["id"], "name": tc["name"], "args": tc["arguments"]}
+                        {
+                            "id": tc.get("id", ""),
+                            "name": tc.get("name", ""),
+                            "args": tc.get("arguments", {}),
+                        }
                         for tc in tool_calls
                     ],
                 ))
@@ -228,8 +246,10 @@ class FixtureProvider:
         use_tools: bool = True,  # noqa: ARG002
         temperature: float = 0.3,  # noqa: ARG002
     ) -> tuple[str, list[ToolCall]]:
-        # Deep-ish snapshot of the message contents for assertions.
-        self.seen_messages.append([dict(m) if isinstance(m, dict) else m for m in messages])
+        # st-8: use copy.deepcopy so nested content/tool_calls lists in prior
+        # messages cannot be mutated retroactively via later loop mutations.
+        # Fixtures are small so the cost is negligible.
+        self.seen_messages.append(copy.deepcopy(messages))
         if self._pos >= len(self._script):
             raise IndexError(
                 f"FixtureProvider script exhausted at position {self._pos} "
@@ -244,10 +264,12 @@ class FixtureProvider:
         raw_calls = turn.get("tool_calls", [])
         tool_calls: list[ToolCall] = []
         for i, tc in enumerate(raw_calls):
+            # st-9: coerce arguments to {} when explicitly None; use .get() for name
+            args = tc.get("arguments") or {}
             tool_calls.append(ToolCall(
                 id=tc.get("id", f"fixture_tc_{self._pos}_{i}"),
-                name=tc["name"],
-                arguments=dict(tc.get("arguments", {})),
+                name=tc.get("name", ""),
+                arguments=dict(args),
             ))
         return "", tool_calls
 

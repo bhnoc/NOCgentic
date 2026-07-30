@@ -532,13 +532,17 @@ def test_validate_query_accepts_dt_in():
     assert result is None, f"Expected None (accepted), got: {result}"
 
 
-def test_validate_query_accepts_dt_in_with_cte():
-    """inv-1: WITH cte AS (...) query with dt= should pass."""
+def test_validate_query_rejects_cte():
+    """inv-5: WITH (CTE) queries are rejected fast with a clear message because
+    athena_client.sanitize_sql only allows SELECT-first queries."""
     result = inv_main.validate_query(
         "WITH recent AS (SELECT * FROM conn WHERE dt = '2026-07-30') "
         "SELECT id_orig_h, count(*) FROM recent GROUP BY 1"
     )
-    assert result is None, f"Expected None (accepted), got: {result}"
+    assert result is not None, "Expected rejection for CTE (WITH) query"
+    assert "CTE" in result or "WITH" in result, (
+        f"Expected rejection message to mention CTE/WITH, got: {result}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -743,4 +747,148 @@ async def test_system_prompt_contains_tool_data_warning():
     content = system_msg["content"]
     assert "not instructions" in content.lower() or "tool results are data" in content.lower(), (
         f"System prompt missing untrusted-data warning. Got: {content[:200]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# inv-4: severity computed from FULL high-signal set, not truncated hits[:6]
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_inv4_severity_critical_when_beacon_is_7th_family():
+    """inv-4 locking gate: 7 distinct high-signal families where only the 7th
+    matches beacon/cobalt/c2 -> severity must be 'critical', not 'high'."""
+    # Build rows with 7 distinct high-signal families. The first 6 are non-beacon
+    # (brute-force, exploit, malware, etc.), the 7th is a CobaltStrike beacon.
+    # Previously detect_high_signal returned hits[:6], dropping the 7th before
+    # the beacon test ran, resulting in severity='high'.
+    rows = [
+        {"ts": "1", "alert_signature": "ET SCAN Port Scan Activity", "alert_category": "Reconnaissance"},
+        {"ts": "2", "alert_signature": "ET EXPLOIT Heap Overflow Attempt", "alert_category": "Exploit"},
+        {"ts": "3", "alert_signature": "ET MALWARE Generic Dropper", "alert_category": "Malware"},
+        {"ts": "4", "alert_signature": "ET BRUTE SSH Brute Force", "alert_category": "Brute Force"},
+        {"ts": "5", "alert_signature": "ET SCAN TCP Scanning", "alert_category": "Scanning"},
+        # NOTE: none of families 1-6 may contain a beacon/cobalt/c2 keyword, or the
+        # capped [:6] path would still trip the beacon test and the gate wouldn't
+        # actually exercise the uncapped-severity fix (a green you didn't earn).
+        {"ts": "6", "alert_signature": "ET MALWARE Generic Ransomware Dropper", "alert_category": "Ransomware"},
+        # 7th family — beacon/CobaltStrike — was previously dropped by [:6]
+        {"ts": "7", "alert_signature": "ET MALWARE Cobalt Strike Beacon Checkin", "alert_category": "C2"},
+    ]
+
+    script = [
+        {"tool_calls": [{"name": "query_athena", "arguments": {
+            "query": "SELECT * FROM suricata_corelight WHERE dt = '2026-07-30' LIMIT 100"
+        }}]},
+        {"text": "Multiple threat families detected."},
+    ]
+    provider = tp.FixtureProvider(script)
+    inv_main.app.state.tool_provider = provider
+    inv_main.app.state.athena_execute = _make_fake_athena(rows)
+
+    transport = ASGITransport(app=inv_main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post("/investigate", json={
+            "query": "Any beaconing?",
+            "window_hours": 24,
+            "max_depth": 5,
+        })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    finding = body["finding"]
+    assert finding["severity"] == "critical", (
+        f"inv-4: expected severity='critical' when 7th family is a beacon, "
+        f"got severity='{finding['severity']}'. "
+        f"high_signals in evidence: {body['evidence']['high_signals']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# inv-5: validate_query rejects CTEs (WITH) fast with a clear message
+# ---------------------------------------------------------------------------
+
+def test_inv5_validate_query_rejects_with_cte():
+    """inv-5 locking gate: validate_query("WITH b AS (SELECT 1) SELECT * FROM b WHERE dt='x'")
+    returns a rejection message (fast-fail), not None."""
+    result = inv_main.validate_query(
+        "WITH b AS (SELECT 1) SELECT * FROM b WHERE dt = '2026-07-30'"
+    )
+    assert result is not None, (
+        "inv-5: expected CTE (WITH) to be rejected by validate_query, got None (accepted)"
+    )
+    assert "CTE" in result or "WITH" in result, (
+        f"inv-5: rejection message should mention CTE/WITH. Got: {result}"
+    )
+
+
+def test_inv5_validate_query_plain_select_still_passes():
+    """inv-5: a plain SELECT with dt still passes validate_query."""
+    result = inv_main.validate_query(
+        "SELECT ts, id_orig_h FROM conn WHERE dt = '2026-07-30' LIMIT 10"
+    )
+    assert result is None, f"inv-5: plain SELECT with dt should pass, got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# inv-7: unknown tool name gets a rejected tool_result; no dangling call
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_inv7_unknown_tool_gets_rejection_result():
+    """inv-7 locking gate: a turn with query_athena + an unknown tool -> both get
+    a tool_result (the unknown one gets a rejection), no dangling call, run completes."""
+    # Script: first turn returns two tool calls — one valid query_athena and one
+    # unknown tool called 'run_shell'. The unknown tool must receive a rejection
+    # tool_result so the provider sees a complete call/result pair.
+    script = [
+        {"tool_calls": [
+            {"name": "query_athena", "id": "tc_known", "arguments": {
+                "query": "SELECT ts FROM conn WHERE dt = '2026-07-30' LIMIT 5"
+            }},
+            {"name": "run_shell", "id": "tc_unknown", "arguments": {"cmd": "id"}},
+        ]},
+        {"text": "Investigation complete."},
+    ]
+    provider = tp.FixtureProvider(script)
+    inv_main.app.state.tool_provider = provider
+    inv_main.app.state.athena_execute = _make_fake_athena(_GENERIC_ROWS)
+
+    transport = ASGITransport(app=inv_main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post("/investigate", json={
+            "query": "Test unknown tool handling",
+            "window_hours": 24,
+            "max_depth": 5,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+
+        run_id = body["run_id"]
+        run_resp = await c.get(f"/runs/{run_id}")
+    assert run_resp.status_code == 200
+    events = run_resp.json()["events"]
+
+    # Collect all tool_result events from the first call depth
+    tool_result_events = [e for e in events if e["event_type"] == "tool_result"]
+
+    # There must be at least 2 tool_result events: one for query_athena, one for run_shell
+    assert len(tool_result_events) >= 2, (
+        f"inv-7: expected >= 2 tool_result events (one per tool call), "
+        f"got {len(tool_result_events)}. Events: {[e['event_type'] for e in events]}"
+    )
+
+    # The rejection result for the unknown tool must be present
+    rejection_events = [
+        e for e in tool_result_events
+        if e["data"].get("rejected") is True and e["data"].get("tool_name") == "run_shell"
+    ]
+    assert rejection_events, (
+        f"inv-7: expected a rejected tool_result for 'run_shell', "
+        f"got tool_result data: {[e['data'] for e in tool_result_events]}"
+    )
+
+    # Run must have completed (not 400-errored due to dangling call)
+    assert run_resp.json()["run"]["status"] == "completed", (
+        f"inv-7: run should complete when unknown tool is handled, "
+        f"got status={run_resp.json()['run']['status']}"
     )

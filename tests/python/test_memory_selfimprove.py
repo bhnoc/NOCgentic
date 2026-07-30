@@ -40,6 +40,12 @@ os.environ.setdefault("PG_DSN", _PG_DSN)
 import store  # noqa: E402
 import drift_stats  # noqa: E402
 
+# Load the memory agent main for endpoint tests
+os.environ.setdefault("OTEL_ENABLED", "false")
+os.environ.setdefault("OTEL_CONSOLE_TRACES", "false")
+from conftest import load_agent_main  # noqa: E402
+_memory_main = load_agent_main("memory", "memory_main")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -680,3 +686,75 @@ class TestMem6ConfidenceConverges:
 
         final = store.get_memory(mid)["confidence_pct"]
         assert final == initial, f"Confidence changed on no-outcomes memory: {initial} → {final}"
+
+
+# ---------------------------------------------------------------------------
+# mem-8: POST /memory catches UniqueViolation / IntegrityError → 409, not 500
+# ---------------------------------------------------------------------------
+
+class TestMem8UniqueViolation409:
+    """mem-8: version-bump race (UniqueViolation) at the endpoint returns 409 Conflict,
+    not an unhandled 500, as defense-in-depth around the store-layer retry."""
+
+    def test_unique_violation_returns_409(self, monkeypatch):
+        """Monkeypatching store.upsert_memory to raise UniqueViolation → endpoint returns 409."""
+        import psycopg.errors as _pe
+
+        def _raise_unique(*args, **kwargs):
+            # psycopg.errors.UniqueViolation needs a pgcode; construct via base class
+            exc = _pe.UniqueViolation()
+            raise exc
+
+        monkeypatch.setattr(store, "upsert_memory", _raise_unique)
+
+        from fastapi.testclient import TestClient
+        client = TestClient(_memory_main.app)
+
+        resp = client.post("/memory", json={
+            "agent_slug": "test-agent",
+            "key": "test-key",
+            "value": "test-value",
+        })
+        assert resp.status_code == 409, (
+            f"Expected 409 for UniqueViolation, got {resp.status_code}: {resp.text}. "
+            "mem-8: endpoint must catch psycopg UniqueViolation as 409."
+        )
+        assert "retry" in resp.json().get("detail", "").lower(), (
+            f"Expected 'retry' in detail, got: {resp.json()}"
+        )
+
+    def test_integrity_error_returns_409(self, monkeypatch):
+        """Monkeypatching store.upsert_memory to raise IntegrityError → endpoint returns 409."""
+        import psycopg.errors as _pe
+
+        def _raise_integrity(*args, **kwargs):
+            raise _pe.IntegrityError()
+
+        monkeypatch.setattr(store, "upsert_memory", _raise_integrity)
+
+        from fastapi.testclient import TestClient
+        client = TestClient(_memory_main.app)
+
+        resp = client.post("/memory", json={
+            "agent_slug": "test-agent",
+            "key": "test-key",
+            "value": "test-value",
+        })
+        assert resp.status_code == 409, (
+            f"Expected 409 for IntegrityError, got {resp.status_code}: {resp.text}. "
+            "mem-8: endpoint must catch psycopg IntegrityError as 409."
+        )
+
+    def test_normal_upsert_still_returns_200(self):
+        """Baseline: a normal upsert still returns 200 (regression guard)."""
+        from fastapi.testclient import TestClient
+        client = TestClient(_memory_main.app)
+
+        resp = client.post("/memory", json={
+            "agent_slug": "mem8-sanity",
+            "key": "sanity-key",
+            "value": {"ok": True},
+        })
+        assert resp.status_code == 200, (
+            f"Expected 200 for normal upsert, got {resp.status_code}: {resp.text}"
+        )

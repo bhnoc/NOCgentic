@@ -58,3 +58,45 @@ The two highs were fix-induced and are now closed with two-sided gates. **A swee
 unless new features land — the confirmed-finding set has converged (re-hunt surfaced only fix-quality
 issues, now resolved). Recommend a light re-hunt only after the orchestrator-wiring work (the one large
 deferred item) is done on the box.
+
+---
+
+## Sweep 2 — cleanup pass (all deferred lows/mediums, 2026-07-30)
+
+Cleared the remaining 14 non-auth findings (4 medium: inv-4, rc-4, st-3, tri-5; 10 low). Auth findings
+(tri-4/px-3/px-4/mem-9) stay deferred per the user's keep-no-auth decision.
+
+| id | sev | fix |
+|----|-----|-----|
+| inv-4 | med | severity computed over the FULL de-duplicated high-signal set (detect_high_signal_full), not the [:6] display cap → a 7th+ beacon family no longer downgrades critical→high |
+| rc-4 | med | detect() preserves the peak spiking bucket; marker correlation uses a tight window around the peak (peak-5m .. peak+1h), not the whole investigation window |
+| st-3 | med | upsert_memory retries on UniqueViolation (version-bump race), mirroring emit() |
+| tri-5 | med | build_alert_query passes alert fields as delimited <alert> DATA + strips control chars → closes the prompt-injection channel into the investigator |
+| inv-5 | low | validate_query fast-rejects WITH/CTE (athena engine is SELECT-only) instead of burning a tool round |
+| inv-7 | low | unknown tool name emits a rejection tool_result (no dangling function call to the provider) |
+| mem-8 | low | POST /memory maps UniqueViolation/IntegrityError → 409, not 500 (defense in depth over st-3) |
+| st-8 | low | FixtureProvider.seen_messages uses deepcopy (no retroactive snapshot mutation) |
+| st-9 | low | tool_provider tolerates args=None / missing tool-call keys (no TypeError/KeyError) |
+| st-10 | low | init_schema: clear error when no migrations found; RECALL_MIGRATION_PATH=file runs exactly that file |
+| st-11 | low | PG_DSN unset logs a clear WARNING (still uses dev default) |
+| s2-08 | low | CREATE EXTENSION DDL gated behind a once-per-process flag (advisory lock only on first connection) |
+| tri-6 | low | POST /alerts typed with a Pydantic model (422 not 500), batch capped at 1000, empty-field dedup key is a safe hash |
+| tri-7 | low | dedup_key is sha1(json([sig,src,dst])) — no '|' separator collision |
+| ui-2/ui-3 | low | (already in the main sweep-2 fix set) |
+
+**A weak gate caught and hardened:** the inv-4 test initially passed regardless of the fix because one
+of its 6 "non-beacon" families was named "...Ransomware Beacon" (tripped the beacon regex anyway).
+Renamed it so families 1-6 contain no beacon/c2 keyword; the gate now fails against the capped path and
+passes against the fix (proven by revert).
+
+**A flaky test fixed at the source:** `TestExtensionEnsuredFlag` asserted the module-global
+`_extension_ensured` flag was already True, relying on some earlier test having opened the pool — order-
+fragile in the full cross-file run. Rewrote it to open a pooled connection itself (establish the
+precondition), removing the order dependence. Full suite now deterministic green across repeated runs.
+
+### Verification
+- python **481 passed** (was 445 → +36 gates), 3 consecutive fresh-DB runs + reversed-file-order run all green.
+- web-server **36 vitest**. inv-4 gate proven to bite after hardening.
+
+### Status: all confirmed non-auth findings across both sweeps are now fixed. Only the auth-model
+### decision (deferred by the user) and orchestrator-wiring (box-side) remain open.

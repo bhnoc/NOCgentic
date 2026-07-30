@@ -64,6 +64,11 @@ _MIGRATION_PATH: Path = _resolve_migration_path()
 
 _pool: psycopg_pool.ConnectionPool | None = None
 
+# s2-08: gate the per-connection CREATE EXTENSION DDL behind a once-per-process
+# flag so pool churn under load doesn't acquire the advisory lock on every new
+# connection.  The FIRST connection still ensures the extension (under the lock);
+# all subsequent connections skip straight to register_vector (fast, no DDL).
+_extension_ensured: bool = False
 
 # A fixed key for the schema-bootstrap advisory lock. Any 64-bit int; shared by
 # all services so concurrent cold-boot DDL serializes instead of racing on the
@@ -74,15 +79,18 @@ _SCHEMA_LOCK_KEY = 0x6E6F6367  # 'nocg'
 
 def _configure_conn(conn: psycopg.Connection) -> None:
     """Called by the pool for each new connection — ensure vector extension and register type."""
-    # Ensure the extension exists on this database before registering the type.
-    # This is idempotent and handles the bootstrap case where init_schema() has
-    # not yet been called (e.g. fresh database, first pool connection). Serialize
-    # the CREATE EXTENSION behind a transaction-scoped advisory lock so multiple
-    # services opening pools against a fresh DB at the same time don't collide on
-    # the pg_extension catalog (st-5). pg_advisory_xact_lock releases at commit.
-    conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
-    conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    conn.commit()
+    global _extension_ensured  # noqa: PLW0603
+    if not _extension_ensured:
+        # Ensure the extension exists on this database before registering the type.
+        # This is idempotent and handles the bootstrap case where init_schema() has
+        # not yet been called (e.g. fresh database, first pool connection). Serialize
+        # the CREATE EXTENSION behind a transaction-scoped advisory lock so multiple
+        # services opening pools against a fresh DB at the same time don't collide on
+        # the pg_extension catalog (st-5). pg_advisory_xact_lock releases at commit.
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        conn.commit()
+        _extension_ensured = True
     register_vector(conn)
 
 
@@ -90,7 +98,15 @@ def _get_pool() -> psycopg_pool.ConnectionPool:
     """Return (creating if necessary) the module-level connection pool."""
     global _pool  # noqa: PLW0603
     if _pool is None:
-        dsn = os.environ.get("PG_DSN", "postgresql://nocgentic:nocgentic@localhost:5432/nocgentic")
+        dsn = os.environ.get("PG_DSN")
+        if dsn is None:
+            # st-11: warn clearly when falling back to the dev default so
+            # misconfig in production surfaces in logs rather than silently
+            # connecting to the wrong host.
+            dsn = "postgresql://nocgentic:nocgentic@localhost:5432/nocgentic"
+            logger.warning(
+                "store: PG_DSN not set — using local dev default; set PG_DSN in production"
+            )
         _pool = psycopg_pool.ConnectionPool(
             conninfo=dsn,
             min_size=1,
@@ -112,12 +128,24 @@ def init_schema() -> None:
     Runs every agents/shared/migrations/*.sql in sorted (lexical) order, so
     numbered migrations (0000_recall.sql, 0001_triage.sql, ...) apply in sequence.
     Safe to call multiple times (all DDL is IF NOT EXISTS / additive).
+
+    st-10: if RECALL_MIGRATION_PATH names an existing FILE, run exactly that
+    file (not a glob of its directory).  If no migration files are found, raise
+    a clear error instead of a bare FileNotFoundError.
     """
-    migrations_dir = _MIGRATION_PATH.parent
-    files = sorted(migrations_dir.glob("*.sql"))
-    if not files:
-        # Fall back to the single resolved path so the error names a sensible file.
-        files = [_MIGRATION_PATH]
+    # st-10: explicit-file mode — RECALL_MIGRATION_PATH points at a concrete file
+    override = os.environ.get("RECALL_MIGRATION_PATH")
+    if override and Path(override).is_file():
+        files = [Path(override)]
+        migrations_dir = Path(override).parent
+    else:
+        migrations_dir = _MIGRATION_PATH.parent
+        files = sorted(migrations_dir.glob("*.sql"))
+        if not files:
+            raise FileNotFoundError(
+                f"store: no migration files found under {migrations_dir}; "
+                "set RECALL_MIGRATION_PATH to the correct .sql file or directory"
+            )
     pool = _get_pool()
     with pool.connection() as conn:
         # Serialize the whole migration run across concurrently-starting services
@@ -824,40 +852,57 @@ def upsert_memory(
     if category not in MEMORY_CATEGORIES:
         raise ValueError(f"unknown category: {category}")
 
-    memory_id = uuid4().hex
+    import psycopg.errors  # noqa: PLC0415 — lazy to avoid top-level import churn
+
     pool = _get_pool()
-    with pool.connection() as conn:
-        row = conn.execute(
-            """
-            INSERT INTO agent_memory
-                (id, agent_slug, key, value, context, category, memory_status,
-                 version, rationale, confidence_pct, run_id)
-            VALUES (
-                %s, %s, %s, %s, %s, %s, 'draft',
-                COALESCE(
-                    (SELECT MAX(version) + 1 FROM agent_memory
-                     WHERE agent_slug = %s AND key = %s),
-                    1
-                ),
-                %s, %s, %s
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        memory_id = uuid4().hex
+        try:
+            with pool.connection() as conn:
+                row = conn.execute(
+                    """
+                    INSERT INTO agent_memory
+                        (id, agent_slug, key, value, context, category, memory_status,
+                         version, rationale, confidence_pct, run_id)
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, 'draft',
+                        COALESCE(
+                            (SELECT MAX(version) + 1 FROM agent_memory
+                             WHERE agent_slug = %s AND key = %s),
+                            1
+                        ),
+                        %s, %s, %s
+                    )
+                    RETURNING id, agent_slug, key, version, memory_status
+                    """,
+                    (
+                        memory_id, agent_slug, key, Jsonb(value), context, category,
+                        agent_slug, key,
+                        rationale, confidence_pct, run_id,
+                    ),
+                ).fetchone()
+                conn.commit()
+            assert row is not None
+            return {
+                "id": row[0],
+                "agent_slug": row[1],
+                "key": row[2],
+                "version": row[3],
+                "memory_status": row[4],
+            }
+        except psycopg.errors.UniqueViolation:
+            # st-3: concurrent upserts for the same (agent_slug, key) both read
+            # the same MAX(version) and collide on UNIQUE(agent_slug,key,version).
+            # Recompute MAX(version)+1 on the next attempt.
+            if attempt == max_attempts - 1:
+                raise
+            logger.debug(
+                "upsert_memory: version collision for (%s, %s) (attempt %d/%d), retrying",
+                agent_slug, key, attempt + 1, max_attempts,
             )
-            RETURNING id, agent_slug, key, version, memory_status
-            """,
-            (
-                memory_id, agent_slug, key, Jsonb(value), context, category,
-                agent_slug, key,
-                rationale, confidence_pct, run_id,
-            ),
-        ).fetchone()
-        conn.commit()
-    assert row is not None
-    return {
-        "id": row[0],
-        "agent_slug": row[1],
-        "key": row[2],
-        "version": row[3],
-        "memory_status": row[4],
-    }
+    # Unreachable — loop always returns or raises inside.
+    raise RuntimeError("upsert_memory: retry loop exited unexpectedly")
 
 
 def get_memory(memory_id: str) -> dict | None:

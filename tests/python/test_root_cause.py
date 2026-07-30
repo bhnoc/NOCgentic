@@ -848,3 +848,94 @@ class TestRootCauseHintPriority:
         # be >= 0.15 for this pair, the marker may win — but the logic fix is in place.
         # Primary assertion: no 500.
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# rc-4: spike time resolution — tight marker correlation window around peak bucket
+# ---------------------------------------------------------------------------
+
+class TestPeakBucketMarkerCorrelation:
+    """rc-4: marker correlation uses tight window around the actual spike peak bucket,
+    not the whole investigation window. A marker far from the peak must not correlate."""
+
+    def _hour_epoch(self, h: int, base: float) -> int:
+        """Return epoch for base-hour-0 + h hours (already hour-truncated)."""
+        return int(base // 3600) * 3600 + h * 3600
+
+    def test_peak_bucket_preserved_in_densify_and_score(self):
+        """_densify_and_score must return peak_bucket equal to the highest-count hour."""
+        base = 1_700_000_000.0
+        t0 = self._hour_epoch(0, base)
+        t1 = self._hour_epoch(5, base)  # 6 buckets: hours 0-5
+
+        # Peak is at hour 4
+        rows = [
+            {"sig": "ET RC4 PEAK", "bucket_epoch": self._hour_epoch(1, base), "n": 2.0},
+            {"sig": "ET RC4 PEAK", "bucket_epoch": self._hour_epoch(4, base), "n": 50.0},  # peak
+        ]
+        results = rc_main._densify_and_score(rows, float(t0), float(t1))
+        assert len(results) == 1
+        r = results[0]
+        assert "peak_bucket" in r, f"peak_bucket missing from result: {r}"
+        expected_peak = self._hour_epoch(4, base)
+        assert r["peak_bucket"] == expected_peak, (
+            f"Expected peak_bucket={expected_peak}, got {r['peak_bucket']}"
+        )
+
+    def test_near_marker_correlates_far_marker_does_not(self):
+        """A spike whose peak bucket is at hour H correlates NEAR marker (at H)
+        but not a FAR marker that is early in the investigation window (hour H-4)."""
+        now = time.time()
+        # Use a fixed multi-hour window so we control hour boundaries
+        window_hours = 6
+        t0 = int(now // 3600) * 3600 - window_hours * 3600  # align to hour
+        t1 = int(now // 3600) * 3600
+
+        # Peak bucket = last hour of window (h=5 of 0..5)
+        peak_bucket = t0 + 5 * 3600
+
+        sig = "ET RC4 NEAR FAR MARKER"
+        # Spike with explicit peak_bucket set (as Athena path would produce)
+        spike = {
+            "signature": sig,
+            "count": 30,
+            "baseline": 1.0,
+            "t0": peak_bucket - 300,   # tight pre-slack
+            "t1": peak_bucket + 3600,  # tight post window
+            "z": 10.0,
+            "peak_bucket": peak_bucket,
+        }
+        src = rc_main.FixtureAnomalySource(
+            spikes=[spike],
+            events_by_sig={sig: [_suricata_line(sig, "10.0.0.1", "1.2.3.4")]},
+            window={"t0": float(t0), "t1": float(t1)},
+        )
+        client = _make_client(src)
+
+        # FAR marker: early in the window (hour 0), well outside peak tight window
+        far_ts = datetime.fromtimestamp(t0 + 300, tz=timezone.utc).isoformat()
+        client.post("/markers", json={
+            "ts": far_ts, "kind": "deploy", "ref": "v-far-should-not-match",
+        })
+
+        # NEAR marker: inside the tight peak window
+        near_ts = datetime.fromtimestamp(peak_bucket + 60, tz=timezone.utc).isoformat()
+        near_resp = client.post("/markers", json={
+            "ts": near_ts, "kind": "deploy", "ref": "v-near-should-match",
+        })
+        assert near_resp.status_code == 200
+
+        resp = client.post("/investigate", json={"query": "rc4 test", "window_hours": window_hours})
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        rc = resp.json()["finding"]["root_cause"]
+
+        # NEAR marker should be referenced
+        assert "v-near-should-match" in rc, (
+            f"Expected near marker ref in root_cause, got: {rc!r}. "
+            "rc-4 tight window not working."
+        )
+        # FAR marker should NOT be referenced
+        assert "v-far-should-not-match" not in rc, (
+            f"Far marker incorrectly matched in root_cause: {rc!r}. "
+            "rc-4 tight window not filtering correctly."
+        )

@@ -120,7 +120,12 @@ def validate_query(sql: str) -> str | None:
     if not sql or not sql.strip():
         return "Empty query. Write a SELECT with a dt partition filter and try again."
     stripped = sql.lstrip().lower()
-    if not (stripped.startswith("select") or stripped.startswith("with")):
+    if stripped.startswith("with"):
+        return (
+            "Only plain SELECT queries are supported; "
+            "CTEs (WITH) are not allowed by the query engine."
+        )
+    if not stripped.startswith("select"):
         return "Only SELECT queries are allowed. This tool is read-only."
     # Strip literals/comments before dt-filter check to prevent bypass via
     # LIKE '%dt=%', comment-hidden 'dt=...', or string values containing dt=.
@@ -212,12 +217,26 @@ _HIGH_SIGNAL_RE = re.compile(
 _INFO_LINE_RE = re.compile(r"\bET(?:PRO)?\s+INFO\b", re.IGNORECASE)
 
 
-def detect_high_signal(result_strings: list[str]) -> list[str]:
+def detect_high_signal(result_strings: list[str], cap: int = 6) -> list[str]:
     """Return distinct high-signal signature lines found in collected result strings.
 
     CODE-computed fact: guarantees the final verdict never buries a real threat.
     Operates on the list of formatted tool-result strings collected during the loop.
     Skips pure ET INFO lines, matches high-signal families from _HIGH_SIGNAL_RE.
+
+    ``cap`` controls how many entries are returned for display/evidence.  Severity
+    must be computed from the FULL de-duplicated set BEFORE this cap is applied —
+    see detect_high_signal_full() for that use-case.  (inv-4)
+    """
+    return detect_high_signal_full(result_strings)[:cap]
+
+
+def detect_high_signal_full(result_strings: list[str]) -> list[str]:
+    """Return ALL distinct high-signal signature lines (no display cap).
+
+    Used internally by the severity-computation path so that a 7th+ high-signal
+    family (e.g. a beacon/C2 indicator) is never dropped before the beacon test
+    runs, preventing a real critical from being downgraded to high.  (inv-4)
     """
     text = "\n".join(result_strings)
     if not text:
@@ -254,7 +273,7 @@ def detect_high_signal(result_strings: list[str]) -> list[str]:
             seen.add(key)
             hits.append(label)
 
-    return hits[:6]
+    return hits
 
 
 # ---------------------------------------------------------------------------
@@ -379,10 +398,20 @@ async def _chat_with_tools(
     # Process tool calls
     results_for_messages: list[tuple[str, str]] = []
 
+    processed_tool_ids: set[str] = set()
+
     for tc in tool_calls:
         if tc["name"] != "query_athena":
+            # inv-7: emit a rejection result so every tool_call has a matching
+            # tool_result.  A dangling call with no result causes some providers
+            # to 400 on the next turn and leaves the trace incomplete.
+            rejection = f"Unknown tool '{tc['name']}' — only query_athena is available."
+            store.emit(run_id, "tool_result", {"rejected": True, "reason": rejection, "tool_name": tc["name"]})
+            results_for_messages.append((tc["id"], rejection))
+            processed_tool_ids.add(tc["id"])
             continue
 
+        processed_tool_ids.add(tc["id"])
         sql = tc["arguments"].get("query", "")
 
         # Emit tool_call event
@@ -424,15 +453,18 @@ async def _chat_with_tools(
         wrapped_for_llm = f"<query_result>\n{formatted}\n</query_result>"
         results_for_messages.append((tc["id"], wrapped_for_llm))
 
-    # Append assistant turn
+    # Append assistant turn — only include tool_calls that were actually processed
+    # (i.e. had a matching tool_result emitted).  This prevents dangling calls
+    # from reaching the provider on the next turn and causing a 400.  (inv-7)
+    processed_calls = [tc for tc in tool_calls if tc["id"] in processed_tool_ids]
     assistant_content = text if text else (
-        f"[Executing: {tool_calls[0]['arguments'].get('query', '')[:80]}...]"
-        if tool_calls else ""
+        f"[Executing: {processed_calls[0]['arguments'].get('query', '')[:80]}...]"
+        if processed_calls else ""
     )
     messages.append({
         "role": "assistant",
         "content": assistant_content,
-        "tool_calls": tool_calls,
+        "tool_calls": processed_calls,
     })
 
     # Append tool results
@@ -554,16 +586,23 @@ async def _run_investigation(
     # --- 4. CODE-computed verdict + severity ---
     # Use full_results (not the truncated collected_results) so beacons in rows
     # 21-500 are never invisible to the detector (inv-3 fix).
-    high_signals = detect_high_signal(full_results)
+    #
+    # inv-4: severity is computed over the FULL de-duplicated high-signal set so
+    # that a 7th+ beacon/C2 family is never dropped before the beacon test runs.
+    # The display/evidence list is capped to 6 entries AFTER the severity decision.
+    all_high_signals = detect_high_signal_full(full_results)
 
-    # Severity: code rule based on high_signal content
+    # Severity: code rule based on full high_signal content (uncapped)
     severity = "informational"
-    if high_signals:
-        beacon_re = re.compile(r"beacon|cobalt|c2|command.and.control", re.IGNORECASE)
-        if any(beacon_re.search(s) for s in high_signals):
+    beacon_re = re.compile(r"beacon|cobalt|c2|command.and.control", re.IGNORECASE)
+    if all_high_signals:
+        if any(beacon_re.search(s) for s in all_high_signals):
             severity = "critical"
         else:
             severity = "high"
+
+    # Cap the displayed set after severity is decided (inv-4)
+    high_signals = all_high_signals[:6]
 
     store.emit(run_id, "verdict", {
         "high_signals": high_signals,

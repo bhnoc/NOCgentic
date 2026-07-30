@@ -14,6 +14,8 @@ import logging
 import sys
 from pathlib import Path
 
+import psycopg.errors as _psycopg_errors
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -121,6 +123,11 @@ async def upsert_memory_endpoint(body: MemoryIn) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except (_psycopg_errors.UniqueViolation, _psycopg_errors.IntegrityError) as exc:
+        # mem-8: defense-in-depth — version-bump race (MAX(version)+1 collision) maps to
+        # 409 Conflict rather than an unhandled 500, even if the store-layer retry (st-3)
+        # is exhausted or not yet present.
+        raise HTTPException(status_code=409, detail="concurrent memory write, retry")
     return result
 
 
