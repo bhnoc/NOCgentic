@@ -2205,9 +2205,16 @@
       const runId = data.investigation_run_id;
       let actionsHtml = `<span class="triage-verdict-chip">${escHtml(verdict)}</span>`;
       if (runId) {
-        actionsHtml += ` <button class="triage-btn" onclick="openGlassBox(${JSON.stringify(String(runId))})">View trace</button>`;
+        // Defense in depth (ui-1): render run_id as an escaped data-attribute and
+        // bind the click after insertion, rather than building an inline onclick
+        // from server data (JSON.stringify is JS-safe but not HTML-attribute-safe).
+        actionsHtml += ` <button class="triage-btn" data-trace-id="${escHtml(String(runId))}">View trace</button>`;
       }
-      if (actions) actions.innerHTML = actionsHtml;
+      if (actions) {
+        actions.innerHTML = actionsHtml;
+        const traceBtn = actions.querySelector('[data-trace-id]');
+        if (traceBtn) traceBtn.addEventListener('click', () => openGlassBox(traceBtn.getAttribute('data-trace-id')));
+      }
     } catch (err) {
       if (actions) actions.innerHTML = `<span class="triage-verdict-chip" style="color:#ff6080">${escHtml(err && err.message || 'Error')}</span>`;
     }

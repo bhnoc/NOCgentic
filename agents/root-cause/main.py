@@ -56,8 +56,77 @@ logger = logging.getLogger("root-cause")
 
 # ---------------------------------------------------------------------------
 # Module-level TemplateMiner (single instance, in-memory)
+# Shared miner for /ingest only; /investigate uses a fresh per-call instance.
 # ---------------------------------------------------------------------------
 _miner: TemplateMiner = TemplateMiner()
+
+
+# ---------------------------------------------------------------------------
+# Standalone densify+detect helper (testable without Athena)
+# ---------------------------------------------------------------------------
+
+def _densify_and_score(
+    sparse_rows: list[dict],  # [{"sig": str, "bucket_epoch": int, "n": float}]
+    t0: float,
+    t1: float,
+) -> list[dict]:
+    """Given sparse (sig, bucket, count) rows and a window [t0, t1], return
+    spike dicts with densified series, correct mean/std, z, and novel flag.
+
+    rc-1 fix: builds the full hourly grid and fills missing hours with 0.
+    rc-2 fix: guards std==0 with nonzero_bucket / absolute count thresholds.
+    """
+    import math as _math
+    from collections import defaultdict
+
+    sparse: dict[str, dict[int, float]] = defaultdict(dict)
+    for row in sparse_rows:
+        sig = row["sig"]
+        bkey = int(row["bucket_epoch"] // 3600) * 3600  # normalize to hour
+        sparse[sig][bkey] = float(row.get("n", 0))
+
+    first_bucket = int(t0 // 3600) * 3600
+    last_bucket = int(t1 // 3600) * 3600
+    all_buckets = list(range(first_bucket, last_bucket + 3600, 3600))
+    n_buckets = len(all_buckets)
+
+    results = []
+    for sig, bucket_map in sparse.items():
+        counts = [bucket_map.get(b, 0.0) for b in all_buckets]
+        if not counts:
+            continue
+        mean = sum(counts) / len(counts)
+        if len(counts) > 1:
+            variance = sum((c - mean) ** 2 for c in counts) / len(counts)
+            std = _math.sqrt(variance)
+        else:
+            std = 0.0
+
+        max_count = max(counts)
+        nonzero_buckets = sum(1 for c in counts if c > 0)
+
+        if std == 0:
+            if nonzero_buckets < 2 or max_count < 5:
+                z = 0.0
+            else:
+                z = 99.0
+        else:
+            z = (max_count - mean) / std
+
+        half = n_buckets // 2
+        novel = half > 0 and all(c == 0 for c in counts[:half]) and max_count > 0
+
+        results.append({
+            "signature": sig,
+            "count": int(max_count),
+            "baseline": round(mean, 2),
+            "z": round(z, 2),
+            "novel": novel,
+            "counts": counts,
+            "nonzero_buckets": nonzero_buckets,
+        })
+
+    return results
 
 # ---------------------------------------------------------------------------
 # AnomalySource protocol + implementations
@@ -116,34 +185,70 @@ class AthenaAnomalySource:
         if not rows:
             return {"spikes": [], "window": {"t0": t0, "t1": t1}}
 
-        # Build per-signature time-series: {sig -> list[count]}
+        # Build per-signature sparse map: {sig -> {bucket_epoch -> count}}
         from collections import defaultdict
-        series: dict[str, list[float]] = defaultdict(list)
+        import math as _math
+
+        sparse: dict[str, dict[int, float]] = defaultdict(dict)
         for row in rows:
             sig = row.get("alert_signature") or ""
             try:
                 n = float(row.get("n") or 0)
             except (ValueError, TypeError):
                 n = 0.0
-            series[sig].append(n)
+            # Normalize bucket to an integer hour epoch for easy enumeration
+            bucket = row.get("bucket")
+            if bucket is None:
+                continue
+            # bucket may be a datetime or a string; convert to epoch int (truncated hour)
+            if hasattr(bucket, "timestamp"):
+                bkey = int(bucket.timestamp())
+            else:
+                try:
+                    from datetime import datetime as _dt
+                    bkey = int(_dt.fromisoformat(str(bucket)).timestamp())
+                except Exception:
+                    continue
+            sparse[sig][bkey] = n
+
+        # Build the full list of expected hourly buckets across [t0, t1]
+        # bucket = hour-truncated epoch: floor(ts / 3600) * 3600
+        first_bucket = int(t0 // 3600) * 3600
+        last_bucket = int(t1 // 3600) * 3600
+        all_buckets = list(range(first_bucket, last_bucket + 3600, 3600))
+        n_buckets = len(all_buckets)  # >= 1
 
         # Compute mean + stddev per signature; flag spikes
         spikes = []
-        for sig, counts in series.items():
+        for sig, bucket_map in sparse.items():
+            # rc-1: DENSIFY — build the full series with 0 for missing hours
+            counts = [bucket_map.get(b, 0.0) for b in all_buckets]
+
             if not counts:
                 continue
+
             mean = sum(counts) / len(counts)
             if len(counts) > 1:
                 variance = sum((c - mean) ** 2 for c in counts) / len(counts)
-                std = math.sqrt(variance)
+                std = _math.sqrt(variance)
             else:
                 std = 0.0
 
             max_count = max(counts)
-            z = (max_count - mean) / std if std > 0 else (99.0 if max_count > 0 else 0.0)
+
+            # rc-2: guard std=0 / insufficient baseline before assigning z=99
+            nonzero_buckets = sum(1 for c in counts if c > 0)
+            if std == 0:
+                if nonzero_buckets < 2 or max_count < 5:
+                    # Insufficient baseline to z-score reliably
+                    z = 0.0
+                else:
+                    z = 99.0
+            else:
+                z = (max_count - mean) / std
 
             # Novel: signature only appears in second half of window (not in baseline)
-            half = len(counts) // 2
+            half = n_buckets // 2
             novel = half > 0 and all(c == 0 for c in counts[:half]) and max_count > 0
 
             if z >= 2.0 or novel:
@@ -260,13 +365,13 @@ async def _startup():
 
 
 class RawEvent(BaseModel):
-    raw: str
+    raw: str = Field(..., max_length=10_000)
     source: str = "suricata"
     ts: float | None = None
 
 
 class IngestRequest(BaseModel):
-    events: list[RawEvent] | None = None
+    events: list[RawEvent] | None = Field(default=None, max_length=5_000)
     from_athena: bool = False
     hours: int = 24
 
@@ -584,9 +689,13 @@ async def _run_loop(
     store.emit(run_id, "tool_result", {"count": len(events)})
 
     # --- 4. Cluster events ---
+    # Use a fresh per-investigation TemplateMiner to avoid cross-request contamination.
+    # Template IDs in the store use sha1(template) so stability is content-based,
+    # not dependent on the in-memory miner's cluster IDs.
+    _inv_miner = TemplateMiner()
     template_results = []
     for ev in events:
-        r = _miner.add(ev)
+        r = _inv_miner.add(ev)
         template_results.append(r)
 
     # Find dominant template (most common template_id)
@@ -619,9 +728,15 @@ async def _run_loop(
         "dominant": dominant_template,
     })
 
-    # Upsert dominant template
+    # Embed dominant template (needed for both recall and upsert)
     dom_embs = await embed([dominant_template])
     dom_emb = dom_embs[0]
+
+    # --- 5. Recall: similar templates + incidents (BEFORE upsert to avoid self-match) ---
+    similar_tmpls = store.similar_templates(dom_emb, k=5)
+    similar_incs = store.similar_incidents(dom_emb, k=5)
+
+    # Upsert dominant template AFTER recall so it doesn't appear as its own top match
     store.upsert_template(
         template=dominant_template,
         sample=events[0] if events else sig,
@@ -629,10 +744,6 @@ async def _run_loop(
         source="suricata",
         embedding=dom_emb,
     )
-
-    # --- 5. Recall: similar templates + incidents ---
-    similar_tmpls = store.similar_templates(dom_emb, k=5)
-    similar_incs = store.similar_incidents(dom_emb, k=5)
     # Serialize datetimes
     for t in similar_tmpls:
         if t.get("last_seen") and hasattr(t["last_seen"], "isoformat"):
@@ -665,7 +776,8 @@ async def _run_loop(
 
     if markers:
         # A marker sits in or just before the spike window → deploy correlation
-        correlated_marker = markers[0]
+        # markers_near returns ASC by ts; pick the one nearest (latest) to the spike.
+        correlated_marker = markers[-1]
         ref = correlated_marker.get("ref", "")
         sha = correlated_marker.get("commit_sha", "")
         sha_str = f" (commit {sha})" if sha else ""
@@ -713,7 +825,7 @@ async def _run_loop(
     prose_user = json.dumps(facts, default=str)
     prose_fallback = (
         f"Signature '{sig}' showed a {severity}-severity spike "
-        f"(count={top_spike.get('count')}, z={top_spike.get('z'):.1f}). "
+        f"(count={top_spike.get('count')}, z={top_spike.get('z', 0.0):.1f}). "
         f"Root cause assessment: {root_cause_hint}."
     )
 

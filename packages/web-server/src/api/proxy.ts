@@ -36,8 +36,11 @@ async function proxyJson(
     }
     return { status: resp.status, payload };
   } catch (e) {
+    // Log the full error server-side; return only a generic message to the client
+    // so internal service hostnames/ports/topology are never leaked to the browser
+    // (nginx is the internet edge). Matches chat.ts's generic-error idiom. (px-1)
     server.log.error({ err: e, url }, 'proxy upstream fetch failed');
-    return { status: 502, payload: { error: 'upstream unavailable', detail: String(e) } };
+    return { status: 502, payload: { error: 'upstream unavailable' } };
   }
 }
 
@@ -77,9 +80,12 @@ export function registerProxyRoutes(server: FastifyInstance): void {
     '/api/v1/triage/queue',
     async (request, reply) => {
       const { bucket, severity } = request.query;
+      // URLSearchParams already percent-encodes values; do NOT encodeURIComponent
+      // first or filter values arrive double-encoded (space -> %2520) and the
+      // Python bucket filter silently fails to match. (px-2)
       const qs = new URLSearchParams();
-      if (bucket !== undefined) qs.set('bucket', encodeURIComponent(bucket));
-      if (severity !== undefined) qs.set('severity', encodeURIComponent(severity));
+      if (bucket !== undefined) qs.set('bucket', bucket);
+      if (severity !== undefined) qs.set('severity', severity);
       const qStr = qs.toString();
       const url = `${TRIAGE_URL}/triage/queue${qStr ? `?${qStr}` : ''}`;
       const { status, payload } = await proxyJson(server, url, 'GET', undefined, 15000);

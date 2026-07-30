@@ -364,3 +364,53 @@ class TestPlanAction:
 def test_constants():
     assert drift_stats.Z_95 == 1.96
     assert drift_stats.Z_99 == 2.576
+
+
+# ---------------------------------------------------------------------------
+# mem-7 regression gate: improving beats watch when net trend is strongly down
+# ---------------------------------------------------------------------------
+
+class TestMem7ImprovingBeforeWatch:
+    def test_improving_not_watch_when_early_cluster_then_long_success(self):
+        """mem-7 fix: a memory with an early failure cluster followed by a long
+        run of successes must be classified as 'improving', not 'watch'.
+
+        Before the fix, CUSUM (triggered by the early cluster) was checked first
+        and returned 'watch' even though the net trend was strongly improving.
+        After the fix, 'improving' is evaluated before 'watch'.
+
+        Setup:
+          before: 200 failures in 200 runs (100% failure rate)
+          after:  3 failures then 200 successes (< 1.5% failure rate)
+          The z-test will show a massive drop; z << -Z_99, delta_pct << -5.
+          The early [False,False,False] cluster is tiny — CUSUM won't trigger on
+          only 3 failures at a 1.0 baseline_rate, but even if a pathological
+          variant triggered it, 'improving' should win.
+        """
+        fails_before = 200
+        n_before = 200
+        # after: 3 failures out of 203 = ~1.5% failure rate
+        after_outcomes = [True, True, True] + [False] * 200
+        fails_after = sum(1 for x in after_outcomes if x)
+        n_after = len(after_outcomes)
+
+        result = drift_stats.assess_drift(
+            fails_before, n_before, fails_after, n_after, after_outcomes
+        )
+        assert result["level"] == "improving", (
+            f"Expected 'improving' but got {result['level']!r}. "
+            f"z={result['z']:.3f}, delta_pct={result['delta_pct']}. "
+            "mem-7 regression: 'improving' must be evaluated before 'watch'."
+        )
+        assert result["z"] < -drift_stats.Z_99
+        assert result["delta_pct"] <= -5
+
+    def test_watch_still_fires_when_not_improving(self):
+        """Sanity check: 'watch' still fires when the trend is adverse (not improving)."""
+        # 10/100 before, 20/100 after — borderline, watch/alert territory
+        result = drift_stats.assess_drift(
+            10, 100, 20, 100, [True] * 20 + [False] * 80
+        )
+        assert result["level"] in {"alert", "watch"}, (
+            f"Expected alert or watch but got {result['level']!r}"
+        )

@@ -133,30 +133,50 @@ async def _embed_stub(texts: list[str]) -> list[list[float]]:
 #   LAZY import: the package is only needed when this path is actually called.
 # ---------------------------------------------------------------------------
 
+def _is_auth_error(exc: Exception) -> bool:
+    """Return True if the exception looks like an auth/config failure.
+
+    Auth errors (bad key, 401, 403, permission denied) must NOT silently fall
+    back to stub vectors — that would mix embedding spaces and corrupt the
+    vector store. They are raised so the caller surfaces the root cause.
+
+    Transient errors (timeout, rate-limit, 5xx, import errors when the package
+    is temporarily unavailable) may fall back with a loud WARNING.
+    """
+    exc_name = type(exc).__name__.lower()
+    exc_str = str(exc).lower()
+    auth_signals = (
+        "unauthorized",
+        "403",
+        "401",
+        "invalid api key",
+        "permission denied",
+        "authentication",
+        "authenticationerror",
+        "permissiondenied",
+        "invalidargument",  # google-genai invalid key variant
+        "api_key_invalid",
+        "unauthenticated",
+    )
+    return any(sig in exc_name or sig in exc_str for sig in auth_signals)
+
+
 async def _embed_real(texts: list[str]) -> list[list[float]]:
     """Call Google's text-embedding-004 via langchain_google_genai.
 
-    Falls back to stub on any exception so the service degrades gracefully.
+    Raises on any error — the caller (embed()) handles fallback policy
+    so that auth errors and transient errors can be treated differently.
     """
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    try:
-        # Lazy import — never executed in stub mode so tests don't need the package.
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore[import]
+    # Lazy import — never executed in stub mode so tests don't need the package.
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore[import]
 
-        embedder = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
-            google_api_key=api_key,
-        )
-        raw: list[list[float]] = await embedder.aembed_documents(texts)
-        return [_l2_norm(vec) for vec in raw]
-
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "embeddings: real Gemini call failed (%s: %s); falling back to stub",
-            type(exc).__name__,
-            exc,
-        )
-        return await _embed_stub(texts)
+    embedder = GoogleGenerativeAIEmbeddings(
+        model="models/text-embedding-004",
+        google_api_key=api_key,
+    )
+    raw: list[list[float]] = await embedder.aembed_documents(texts)
+    return [_l2_norm(vec) for vec in raw]
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +188,34 @@ async def embed(texts: list[str]) -> list[list[float]]:
 
     Routing:
       * is_stub() → deterministic offline stub (no network, no key needed).
-      * otherwise  → real Gemini text-embedding-004, with stub fallback on error.
+      * otherwise  → real Gemini text-embedding-004.
+
+    Error policy (real path only):
+      * Auth/config errors (invalid key, 401/403): logged at ERROR and re-raised.
+        Silently returning stub vectors for an auth failure would mix embedding
+        spaces and corrupt the vector store.
+      * Transient errors (timeout, rate-limit, 5xx, missing package): logged at
+        WARNING, falls back to stub so the service degrades gracefully.
     """
     if not texts:
         return []
     if is_stub():
         return await _embed_stub(texts)
-    return await _embed_real(texts)
+    try:
+        return await _embed_real(texts)
+    except Exception as exc:  # noqa: BLE001
+        if _is_auth_error(exc):
+            logger.error(
+                "embeddings: auth/config error with GEMINI_API_KEY (%s: %s); "
+                "NOT falling back to stub — this would corrupt the vector store. "
+                "Fix the key or set EMBED_PROVIDER=stub to use offline mode.",
+                type(exc).__name__,
+                exc,
+            )
+            raise
+        logger.warning(
+            "embeddings: real Gemini call failed (%s: %s); falling back to stub",
+            type(exc).__name__,
+            exc,
+        )
+        return await _embed_stub(texts)

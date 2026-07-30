@@ -83,6 +83,10 @@ app = FastAPI(title="BHNOCgentic Hunter", version="0.1.0")
 
 _investigator_client: InvestigatorClient | None = None
 
+# hnt-2: in-process set of hunt_ids currently executing (best-effort single-process guard)
+# Multi-replica deployments would need a DB advisory lock instead.
+_inflight_hunts: set[str] = set()
+
 
 def _get_investigator_client() -> InvestigatorClient:
     """Return injectable client (app.state override) or module-level singleton."""
@@ -129,32 +133,45 @@ async def _run_hunt_core(hunt: dict, client: InvestigatorClient) -> dict:
     On investigator failure raises the original exception WITHOUT marking the
     hunt as run (so it retries on the next scheduler tick).
 
+    hnt-2: Checks the in-process _inflight_hunts set before running. If the hunt
+    is already in-flight (within this process), raises RuntimeError with a 409-style
+    message. NOTE: multi-replica safety requires a DB advisory lock.
+
+    hnt-3: Uses record_hunt_run_and_mark for atomic record + last_run_at update.
+
     Returns the hunt_run result dict.
     """
     hunt_id = hunt["id"]
 
-    # Call investigator -- may raise; caller handles 502 conversion
-    finding_resp = await client.investigate(hunt["hunt_query"], window_hours=24)
+    # hnt-2: best-effort single-process concurrency guard
+    if hunt_id in _inflight_hunts:
+        raise RuntimeError(f"hunt {hunt_id} already in-flight (409: concurrent run skipped)")
 
-    finding = finding_resp.get("finding", {})
-    run_id: str | None = finding_resp.get("run_id")
-    verdict: str | None = finding.get("verdict")
-    severity: str | None = finding.get("severity")
-    summary: str | None = finding.get("summary")
-    mitre_technique: str = hunt["mitre_technique"]
+    _inflight_hunts.add(hunt_id)
+    try:
+        # Call investigator -- may raise; caller handles 502 conversion
+        finding_resp = await client.investigate(hunt["hunt_query"], window_hours=24)
 
-    hunt_run_id = store.record_hunt_run(
-        hunt_id=hunt_id,
-        investigation_run_id=run_id,
-        verdict=verdict,
-        severity=severity,
-        mitre_technique=mitre_technique,
-        summary=summary,
-    )
+        finding = finding_resp.get("finding", {})
+        run_id: str | None = finding_resp.get("run_id")
+        verdict: str | None = finding.get("verdict")
+        severity: str | None = finding.get("severity")
+        summary: str | None = finding.get("summary")
+        mitre_technique: str = hunt["mitre_technique"]
 
-    # Only mark the hunt as run AFTER successfully recording the result
-    now = datetime.now(timezone.utc)
-    store.mark_hunt_ran(hunt_id, now)
+        # hnt-3: atomic record + mark in one transaction
+        now = datetime.now(timezone.utc)
+        hunt_run_id = store.record_hunt_run_and_mark(
+            hunt_id=hunt_id,
+            investigation_run_id=run_id,
+            verdict=verdict,
+            severity=severity,
+            mitre_technique=mitre_technique,
+            summary=summary,
+            ran_at=now,
+        )
+    finally:
+        _inflight_hunts.discard(hunt_id)
 
     return {
         "hunt_run_id": hunt_run_id,

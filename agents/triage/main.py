@@ -312,6 +312,18 @@ async def get_triage_detail(alert_id: str) -> dict:
     }
 
 
+@app.post("/triage/reap")
+async def reap_stale_validating(older_than_minutes: int = 5) -> dict:
+    """tri-2: Operator endpoint to recover alerts stuck in 'validating'.
+
+    Force-transitions any alert that has been in 'validating' for longer than
+    older_than_minutes back to 'alerts' so it can be re-investigated.
+    Returns {reaped: N}.
+    """
+    reaped = store.reap_stale_validating(older_than_minutes=older_than_minutes)
+    return {"reaped": reaped, "older_than_minutes": older_than_minutes}
+
+
 @app.post("/triage/{alert_id}/transition")
 async def manual_transition(alert_id: str, body: TransitionIn) -> dict:
     """Analyst override: move an alert to any bucket (with guard unless force=True)."""

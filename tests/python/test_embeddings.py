@@ -197,3 +197,71 @@ def test_module_importable_without_cloud_deps(monkeypatch: pytest.MonkeyPatch) -
     assert hasattr(mod, "embed")
     assert hasattr(mod, "is_stub")
     assert hasattr(mod, "EMBED_DIM")
+
+
+# ---------------------------------------------------------------------------
+# st-1 regression gate: auth errors must raise, not silently fall back to stub
+# ---------------------------------------------------------------------------
+
+
+async def test_auth_error_raises_not_silent_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """st-1 fix: when a real key is present and the embed call raises an auth-like
+    error, embed() must raise — NOT silently return stub vectors.
+
+    Silently returning stub vectors corrupts the vector store by mixing embedding
+    spaces (stub vectors vs. real Gemini vectors are incomparable).
+
+    The test monkeypatches _embed_real to raise a simulated auth error while
+    GEMINI_API_KEY is set (is_stub() returns False), then verifies that embed()
+    re-raises rather than swallowing it.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-but-present-key")
+    monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+
+    class FakeAuthError(Exception):
+        """Simulates a 401/403-style authentication failure from the Gemini API."""
+        pass
+
+    async def _raise_auth(_texts: list[str]) -> list[list[float]]:
+        raise FakeAuthError("401 Unauthorized: invalid API key")
+
+    monkeypatch.setattr(embeddings, "_embed_real", _raise_auth)
+
+    # is_stub() must be False (key is present)
+    assert embeddings.is_stub() is False
+
+    # embed() must propagate the auth error, not swallow it
+    with pytest.raises(FakeAuthError):
+        await embeddings.embed(["test text"])
+
+
+async def test_transient_error_falls_back_to_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Transient errors (timeout, network, 5xx) should still fall back to stub with a warning.
+    This ensures we haven't broken the graceful-degradation path for non-auth failures.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-but-present-key")
+    monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+
+    class FakeTimeoutError(Exception):
+        """Simulates a network timeout — not an auth error."""
+        pass
+
+    async def _raise_timeout(_texts: list[str]) -> list[list[float]]:
+        raise FakeTimeoutError("connection timed out")
+
+    monkeypatch.setattr(embeddings, "_embed_real", _raise_timeout)
+
+    # Transient error should not raise — it should fall back to stub vectors
+    result = await embeddings.embed(["test text"])
+    assert len(result) == 1
+    assert len(result[0]) == embeddings.EMBED_DIM
+
+
+async def test_stub_when_no_key_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Baseline: stub path is unaffected — no key means stub, no error."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+    assert embeddings.is_stub() is True
+    result = await embeddings.embed(["hello world"])
+    assert len(result) == 1
+    assert len(result[0]) == embeddings.EMBED_DIM

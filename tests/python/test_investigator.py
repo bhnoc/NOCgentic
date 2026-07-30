@@ -490,3 +490,183 @@ async def test_active_memory_injected_into_system_prompt():
 
     # Cleanup so the seeded memory doesn't leak into other tests' prompts.
     store.transition_memory(m["id"], "retired")
+
+
+# ---------------------------------------------------------------------------
+# inv-1: dt-partition guard bypass fix
+# ---------------------------------------------------------------------------
+
+def test_validate_query_rejects_like_bypass():
+    """inv-1: dt= inside a LIKE pattern must NOT satisfy the dt-filter guard."""
+    result = inv_main.validate_query(
+        "SELECT ts FROM dns WHERE query LIKE '%dt=%' LIMIT 100"
+    )
+    assert result is not None, (
+        "Expected rejection: dt= is inside a LIKE string literal, not a real partition filter"
+    )
+
+
+def test_validate_query_accepts_real_dt_filter():
+    """inv-1: A genuine WHERE dt = '...' should pass."""
+    result = inv_main.validate_query(
+        "SELECT ts FROM dns WHERE dt = '2026-07-30' LIMIT 5"
+    )
+    assert result is None, f"Expected None (accepted), got: {result}"
+
+
+def test_validate_query_rejects_comment_bypass():
+    """inv-1: dt= hidden in a SQL comment must NOT satisfy the guard."""
+    result = inv_main.validate_query(
+        "SELECT * FROM conn WHERE 1=1 -- dt='x'"
+    )
+    assert result is not None, (
+        "Expected rejection: dt= is inside a line comment, not a real partition filter"
+    )
+
+
+def test_validate_query_accepts_dt_in():
+    """inv-1: dt IN (...) is a valid partition filter and should pass."""
+    result = inv_main.validate_query(
+        "SELECT ts FROM conn WHERE dt IN ('2026-07-29', '2026-07-30') LIMIT 100"
+    )
+    assert result is None, f"Expected None (accepted), got: {result}"
+
+
+def test_validate_query_accepts_dt_in_with_cte():
+    """inv-1: WITH cte AS (...) query with dt= should pass."""
+    result = inv_main.validate_query(
+        "WITH recent AS (SELECT * FROM conn WHERE dt = '2026-07-30') "
+        "SELECT id_orig_h, count(*) FROM recent GROUP BY 1"
+    )
+    assert result is None, f"Expected None (accepted), got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# inv-3: detect_high_signal operates on full (untruncated) rows
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_high_signal_detected_beyond_row_20():
+    """inv-3: Cobalt Strike beacon at row index 34 must be found (not truncated away)."""
+    # Build 60 rows: rows 0-33 and 35-59 are benign, row 34 has the beacon
+    benign_row = {
+        "ts": "1753142400",
+        "id_orig_h": "10.0.0.1",
+        "id_resp_h": "1.2.3.4",
+        "alert_signature": "ET INFO HTTP Request to a *.xyz domain",
+        "alert_category": "Potentially Bad Traffic",
+    }
+    beacon_row = {
+        "ts": "1753142434",
+        "id_orig_h": "10.0.1.5",
+        "id_resp_h": "203.0.113.99",
+        "alert_signature": "ET MALWARE CobaltStrike Beacon Activity",
+        "alert_category": "A Network Trojan was Detected",
+    }
+    rows = [dict(benign_row) for _ in range(34)] + [beacon_row] + [dict(benign_row) for _ in range(25)]
+    assert len(rows) == 60
+
+    script = [
+        {"tool_calls": [{"name": "query_athena", "arguments": {
+            "query": "SELECT * FROM suricata_corelight WHERE dt = '2026-07-30' LIMIT 500"
+        }}]},
+        {"text": "Analysis complete."},
+    ]
+    provider = tp.FixtureProvider(script)
+    inv_main.app.state.tool_provider = provider
+    inv_main.app.state.athena_execute = _make_fake_athena(rows)
+
+    transport = ASGITransport(app=inv_main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post("/investigate", json={
+            "query": "Any beaconing?",
+            "window_hours": 24,
+            "max_depth": 5,
+        })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    finding = body["finding"]
+    evidence = body["evidence"]
+
+    assert finding["verdict"] == "threat", (
+        f"Expected 'threat' verdict — beacon at row 34 should be detected. "
+        f"Got verdict={finding['verdict']}, high_signals={evidence['high_signals']}"
+    )
+    assert evidence["high_signals"], (
+        "Expected non-empty high_signals — beacon at row 34 was missed (inv-3 regression)"
+    )
+    joined = " ".join(evidence["high_signals"]).lower()
+    assert "cobalt" in joined or "beacon" in joined, (
+        f"Expected CobaltStrike/beacon in high_signals, got: {evidence['high_signals']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# inv-6: empty GEMINI_API_KEY -> 503 (not 500), failed run persisted
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_gemini_key_returns_503():
+    """inv-6: /investigate with no app.state.tool_provider override and empty
+    GEMINI_API_KEY must return 503 (not 500) and persist a failed run with
+    plan + error events.
+    """
+    # Remove the test-fixture override so the real-provider path is taken
+    if hasattr(inv_main.app.state, "tool_provider"):
+        del inv_main.app.state.tool_provider
+
+    # GEMINI_API_KEY is already "" (set at module top)
+    transport = ASGITransport(app=inv_main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post("/investigate", json={
+            "query": "probe with no key",
+            "window_hours": 24,
+        })
+
+    assert resp.status_code == 503, (
+        f"Expected 503 when GEMINI_API_KEY is empty, got {resp.status_code}: {resp.text}"
+    )
+    assert "GEMINI_API_KEY" in resp.json().get("detail", ""), (
+        f"Expected 'GEMINI_API_KEY' in 503 detail. Got: {resp.json()}"
+    )
+
+    # Verify a failed run was persisted with plan + error events.
+    # list_runs doesn't exist; query PG directly for the most recent failed investigation run.
+    import psycopg
+    with psycopg.connect(_PG_DSN) as conn:
+        row = conn.execute(
+            "SELECT id FROM agent_runs WHERE kind = 'investigation' AND status = 'failed' "
+            "ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None, "Expected at least one failed investigation run persisted in DB"
+    run_id = row[0]
+    run_detail = store.get_run(run_id)
+    event_types = [e["event_type"] for e in run_detail["events"]]
+    assert "plan" in event_types, f"Expected 'plan' event in failed run. Got: {event_types}"
+    assert "error" in event_types, f"Expected 'error' event in failed run. Got: {event_types}"
+
+
+# ---------------------------------------------------------------------------
+# inv-2: system prompt contains the untrusted-data warning
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_system_prompt_contains_tool_data_warning():
+    """inv-2 smoke: the system prompt must warn the LLM not to follow tool result instructions."""
+    script = [{"text": "No issues found."}]
+    provider = tp.FixtureProvider(script)
+    inv_main.app.state.tool_provider = provider
+    inv_main.app.state.athena_execute = _make_fake_athena([])
+
+    transport = ASGITransport(app=inv_main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        await c.post("/investigate", json={"query": "smoke check", "window_hours": 24})
+
+    assert provider.seen_messages, "provider never called"
+    first_turn = provider.seen_messages[0]
+    system_msg = next((mm for mm in first_turn if mm.get("role") == "system"), None)
+    assert system_msg is not None, "No system message found in first provider call"
+    content = system_msg["content"]
+    assert "not instructions" in content.lower() or "tool results are data" in content.lower(), (
+        f"System prompt missing untrusted-data warning. Got: {content[:200]}"
+    )

@@ -192,24 +192,9 @@ def assess_drift(
             "ci_after_pct": ci_after_pct,
         }
 
-    # Statistically significant at 95% but not 99%/effect, or CUSUM caught gradual
-    # drift: worth watching, not yet worth an alert.
-    if test["z"] > Z_95 or cusum["triggered"]:
-        reason = (
-            "gradual increase in failures detected after this memory was applied"
-            if cusum["triggered"]
-            else f"possible degradation ({test['delta_pct']}pp, z={test['z']:.2f}) — watching"
-        )
-        return {
-            "level": "watch",
-            "z": test["z"],
-            "delta_pct": test["delta_pct"],
-            "drift_score_pct": max(0, min(100, test["delta_pct"])),
-            "reason": reason,
-            "ci_after_pct": ci_after_pct,
-        }
-
     # Symmetric improvement signal: significant DROP in failure rate.
+    # Checked BEFORE 'watch' so a net-improving memory with an early failure
+    # cluster (CUSUM-triggering) is not misclassified as 'watch'.
     # Same 99% bar + effect floor as 'alert' so we don't promote on noise.
     significant_drop = test["z"] < -z_crit
     big_drop = test["delta_pct"] <= -min_effect_pct
@@ -224,6 +209,23 @@ def assess_drift(
                 f"({round(test['rate_before'] * 100)}% → {round(test['rate_after'] * 100)}%, "
                 f"z={test['z']:.2f}, n={test['n_after']}) after this memory was applied"
             ),
+            "ci_after_pct": ci_after_pct,
+        }
+
+    # Statistically significant at 95% but not 99%/effect, or CUSUM caught gradual
+    # drift: worth watching, not yet worth an alert.
+    if test["z"] > Z_95 or cusum["triggered"]:
+        reason = (
+            "gradual increase in failures detected after this memory was applied"
+            if cusum["triggered"]
+            else f"possible degradation ({test['delta_pct']}pp, z={test['z']:.2f}) — watching"
+        )
+        return {
+            "level": "watch",
+            "z": test["z"],
+            "delta_pct": test["delta_pct"],
+            "drift_score_pct": max(0, min(100, test["delta_pct"])),
+            "reason": reason,
             "ci_after_pct": ci_after_pct,
         }
 

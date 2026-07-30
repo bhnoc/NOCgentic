@@ -65,11 +65,22 @@ _MIGRATION_PATH: Path = _resolve_migration_path()
 _pool: psycopg_pool.ConnectionPool | None = None
 
 
+# A fixed key for the schema-bootstrap advisory lock. Any 64-bit int; shared by
+# all services so concurrent cold-boot DDL serializes instead of racing on the
+# pg catalog (CREATE EXTENSION / CREATE TABLE "IF NOT EXISTS" is NOT concurrency
+# safe — two simultaneous callers can hit duplicate-key on pg_type/pg_extension).
+_SCHEMA_LOCK_KEY = 0x6E6F6367  # 'nocg'
+
+
 def _configure_conn(conn: psycopg.Connection) -> None:
     """Called by the pool for each new connection — ensure vector extension and register type."""
     # Ensure the extension exists on this database before registering the type.
     # This is idempotent and handles the bootstrap case where init_schema() has
-    # not yet been called (e.g. fresh database, first pool connection).
+    # not yet been called (e.g. fresh database, first pool connection). Serialize
+    # the CREATE EXTENSION behind a transaction-scoped advisory lock so multiple
+    # services opening pools against a fresh DB at the same time don't collide on
+    # the pg_extension catalog (st-5). pg_advisory_xact_lock releases at commit.
+    conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
     conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
     conn.commit()
     register_vector(conn)
@@ -109,6 +120,10 @@ def init_schema() -> None:
         files = [_MIGRATION_PATH]
     pool = _get_pool()
     with pool.connection() as conn:
+        # Serialize the whole migration run across concurrently-starting services
+        # so simultaneous cold-boot DDL doesn't race on the pg catalog (st-5).
+        # Transaction-scoped: auto-released on commit.
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
         for f in files:
             conn.execute(f.read_text())
         conn.commit()
@@ -429,6 +444,14 @@ BUCKETS: set[str] = {
     "dismissed",
 }
 
+# tri-3: buckets that park an alert indefinitely and should be reopened on higher-severity recurrence
+TERMINAL_BUCKETS: frozenset[str] = frozenset({
+    "validated_false_positive",
+    "validated_bad_hygiene",
+    "tuning_queue",
+    "dismissed",
+})
+
 LEGAL_EDGES: dict[str, set[str]] = {
     "alerts": {"validating", "dismissed"},
     "validating": {"validated_true_positive", "validated_false_positive", "validated_bad_hygiene", "alerts"},
@@ -459,6 +482,14 @@ def upsert_alert(
     pool = _get_pool()
     raw_jsonb = Jsonb(raw_data) if raw_data is not None else None
     with pool.connection() as conn:
+        # tri-3: capture existing state before the upsert so we know whether a
+        # terminal-bucket reopen is warranted (atomic within this transaction).
+        existing_row = conn.execute(
+            "SELECT id, bucket, severity FROM alerts WHERE dedup_key = %s FOR UPDATE",
+            (dedup_key,),
+        ).fetchone()
+
+        # Standard coalescing upsert (bucket is NOT changed here)
         row = conn.execute(
             """
             INSERT INTO alerts
@@ -477,9 +508,34 @@ def upsert_alert(
                 alert_type, signature, raw_jsonb, connector_source,
             ),
         ).fetchone()
+        assert row is not None
+        returned_id: str = row[0]
+
+        # tri-3: reopen if existing alert was in a terminal bucket AND new severity is strictly higher
+        if existing_row is not None:
+            old_bucket: str = existing_row[1]
+            old_severity: int = existing_row[2]
+            if old_bucket in TERMINAL_BUCKETS and severity > old_severity:
+                # Reopen: move back to 'alerts' and write audit row
+                conn.execute(
+                    "UPDATE alerts SET bucket = 'alerts', updated_at = now() WHERE id = %s",
+                    (returned_id,),
+                )
+                transition_id = uuid4().hex
+                conn.execute(
+                    """
+                    INSERT INTO bucket_transitions
+                        (id, alert_id, from_bucket, to_bucket, reason, investigation_run_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        transition_id, returned_id, old_bucket, "alerts",
+                        "reopened: higher-severity recurrence", None,
+                    ),
+                )
+
         conn.commit()
-    assert row is not None
-    return row[0]
+    return returned_id
 
 
 def get_alert(alert_id: str) -> dict | None:
@@ -587,8 +643,9 @@ def transition_alert(
 
     pool = _get_pool()
     with pool.connection() as conn:
+        # tri-1/st-4: SELECT ... FOR UPDATE serialises concurrent transitions on the same alert
         row = conn.execute(
-            "SELECT bucket FROM alerts WHERE id = %s",
+            "SELECT bucket FROM alerts WHERE id = %s FOR UPDATE",
             (alert_id,),
         ).fetchone()
         if row is None:
@@ -652,6 +709,50 @@ def alert_transitions(alert_id: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def reap_stale_validating(older_than_minutes: int = 5) -> int:
+    """tri-2: Force-transition alerts stuck in 'validating' past a threshold back to 'alerts'.
+
+    Writes a bucket_transitions audit row for each reaped alert.
+    Returns the count of alerts reaped.
+    """
+    pool = _get_pool()
+    with pool.connection() as conn:
+        # Find alerts stuck in 'validating' longer than the threshold (by updated_at)
+        stuck_rows = conn.execute(
+            """
+            SELECT id FROM alerts
+            WHERE bucket = 'validating'
+              AND updated_at < now() - (%s * interval '1 minute')
+            FOR UPDATE
+            """,
+            (older_than_minutes,),
+        ).fetchall()
+
+        count = 0
+        for (stuck_id,) in stuck_rows:
+            transition_id = uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO bucket_transitions
+                    (id, alert_id, from_bucket, to_bucket, reason, investigation_run_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    transition_id, stuck_id, "validating", "alerts",
+                    f"reaped: stuck in validating for >{older_than_minutes}m", None,
+                ),
+            )
+            conn.execute(
+                "UPDATE alerts SET bucket = 'alerts', updated_at = now() WHERE id = %s",
+                (stuck_id,),
+            )
+            count += 1
+
+        conn.commit()
+    logger.info("store: reaped %d stale validating alert(s)", count)
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -841,8 +942,9 @@ def transition_memory(
 
     pool = _get_pool()
     with pool.connection() as conn:
+        # st-4: SELECT ... FOR UPDATE serialises concurrent transitions on the same memory row
         row = conn.execute(
-            "SELECT memory_status FROM agent_memory WHERE id = %s",
+            "SELECT memory_status FROM agent_memory WHERE id = %s FOR UPDATE",
             (memory_id,),
         ).fetchone()
         if row is None:
@@ -953,6 +1055,8 @@ def register_hunts(templates: list[dict]) -> None:
     pool = _get_pool()
     with pool.connection() as conn:
         for t in templates:
+            # hnt-1: clamp interval_hours to a minimum of 1 to prevent self-DoS
+            interval_hours = max(1, int(t.get("interval_hours", 24) or 24))
             conn.execute(
                 """
                 INSERT INTO hunts
@@ -976,7 +1080,7 @@ def register_hunts(templates: list[dict]) -> None:
                     t.get("hypothesis"),
                     t["hunt_query"],
                     t.get("enabled", True),
-                    t.get("interval_hours", 24),
+                    interval_hours,
                 ),
             )
         conn.commit()
@@ -1072,7 +1176,9 @@ def due_hunts(now: datetime) -> list[dict]:
             now_aware: datetime = now
             if now_aware.tzinfo is None:
                 now_aware = now_aware.replace(tzinfo=timezone.utc)
-            deadline = last_aware + timedelta(hours=hunt["interval_hours"])
+            # hnt-1: guard against interval_hours <= 0 stored in DB; treat as 1h minimum
+            effective_interval = max(1, hunt["interval_hours"] or 1)
+            deadline = last_aware + timedelta(hours=effective_interval)
             if now_aware >= deadline:
                 result.append(hunt)
     return result
@@ -1099,6 +1205,41 @@ def record_hunt_run(
             """,
             (run_id, hunt_id, investigation_run_id, verdict, severity,
              mitre_technique, summary),
+        )
+        conn.commit()
+    return run_id
+
+
+def record_hunt_run_and_mark(
+    hunt_id: str,
+    investigation_run_id: str | None,
+    verdict: str | None,
+    severity: str | None,
+    mitre_technique: str | None,
+    summary: str | None,
+    ran_at: datetime,
+) -> str:
+    """hnt-3: Atomically insert a hunt_run row AND advance last_run_at in one transaction.
+
+    A partial failure cannot leave a hunt_run without an updated last_run_at (or
+    vice-versa). Returns the new hunt_run id (uuid4 hex).
+    """
+    run_id = uuid4().hex
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO hunt_runs
+                (id, hunt_id, investigation_run_id, verdict, severity,
+                 mitre_technique, summary)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (run_id, hunt_id, investigation_run_id, verdict, severity,
+             mitre_technique, summary),
+        )
+        conn.execute(
+            "UPDATE hunts SET last_run_at = %s WHERE id = %s",
+            (ran_at, hunt_id),
         )
         conn.commit()
     return run_id

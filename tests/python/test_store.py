@@ -226,3 +226,35 @@ class TestAgentRunTrace:
     def test_get_run_missing_raises(self):
         with pytest.raises(KeyError):
             store.get_run("nonexistent-run-id-00000000")
+
+
+class TestEmitUniqueSeq:
+    """st-2: UNIQUE(run_id, seq) constraint — two emits get distinct seq 1,2."""
+
+    def test_two_emits_get_distinct_seq(self):
+        """Two sequential emits on one run produce seq 1 and 2 with no duplicates."""
+        run_id = store.start_run("test-run", {"x": 1})
+        store.emit(run_id, "event_a", {"n": 1})
+        store.emit(run_id, "event_b", {"n": 2})
+
+        result = store.get_run(run_id)
+        seqs = [e["seq"] for e in result["events"]]
+        assert seqs == [1, 2], f"expected [1, 2], got {seqs}"
+
+    def test_unique_index_exists_on_agent_events(self):
+        """agent_events_run_seq_uniq UNIQUE index exists in the schema."""
+        import psycopg as _pg
+        with _pg.connect(_PG_DSN) as conn:
+            row = conn.execute(
+                """
+                SELECT indexname, indisunique
+                FROM pg_indexes
+                JOIN pg_class ON pg_class.relname = pg_indexes.indexname
+                JOIN pg_index ON pg_index.indexrelid = pg_class.oid
+                WHERE pg_indexes.tablename = 'agent_events'
+                  AND pg_indexes.indexname = 'agent_events_run_seq_uniq'
+                """
+            ).fetchone()
+        assert row is not None, "agent_events_run_seq_uniq index not found"
+        # indisunique should be True
+        assert row[1] is True, "agent_events_run_seq_uniq is not a unique index"

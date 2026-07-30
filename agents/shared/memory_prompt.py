@@ -34,23 +34,62 @@ MAX_INJECTED: int = 40
 MAX_MEMORY_CHARS: int = 500
 
 # ---------------------------------------------------------------------------
+# Confusables map — Cyrillic and Greek characters that visually mimic ASCII.
+# Applied BEFORE pattern matching so homoglyph-substituted injection is caught.
+# Deliberately narrow: only the most-abused Latin lookalikes.
+# ---------------------------------------------------------------------------
+
+_CONFUSABLES: dict[str, str] = {
+    # Cyrillic lookalikes → ASCII
+    "а": "a",  # U+0430 CYRILLIC SMALL LETTER A
+    "е": "e",  # U+0435 CYRILLIC SMALL LETTER IE
+    "о": "o",  # U+043E CYRILLIC SMALL LETTER O
+    "р": "p",  # U+0440 CYRILLIC SMALL LETTER ER
+    "с": "c",  # U+0441 CYRILLIC SMALL LETTER ES
+    "у": "y",  # U+0443 CYRILLIC SMALL LETTER U
+    "х": "x",  # U+0445 CYRILLIC SMALL LETTER HA
+    # Greek lookalikes → ASCII
+    "ο": "o",  # U+03BF GREEK SMALL LETTER OMICRON
+}
+
+_CONFUSABLES_TABLE: dict[int, str] = {ord(k): v for k, v in _CONFUSABLES.items()}
+
+
+# ---------------------------------------------------------------------------
 # Injection pattern deny-list
 # ---------------------------------------------------------------------------
 
 _RAW_PATTERNS: list[str] = [
-    # Instruction override phrases — use flexible middle-word matching
-    r"ignore\s+(\w+\s+){0,3}(instructions?|prompts?|rules?)",
-    r"disregard\s+(the\s+)?(rules?|instructions?|above)",
+    # Instruction override phrases — flexible middle-word/separator matching
+    # Handles spaces, hyphens, dots: "ignore previous instructions",
+    # "ignore-previous-instructions", "ignore.all.instructions"
+    r"ignore[\s\W]*(?:\w+[\s\W]+){0,3}(instructions?|prompts?|rules?)",
+    # Zero-separator variant catches ZWSP-collapsed forms (e.g., after U+200B strip):
+    # "ignoreallinstructions", "ignorepreviousinstructions"
+    r"ignore(?:all|previous|prior)instructions?",
+    r"disregard[\s\W]*(the[\s\W]*)?(rules?|instructions?|above)",
     r"you\s+are\s+now\b",
-    r"(pretend|act|roleplay)\s+(to\s+be|as)\b",
+    r"(pretend|act|roleplay)[\s\W]+(to\s+be|as)\b",
     r"\bsystem\s+prompt\b",
     r"\breveal\b.*?\b(instructions?|prompt)\b",
     r"\bshow\b.*?\b(instructions?|prompt)\b",
     r"\bnew\s+instructions?:",
     r"forget\s+(everything|all|previous)",
     r"\boverride\b",
-    # Markdown/code fence role token injection
-    r"^(assistant|system)\s*:",         # role token at start of line
+    # mem-1 additions — semantic injection families
+    r"\byour\s+(real\s+)?task\s+is\b",
+    r"\bthe\s+real\s+task\s+is\b",
+    r"\binstead[,;]?\s+(do|mark|classify|approve|respond|ignore)\b",
+    r"\bfrom\s+now\s+on\b",
+    r"\balways\s+(respond|answer|classify|mark)\s",
+    r"\bdo\s+not\s+(mention|reveal|tell|report)\b",
+    r"\bthe\s+actual\s+instructions?\b",
+    r"\bnew\s+task:",
+    r"\boutput\s+the\s+following\b",
+    # Narrowed to avoid false-positives on benign "print the alert count" etc.
+    r"\bprint\s+(the|your)\s+(system|prompt|instructions?|contents?|source|directives?)\b",
+    # Markdown/code fence role token injection (mem-3: MULTILINE, broader match)
+    r"(?:^|\n)\s*(assistant|system|user|developer)\s*:",
     r"```[^\n]*\n.*?(assistant|system)\s*:",  # role token inside a code fence
     # Prompt-boundary tokens
     r"<\|im_start\|>",
@@ -62,12 +101,12 @@ _RAW_PATTERNS: list[str] = [
     r"\[/INST\]",
     r"<<SYS>>",
     r"<</SYS>>",
-    r"Human:\s",
-    r"AI:\s",
+    r"Human:",   # mem-4: removed required trailing whitespace
+    r"AI:",      # mem-4: removed required trailing whitespace
 ]
 
 _INJECTION_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(p, re.IGNORECASE | re.DOTALL) for p in _RAW_PATTERNS
+    re.compile(p, re.IGNORECASE | re.DOTALL | re.MULTILINE) for p in _RAW_PATTERNS
 ]
 
 
@@ -80,6 +119,10 @@ def sanitize_memory_text(s: Any) -> str:
 
     Operations (in order):
       1. Coerce to str.
+      1b. NFKC normalization — folds fullwidth/compatibility forms to ASCII
+          (e.g. 'Ｉｇｎｏｒｅ' → 'Ignore').
+      1c. Confusables map — replace Cyrillic/Greek lookalikes with ASCII
+          equivalents (narrow, targeted list).
       2. Strip control characters (keep \\n and \\t).
       3. Collapse runs of whitespace (preserving single spaces).
       4. Neutralize injection patterns in-place — replace matched span with
@@ -91,6 +134,12 @@ def sanitize_memory_text(s: Any) -> str:
     """
     # 1. Coerce
     text = str(s)
+
+    # 1b. NFKC normalization — maps fullwidth/compatibility chars to ASCII equivalents
+    text = unicodedata.normalize("NFKC", text)
+
+    # 1c. Confusables folding — Cyrillic/Greek homoglyphs → ASCII
+    text = text.translate(_CONFUSABLES_TABLE)
 
     # 2. Strip control characters (keep newline U+000A and tab U+0009)
     cleaned_chars: list[str] = []

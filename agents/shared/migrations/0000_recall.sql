@@ -86,5 +86,9 @@ CREATE TABLE IF NOT EXISTS agent_events (
     data       jsonb
 );
 
-CREATE INDEX IF NOT EXISTS agent_events_run_seq_idx
+-- st-2: drop old non-unique index (replaced by unique variant below)
+DROP INDEX IF EXISTS agent_events_run_seq_idx;
+
+-- UNIQUE constraint so a racing duplicate seq errors loudly instead of silently corrupting order
+CREATE UNIQUE INDEX IF NOT EXISTS agent_events_run_seq_uniq
     ON agent_events (run_id, seq);

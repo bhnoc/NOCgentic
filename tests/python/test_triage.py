@@ -492,6 +492,181 @@ class TestInvestigatorFailure:
 
 
 # ---------------------------------------------------------------------------
+# tri-3 — dedup suppression: reopen on higher severity
+# ---------------------------------------------------------------------------
+
+
+class TestDedupReopen:
+    def test_higher_severity_reopens_dismissed_alert(self):
+        """tri-3: Dismiss an alert, then re-upsert with HIGHER severity -> bucket back to 'alerts' + audit transition exists."""
+        # Insert initial alert (severity 3)
+        alert_id = store.upsert_alert(
+            dedup_key="tri3-reopen-test|1.1.1.1|2.2.2.2",
+            severity=3,
+            signature="ET TEST",
+            source_ip="1.1.1.1",
+            dest_ip="2.2.2.2",
+        )
+        # Dismiss it (force, since dismissed is not a direct edge from alerts via legal path,
+        # but we can do alerts->dismissed which IS a legal edge)
+        store.transition_alert(alert_id, "dismissed", reason="false positive")
+        alert_after_dismiss = store.get_alert(alert_id)
+        assert alert_after_dismiss is not None
+        assert alert_after_dismiss["bucket"] == "dismissed"
+
+        # Re-upsert same dedup_key with HIGHER severity (8 > 3)
+        returned_id = store.upsert_alert(
+            dedup_key="tri3-reopen-test|1.1.1.1|2.2.2.2",
+            severity=8,
+            signature="ET TEST",
+            source_ip="1.1.1.1",
+            dest_ip="2.2.2.2",
+        )
+        assert returned_id == alert_id, "should return same alert id"
+
+        alert_after_reopen = store.get_alert(alert_id)
+        assert alert_after_reopen is not None
+        assert alert_after_reopen["bucket"] == "alerts", (
+            f"expected bucket='alerts' after higher-severity reopen, got {alert_after_reopen['bucket']}"
+        )
+
+        # Audit transition row must exist: dismissed -> alerts
+        transitions = store.alert_transitions(alert_id)
+        reopen_transitions = [
+            t for t in transitions
+            if t["from_bucket"] == "dismissed" and t["to_bucket"] == "alerts"
+        ]
+        assert len(reopen_transitions) >= 1, "expected a dismissed->alerts audit transition"
+        assert "higher-severity" in (reopen_transitions[0]["reason"] or "").lower()
+
+    def test_same_or_lower_severity_stays_dismissed(self):
+        """tri-3: Dismiss an alert, then re-upsert with SAME severity -> stays dismissed, count bumped."""
+        alert_id = store.upsert_alert(
+            dedup_key="tri3-stay-dismissed|3.3.3.3|4.4.4.4",
+            severity=5,
+            signature="ET STAY",
+            source_ip="3.3.3.3",
+            dest_ip="4.4.4.4",
+        )
+        store.transition_alert(alert_id, "dismissed", reason="fp")
+
+        # Re-upsert with same severity (5 == 5)
+        store.upsert_alert(
+            dedup_key="tri3-stay-dismissed|3.3.3.3|4.4.4.4",
+            severity=5,
+        )
+        alert = store.get_alert(alert_id)
+        assert alert is not None
+        assert alert["bucket"] == "dismissed", (
+            "bucket should remain dismissed when new severity <= existing severity"
+        )
+        assert alert["count"] == 2, "count should be incremented"
+
+    def test_lower_severity_stays_dismissed(self):
+        """tri-3: Dismiss an alert, re-upsert with LOWER severity -> stays dismissed."""
+        alert_id = store.upsert_alert(
+            dedup_key="tri3-lower-sev|5.5.5.5|6.6.6.6",
+            severity=7,
+        )
+        store.transition_alert(alert_id, "dismissed", reason="fp")
+
+        store.upsert_alert(
+            dedup_key="tri3-lower-sev|5.5.5.5|6.6.6.6",
+            severity=2,
+        )
+        alert = store.get_alert(alert_id)
+        assert alert is not None
+        assert alert["bucket"] == "dismissed"
+
+
+# ---------------------------------------------------------------------------
+# tri-1 — transition TOCTOU: SELECT...FOR UPDATE is present
+# ---------------------------------------------------------------------------
+
+
+class TestTransitionLocking:
+    def test_transition_works_normally_single_threaded(self):
+        """tri-1: Normal single-threaded transition still succeeds (lock is transparent)."""
+        alert_id = store.upsert_alert(
+            dedup_key="tri1-lock-test|7.7.7.7|8.8.8.8",
+            severity=4,
+        )
+        result = store.transition_alert(alert_id, "dismissed", reason="lock test")
+        assert result["to_bucket"] == "dismissed"
+        assert result["from_bucket"] == "alerts"
+
+        alert = store.get_alert(alert_id)
+        assert alert is not None
+        assert alert["bucket"] == "dismissed"
+
+        transitions = store.alert_transitions(alert_id)
+        assert len(transitions) == 1
+
+    def test_transition_alert_uses_for_update(self):
+        """tri-1: Verify SELECT...FOR UPDATE is present in transition_alert source."""
+        import inspect
+        source = inspect.getsource(store.transition_alert)
+        assert "FOR UPDATE" in source, "transition_alert must use SELECT...FOR UPDATE"
+
+
+# ---------------------------------------------------------------------------
+# tri-2 — reap_stale_validating
+# ---------------------------------------------------------------------------
+
+
+class TestReapStaleValidating:
+    def test_reap_returns_zero_when_nothing_stuck(self):
+        """tri-2: reap on empty/fresh tables returns 0."""
+        count = store.reap_stale_validating(older_than_minutes=5)
+        assert count == 0
+
+    def test_reap_recovers_stuck_validating_alert(self):
+        """tri-2: An alert artificially aged in validating gets reaped back to alerts."""
+        import psycopg as _pg
+
+        alert_id = store.upsert_alert(
+            dedup_key="tri2-reap-test|9.9.9.9|10.10.10.10",
+            severity=3,
+        )
+        # Force into validating
+        store.transition_alert(alert_id, "validating", reason="triage started")
+        # Artificially age updated_at to trigger the reaper
+        with _pg.connect(_PG_DSN) as conn:
+            conn.execute(
+                "UPDATE alerts SET updated_at = now() - interval '10 minutes' WHERE id = %s",
+                (alert_id,),
+            )
+            conn.commit()
+
+        count = store.reap_stale_validating(older_than_minutes=5)
+        assert count >= 1
+
+        alert = store.get_alert(alert_id)
+        assert alert is not None
+        assert alert["bucket"] == "alerts", (
+            f"expected reaped alert back in 'alerts', got {alert['bucket']}"
+        )
+
+        # Audit transition must exist
+        transitions = store.alert_transitions(alert_id)
+        reap_transitions = [
+            t for t in transitions
+            if t["from_bucket"] == "validating" and t["to_bucket"] == "alerts"
+            and "reap" in (t["reason"] or "").lower()
+        ]
+        assert len(reap_transitions) >= 1
+
+    def test_reap_endpoint_via_http(self):
+        """tri-2: POST /triage/reap returns {reaped: N}."""
+        client = _client_with()
+        resp = client.post("/triage/reap")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "reaped" in data
+        assert isinstance(data["reaped"], int)
+
+
+# ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
 

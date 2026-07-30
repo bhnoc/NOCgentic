@@ -537,6 +537,147 @@ class TestEnableDisable:
 
 
 # ---------------------------------------------------------------------------
+# hnt-1 — interval_hours clamp
+# ---------------------------------------------------------------------------
+
+
+class TestIntervalHoursClamp:
+    def test_zero_interval_clamped_to_one(self):
+        """hnt-1: A hunt registered with interval_hours=0 is clamped to 1."""
+        store.register_hunts([{
+            "id": "test-zero-interval",
+            "name": "Zero Interval Hunt",
+            "mitre_tactic": "TA0001",
+            "mitre_technique": "T9999",
+            "hypothesis": "test",
+            "hunt_query": "SELECT 1",
+            "enabled": True,
+            "interval_hours": 0,
+        }])
+        hunt = store.get_hunt("test-zero-interval")
+        assert hunt is not None
+        assert hunt["interval_hours"] >= 1, (
+            f"interval_hours should be clamped to >= 1, got {hunt['interval_hours']}"
+        )
+
+    def test_zero_interval_hunt_not_due_every_tick(self):
+        """hnt-1: A hunt with interval_hours=0 (clamped to 1) is NOT due again right after running."""
+        store.register_hunts([{
+            "id": "test-zero-interval-due",
+            "name": "Zero Interval Due Hunt",
+            "mitre_tactic": "TA0001",
+            "mitre_technique": "T9999",
+            "hypothesis": "test",
+            "hunt_query": "SELECT 1",
+            "enabled": True,
+            "interval_hours": 0,
+        }])
+        # Mark as run right at _BASE
+        store.mark_hunt_ran("test-zero-interval-due", _BASE)
+        # Check 1 second later — with interval clamped to 1h, should NOT be due
+        due_ids = [h["id"] for h in store.due_hunts(_BASE + timedelta(seconds=1))]
+        assert "test-zero-interval-due" not in due_ids, (
+            "hunt with interval_hours=0 should not be due 1 second after running (clamped to 1h)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# hnt-3 — record_hunt_run_and_mark atomicity
+# ---------------------------------------------------------------------------
+
+
+class TestRecordHuntRunAndMark:
+    def test_atomic_record_advances_both(self):
+        """hnt-3: record_hunt_run_and_mark advances hunt_run row AND last_run_at in one call."""
+        store.register_hunts(HUNT_TEMPLATES)
+        hunt_id = "c2-non-standard-port"
+
+        hunt_before = store.get_hunt(hunt_id)
+        assert hunt_before is not None
+        assert hunt_before["last_run_at"] is None
+
+        ran_at = _BASE
+        run_id = store.record_hunt_run_and_mark(
+            hunt_id=hunt_id,
+            investigation_run_id="fake-atomic-run-001",
+            verdict="benign",
+            severity="informational",
+            mitre_technique=hunt_before["mitre_technique"],
+            summary="atomic test",
+            ran_at=ran_at,
+        )
+
+        # hunt_run row must exist
+        runs = store.list_hunt_runs(hunt_id=hunt_id)
+        assert len(runs) == 1
+        assert runs[0]["id"] == run_id
+        assert runs[0]["investigation_run_id"] == "fake-atomic-run-001"
+
+        # last_run_at must be advanced
+        hunt_after = store.get_hunt(hunt_id)
+        assert hunt_after is not None
+        assert hunt_after["last_run_at"] is not None, "last_run_at should be set"
+        # Normalize timezone for comparison
+        last = hunt_after["last_run_at"]
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        assert last == ran_at, f"expected last_run_at={ran_at}, got {last}"
+
+
+# ---------------------------------------------------------------------------
+# hnt-2 — in-flight concurrency guard
+# ---------------------------------------------------------------------------
+
+
+class TestInflightGuard:
+    def test_second_concurrent_run_skipped(self):
+        """hnt-2: Simulating a second run of the same hunt_id while one is in-flight -> skipped."""
+        import asyncio
+
+        store.register_hunts(HUNT_TEMPLATES)
+        hunt_id = "c2-non-standard-port"
+        hunt = store.get_hunt(hunt_id)
+        assert hunt is not None
+
+        # Manually add the hunt to the in-flight set to simulate a concurrent run
+        hunter_main._inflight_hunts.add(hunt_id)
+        try:
+            with pytest.raises(RuntimeError, match="already in-flight"):
+                asyncio.run(hunter_main._run_hunt_core(hunt, FakeInvestigatorClient(_BENIGN_FINDING)))
+        finally:
+            hunter_main._inflight_hunts.discard(hunt_id)
+
+    def test_inflight_set_cleared_after_success(self):
+        """hnt-2: After a successful run, hunt_id is removed from _inflight_hunts."""
+        import asyncio
+
+        store.register_hunts(HUNT_TEMPLATES)
+        hunt_id = "c2-non-standard-port"
+        hunt = store.get_hunt(hunt_id)
+        assert hunt is not None
+
+        asyncio.run(hunter_main._run_hunt_core(hunt, FakeInvestigatorClient(_BENIGN_FINDING)))
+        assert hunt_id not in hunter_main._inflight_hunts, (
+            "hunt_id should be removed from _inflight_hunts after successful run"
+        )
+
+    def test_inflight_set_cleared_after_failure(self):
+        """hnt-2: Even on investigator failure, hunt_id is removed from _inflight_hunts."""
+        import asyncio
+
+        store.register_hunts(HUNT_TEMPLATES)
+        hunt_id = "c2-non-standard-port"
+        hunt = store.get_hunt(hunt_id)
+        assert hunt is not None
+
+        with pytest.raises(RuntimeError):
+            asyncio.run(hunter_main._run_hunt_core(hunt, FailingInvestigatorClient()))
+        assert hunt_id not in hunter_main._inflight_hunts, (
+            "hunt_id should be removed from _inflight_hunts even after failure"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
 
