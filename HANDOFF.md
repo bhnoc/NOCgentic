@@ -111,6 +111,29 @@ Persistence decided: **Postgres+pgvector** container. First slice: **vector sear
 - **Verified from CLEAN**: acid 82 green; guard gate PROVEN to bite (patched LEGAL_EDGES → illegal-edge test fails, restored → passes). Cold `docker compose up postgres investigator triage` → both migrations init in-container; live HTTP: ingest+dedup(count→2), queue ordered, illegal edge→409, unknown→400, force→200+audit, investigate w/ keyless investigator→502 + alert rolled back alerts→validating→alerts (both audited).
 - NOT yet wired into orchestrator/UI (deferred).
 
+### SLICE 4 — DONE & GREEN (2026-07-30). Wire services into the app: glass-box + triage UI.
+- BACKEND: `packages/web-server/src/api/proxy.ts` — same-origin /api/v1 proxy to investigator/triage/root-cause (6 routes, :id validated, querystring passthrough, 502 on upstream down). Registered in index.ts. Env INVESTIGATOR_URL/TRIAGE_URL/ROOT_CAUSE_URL added to web-server compose + depends_on. vitest 36/36 (13 new in proxy.test.ts), tsc clean, chat.ts untouched.
+- FRONTEND: `static/index.html` (1736→2373 lines) — Chat|Triage view switcher, Triage Queue (grouped by bucket, severity chips, Run-triage buttons), slide-in Glass Box panel (ordered event timeline: plan→queried Athena→read→verdict→finding, with SQL + deductions). Deep links ?view=triage & ?trace=<run_id>. Reuses existing CSS vars + escHtml. No new deps.
+- FIX (caught by live screenshot, NOT unit tests): triage severity is NUMERIC (1..4) from store, frontend assumed string → `(a.severity||'low').toLowerCase()` threw. Added sevLabel() mapping int|string. THIRD instance of "clean-state/live verify catches what unit tests miss" this session.
+- Demo seed: `agents/triage/qa/seed_demo.py` (gitignored dir, force-added) — seeds alerts + one traced run.
+- **Verified from CLEAN**: full compose stack up, seeded, headless-Chrome screenshots of BOTH surfaces (triage queue + glass-box trace) render correctly against live services. Screenshots in temp/shots/.
+- Delivers 3 headline features: Glass Box Transparency, Investigations Triage Hub, AI Chatbot Interface (chat preserved).
+
+## CURRENT STANDING (2026-07-30)
+Branch level9000, 5 commits past main. Python acid 82 green + web-server vitest 36 green. Docker: colima;
+throwaway `nocgentic-pgtest` on host:5432 for the acid gate. NOT deployed to the AING box yet (local only).
+NOT wired into the orchestrator's intent router yet (deferred — orchestrator has a tuned eval suite; wiring
+investigator/triage/root-cause as routable intents is a gated future step). No Gemini key locally, so
+investigate/embed live paths degrade gracefully (503/stub) and are proven in-process; full LLM path needs
+the key on the box.
+
+### Remaining candidate slices (not yet built)
+- Wire new services into orchestrator intent routing (gated vs bench/prompt_eval).
+- Operational-context memory / semantic DB (VR agent_memory lifecycle: draft→active→retired + drift stats).
+- Proactive threat-hunting scheduler (cron the investigator over hunt templates).
+- Autonomous agent collaboration (orchestrator delegates + shares context across the new agents).
+- Deploy to AING box + on-box smoke with real Gemini key.
+
 ### SLICE 3 (original heading, superseded):
 Port VR's alert `bucket` lifecycle (alerts→validating→validated_TP/FP/bad_hygiene + hunting_*) +
 `bucket_transitions` audit + finding contract, with an autonomous triage worker that pulls alerts
