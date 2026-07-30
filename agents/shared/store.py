@@ -1165,3 +1165,200 @@ def _hunt_row(row: tuple) -> dict:
         "last_run_at": row[8],
         "created_at": row[9],
     }
+
+
+# ---------------------------------------------------------------------------
+# Self-improving memory: drift stats outcome recording + sweep support
+# ---------------------------------------------------------------------------
+
+def record_memory_outcome(memory_id: str, run_id: str | None, failed: bool) -> str:
+    """Record a single run outcome for a memory.
+
+    Returns the new outcome id (uuid4 hex).
+    """
+    outcome_id = uuid4().hex
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO memory_outcomes (id, memory_id, run_id, failed)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (outcome_id, memory_id, run_id, failed),
+        )
+        conn.commit()
+    return outcome_id
+
+
+def memory_outcomes_split(
+    memory_id: str,
+    split_at: datetime,
+) -> tuple[int, int, int, int, list[bool]]:
+    """Split memory outcomes into before/after the split_at timestamp.
+
+    Returns (fails_before, n_before, fails_after, n_after, ordered_after_outcomes).
+    ordered_after_outcomes = the 'failed' bools of the after set ordered by at ASC.
+    before = outcomes with at < split_at; after = outcomes with at >= split_at.
+    """
+    pool = _get_pool()
+    with pool.connection() as conn:
+        before_rows = conn.execute(
+            """
+            SELECT failed FROM memory_outcomes
+            WHERE memory_id = %s AND at < %s
+            ORDER BY at
+            """,
+            (memory_id, split_at),
+        ).fetchall()
+        after_rows = conn.execute(
+            """
+            SELECT failed FROM memory_outcomes
+            WHERE memory_id = %s AND at >= %s
+            ORDER BY at
+            """,
+            (memory_id, split_at),
+        ).fetchall()
+
+    before_bools = [r[0] for r in before_rows]
+    after_bools = [r[0] for r in after_rows]
+
+    fails_before = sum(1 for b in before_bools if b)
+    n_before = len(before_bools)
+    fails_after = sum(1 for b in after_bools if b)
+    n_after = len(after_bools)
+
+    return (fails_before, n_before, fails_after, n_after, after_bools)
+
+
+def assess_memory_drift(memory_id: str) -> dict:
+    """Assess drift for a single memory.
+
+    Loads the memory, determines the split point (promoted_at or created_at),
+    splits outcomes, runs drift_stats.assess_drift, and returns the drift dict
+    augmented with memory_status.
+    """
+    import drift_stats  # noqa: PLC0415 — lazy import, avoid circular at module level
+
+    mem = get_memory(memory_id)
+    if mem is None:
+        raise KeyError(f"memory not found: {memory_id}")
+
+    split_at: datetime = mem["promoted_at"] or mem["created_at"]
+    # Ensure timezone-aware
+    if split_at.tzinfo is None:
+        split_at = split_at.replace(tzinfo=timezone.utc)
+
+    fails_before, n_before, fails_after, n_after, ordered_after = memory_outcomes_split(
+        memory_id, split_at
+    )
+
+    drift = drift_stats.assess_drift(
+        fails_before,
+        n_before,
+        fails_after,
+        n_after,
+        ordered_after,
+    )
+    drift["memory_status"] = mem["memory_status"]
+    return drift
+
+
+def update_drift_score(memory_id: str, pct: int) -> None:
+    """Update the drift_score_pct for a memory."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE agent_memory SET drift_score_pct = %s, updated_at = now() WHERE id = %s",
+            (pct, memory_id),
+        )
+        conn.commit()
+
+
+def create_memory_proposal(
+    memory_id: str,
+    action: str,
+    reason: str | None,
+    drift_score_pct: int,
+) -> str:
+    """Create a memory proposal row. Returns new proposal id (uuid4 hex)."""
+    proposal_id = uuid4().hex
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO memory_proposals (id, memory_id, action, reason, drift_score_pct)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (proposal_id, memory_id, action, reason, drift_score_pct),
+        )
+        conn.commit()
+    return proposal_id
+
+
+def list_memory_proposals(status: str = "open") -> list[dict]:
+    """Return memory proposals filtered by status, ordered by created_at DESC."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, memory_id, action, reason, drift_score_pct, status, created_at
+            FROM memory_proposals
+            WHERE status = %s
+            ORDER BY created_at DESC
+            """,
+            (status,),
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "memory_id": r[1],
+            "action": r[2],
+            "reason": r[3],
+            "drift_score_pct": r[4],
+            "status": r[5],
+            "created_at": r[6],
+        }
+        for r in rows
+    ]
+
+
+def active_or_candidate_memories() -> list[dict]:
+    """Return all memories with status 'active' or 'candidate' (the sweep set).
+
+    Excludes retired and draft memories so the sweep is convergent.
+    Ordered by updated_at DESC.
+    """
+    pool = _get_pool()
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, agent_slug, key, value, context, category, memory_status,
+                   version, rationale, confidence_pct, run_id, usage_count,
+                   drift_score_pct, promoted_at, retired_at, created_at, updated_at
+            FROM agent_memory
+            WHERE memory_status IN ('active', 'candidate')
+            ORDER BY updated_at DESC
+            """,
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "agent_slug": r[1],
+            "key": r[2],
+            "value": r[3],
+            "context": r[4],
+            "category": r[5],
+            "memory_status": r[6],
+            "version": r[7],
+            "rationale": r[8],
+            "confidence_pct": r[9],
+            "run_id": r[10],
+            "usage_count": r[11],
+            "drift_score_pct": r[12],
+            "promoted_at": r[13],
+            "retired_at": r[14],
+            "created_at": r[15],
+            "updated_at": r[16],
+        }
+        for r in rows
+    ]

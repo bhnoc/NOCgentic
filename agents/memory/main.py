@@ -25,6 +25,7 @@ if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
 import store  # noqa: E402
+import drift_stats  # noqa: E402
 from memory_prompt import build_memory_block  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -71,6 +72,15 @@ class MemoryIn(BaseModel):
 class TransitionIn(BaseModel):
     to_status: str
     actor: str = "api"
+
+
+class OutcomeIn(BaseModel):
+    run_id: str | None = None
+    failed: bool
+
+
+class SweepIn(BaseModel):
+    mode: str
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +235,137 @@ async def transition_memory_endpoint(memory_id: str, body: TransitionIn) -> dict
         if msg.startswith("unknown status"):
             raise HTTPException(status_code=400, detail=msg)
         raise HTTPException(status_code=409, detail=msg)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Drift / self-improving memory endpoints
+# ---------------------------------------------------------------------------
+
+_VALID_SWEEP_MODES = {"off", "shadow", "live"}
+
+
+@app.post("/memory/{memory_id}/outcome")
+async def record_outcome(memory_id: str, body: OutcomeIn) -> dict:
+    """Record a run outcome (pass/fail) for a memory.
+
+    Returns {id, memory_id, run_id, failed}.
+    404 if memory not found.
+    """
+    mem = store.get_memory(memory_id)
+    if mem is None:
+        raise HTTPException(status_code=404, detail=f"memory not found: {memory_id}")
+    outcome_id = store.record_memory_outcome(memory_id, body.run_id, body.failed)
+    return {"id": outcome_id, "memory_id": memory_id, "run_id": body.run_id, "failed": body.failed}
+
+
+@app.get("/memory/proposals")
+async def list_proposals(status: str = "open") -> dict:
+    """Return memory proposals filtered by status.
+
+    Returns {count, proposals: [...]}.
+    """
+    proposals = store.list_memory_proposals(status)
+    return {"count": len(proposals), "proposals": proposals}
+
+
+@app.post("/memory/sweep")
+async def run_sweep(body: SweepIn) -> dict:
+    """Run the drift sweep over all active/candidate memories.
+
+    mode:
+      off    — measure only; update drift_score_pct; no state changes.
+      shadow — create proposal rows for any actionable memories; no state changes.
+      live   — apply retire/promote transitions directly; write memory_events.
+
+    Returns {mode, assessed, actions: [{memory_id, level, action}...]}.
+    """
+    mode = body.mode
+    if mode not in _VALID_SWEEP_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown mode '{mode}'; must be one of {sorted(_VALID_SWEEP_MODES)}",
+        )
+
+    memories = store.active_or_candidate_memories()
+    actions: list[dict] = []
+    proposals: list[dict] = []
+
+    for mem in memories:
+        memory_id = mem["id"]
+        memory_status = mem["memory_status"]
+
+        # Assess drift
+        try:
+            drift = store.assess_memory_drift(memory_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sweep: assess_memory_drift failed for %s: %s", memory_id, exc)
+            continue
+
+        # Always update drift score
+        store.update_drift_score(memory_id, drift["drift_score_pct"])
+
+        # Plan action
+        plan = drift_stats.plan_action(memory_status, drift["level"])
+        action = plan["action"]
+
+        actions.append({
+            "memory_id": memory_id,
+            "level": drift["level"],
+            "action": action,
+        })
+
+        if mode == "off":
+            # Measure only — no proposals, no transitions.
+            continue
+
+        if mode == "shadow":
+            if action is not None:
+                proposal_id = store.create_memory_proposal(
+                    memory_id,
+                    action,
+                    drift["reason"],
+                    drift["drift_score_pct"],
+                )
+                proposals.append({
+                    "proposal_id": proposal_id,
+                    "memory_id": memory_id,
+                    "action": action,
+                    "reason": drift["reason"],
+                })
+            continue
+
+        # mode == "live"
+        if action == "retire":
+            try:
+                store.transition_memory(memory_id, "retired", actor="self-improve")
+            except (ValueError, KeyError) as exc:
+                logger.warning("sweep live: retire failed for %s: %s", memory_id, exc)
+        elif action == "promote":
+            try:
+                store.transition_memory(memory_id, "active", actor="self-improve")
+            except (ValueError, KeyError) as exc:
+                logger.warning("sweep live: promote failed for %s: %s", memory_id, exc)
+        elif action == "adjust_confidence":
+            # Nudge confidence based on drift direction; keep minimal — just record.
+            cur = mem.get("confidence_pct") or 50
+            if drift["level"] in {"alert", "watch"}:
+                target = max(0, cur - 10)
+            else:
+                target = min(100, cur + 10)
+            if target != cur:
+                import psycopg as _psycopg  # noqa: PLC0415
+                pool = store._get_pool()
+                with pool.connection() as conn:
+                    conn.execute(
+                        "UPDATE agent_memory SET confidence_pct = %s, updated_at = now() WHERE id = %s",
+                        (target, memory_id),
+                    )
+                    conn.commit()
+
+    result: dict = {"mode": mode, "assessed": len(memories), "actions": actions}
+    if mode == "shadow":
+        result["proposals"] = proposals
     return result
 
 
