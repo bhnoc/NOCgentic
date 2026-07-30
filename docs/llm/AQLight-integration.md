@@ -43,21 +43,35 @@ The plumbing to REACH AQLight exists and defaults to its name, so it is availabl
 
 As of 2026-07-30 the box runs **hybrid** and it is the recommended default:
 `LLM_PROVIDER=gemini` + `SQLGEN_PROVIDER=local`. Only athena-hunter's NL->SQL generation
-goes to AQLight; classify, answer synthesis, and alert-triage stay on Gemini. Three-way
-eval (14 scenarios, Gemini judge):
+goes to AQLight; classify, answer synthesis, and alert-triage stay on Gemini.
+
+**Clean three-way eval** (all three modes run back to back on ONE data seed with ONE Gemini
+judge session, so golden-drift + judge variance hit all three equally; trust the RANKING,
+not the absolute levels, which are depressed by stale goldens):
 
 | mode | accuracy | relevance | speed |
 |------|----------|-----------|-------|
-| Gemini all | 98.8% | 0.718 | 11.7s |
-| AQLight all | 93.7% | 0.464 | 9.0s |
-| **Hybrid (default)** | **98.8%** | **0.589** | 11.3s |
+| Gemini all | 98.8% | 0.693 | 11.7s |
+| **Hybrid (default)** | **98.0%** | **0.586** | 10.9s |
+| AQLight all | 94.0% | 0.411 | 9.1s |
 
-Hybrid recovers full accuracy AND kills the AQLight-all hallucinations (AQLight-all
-invented alert details and told the analyst to block the legitimate DNS forwarder; hybrid's
-Gemini synthesis does not). The residual relevance gap vs Gemini-all is golden-drift /
-judge noise on a few scenarios (hunt-02, byip-02, perf-01), present in the Gemini-all
-baseline too, not a hybrid regression. AQLight generates correct SQL through the app's real
-9KB prompt (the wrong-columns behavior only shows with a generic prompt).
+Ranking is unambiguous: **Gemini >= Hybrid > AQLight-all** on both accuracy and relevance.
+
+- **Hybrid vs AQLight-all:** hybrid clearly wins. AQLight-all hallucinates in synthesis
+  (invented alert details; told the analyst to block the legitimate DNS forwarder), which
+  hybrid's Gemini synthesis removes. AQLight is NOT good enough on its own for whole-app.
+- **Hybrid vs Gemini-all:** hybrid trails slightly on relevance EVEN THOUGH synthesis is
+  identical Gemini. That gap is real and it is AQLight's SQL: it writes correct, valid, but
+  SIMPLER queries (single literal SELECTs) where Gemini writes multi-query aggregating
+  hunts. On open-ended profile/hunt questions (byip-01, hunt-02) AQLight retrieves less
+  complete data, so even Gemini-the-synthesizer has less to work with. On targeted
+  questions (alert-01, triage-01, hunt-04, bymac) hybrid matches or beats Gemini.
+
+Net: hybrid is the right default (near-Gemini accuracy, no hallucination, faster/cheaper
+SQL), with a known ceiling on exploratory hunts. Lifting it means a richer AQLight SQL-gen
+prompt or more multi-query-hunt training data, not a provider change. AQLight generates
+correct SQL through the app's real 9KB prompt (the wrong-columns behavior only shows with a
+generic prompt).
 
 ## Turn it on
 
