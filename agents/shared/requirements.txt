@@ -15,3 +15,6 @@ langchain-openai>=0.2.0
 # bridge, which emitted zero LLM spans in practice (see telemetry.py). langsmith
 # stays as a transitive langchain-core dep, but its OTEL export is force-disabled.
 openinference-instrumentation-langchain>=0.1.29
+psycopg[binary,pool]>=3.2
+pgvector>=0.3
+drain3>=0.9.11

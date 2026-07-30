@@ -1,4 +1,53 @@
 services:
+  # Postgres + pgvector: durable store for the root-cause service — log-template
+  # embeddings, resolved-incident memory, deploy markers, and the append-only
+  # agent_runs/agent_events reasoning trace. Internal only (never published to the
+  # host); reached by root-cause over the docker network at postgres:5432.
+  postgres:
+    image: pgvector/pgvector:pg16
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_USER=${PG_USER:-nocgentic}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:-nocgentic}
+      - POSTGRES_DB=${PG_DB:-nocgentic}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-nocgentic} -d ${PG_DB:-nocgentic}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Root-cause / vector-recall service: Drain template clustering + pgvector recall
+  # + agentic root-cause loop with a glass-box reasoning trace. Internal only.
+  root-cause:
+    build:
+      context: .
+      dockerfile: agents/root-cause/Dockerfile
+    expose:
+      - "8006"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      - EMBED_PROVIDER=${EMBED_PROVIDER:-}
+      - PG_DSN=${PG_DSN:-postgresql://nocgentic:nocgentic@postgres:5432/nocgentic}
+      - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
+      - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
+      - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=bhnocgentic-root-cause
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   orchestrator:
     build:
       context: .
@@ -177,3 +226,6 @@ services:
       - audit-monitor
       - web-server
     restart: unless-stopped
+
+volumes:
+  pgdata:

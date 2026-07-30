@@ -49,3 +49,4 @@ tests/python/.venv/
 bench/results/*.json
 
 bench/prompt_eval/results/*.json
+qa/
