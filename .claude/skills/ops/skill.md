@@ -455,6 +455,23 @@ has more — that's the app config, not missing data.
 
 ---
 
+## AQLight local model + HYBRID provider (2026-07-30)
+
+The box runs **hybrid** by default: `LLM_PROVIDER=gemini` + `SQLGEN_PROVIDER=local` in
+`.env.s3`. Only athena-hunter's NL->SQL generation uses the local AQLight model; classify,
+synthesis, and triage stay on Gemini. Eval: hybrid = 98.8% acc / 0.589 rel (full Gemini
+accuracy, no AQLight hallucinations). Full detail: `docs/llm/AQLight-integration.md`.
+
+- **AQLight is a systemd service:** `aqlight.service` (enabled, `Restart=always`, binds
+  0.0.0.0:8080). `sudo systemctl status|restart aqlight`; health
+  `curl -sf http://127.0.0.1:8080/health`.
+- **NO fallback:** with `SQLGEN_PROVIDER=local`, if AQLight is down athena-hunter SQL gen
+  ERRORS (local provider does not fall back to cloud). If athena-hunter fails on every
+  query, check `systemctl status aqlight` FIRST; or unset `SQLGEN_PROVIDER` in `.env.s3`
+  and recreate athena-hunter to fall back to Gemini SQL gen.
+- **Bind gotcha:** llama-server must bind `0.0.0.0` (not 127.0.0.1) or the containers can't
+  reach it via `host.docker.internal`. The systemd unit already does this.
+
 ## Changing the Gemini model
 
 Defaults to Gemini. As of 2026-07-22 the model is **`gemini-3.5-flash-lite`** (migrated from

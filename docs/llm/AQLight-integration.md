@@ -39,25 +39,45 @@ The plumbing to REACH AQLight exists and defaults to its name, so it is availabl
 - Defaults are inert: with nothing set, every agent still uses Gemini. Setting the local
   vars is a deliberate opt-in.
 
+## Current default: HYBRID (AQLight SQL + Gemini prose)
+
+As of 2026-07-30 the box runs **hybrid** and it is the recommended default:
+`LLM_PROVIDER=gemini` + `SQLGEN_PROVIDER=local`. Only athena-hunter's NL->SQL generation
+goes to AQLight; classify, answer synthesis, and alert-triage stay on Gemini. Three-way
+eval (14 scenarios, Gemini judge):
+
+| mode | accuracy | relevance | speed |
+|------|----------|-----------|-------|
+| Gemini all | 98.8% | 0.718 | 11.7s |
+| AQLight all | 93.7% | 0.464 | 9.0s |
+| **Hybrid (default)** | **98.8%** | **0.589** | 11.3s |
+
+Hybrid recovers full accuracy AND kills the AQLight-all hallucinations (AQLight-all
+invented alert details and told the analyst to block the legitimate DNS forwarder; hybrid's
+Gemini synthesis does not). The residual relevance gap vs Gemini-all is golden-drift /
+judge noise on a few scenarios (hunt-02, byip-02, perf-01), present in the Gemini-all
+baseline too, not a hybrid regression. AQLight generates correct SQL through the app's real
+9KB prompt (the wrong-columns behavior only shows with a generic prompt).
+
 ## Turn it on
 
-1. **Serve AQLight on the box** (from the slm-athena project, its call to deploy). It MUST
-   bind 0.0.0.0, not 127.0.0.1, or the containers cannot reach it (see Gotchas):
+1. **AQLight runs as a systemd service** (set up 2026-07-30): `aqlight.service`, enabled,
+   `Restart=always`, binds 0.0.0.0:8080, survives reboot/crash.
    ```bash
-   ~/llama.cpp/build/bin/llama-server -m ~/slm-athena/training/gguf/athena-v3-q4_k_m.gguf \
-     --host 0.0.0.0 --port 8080 -ngl 99 -c 8192 --alias AQLight &
-   curl -sf http://127.0.0.1:8080/health   # {"status":"ok"}   (model loads in ~40s)
+   sudo systemctl status aqlight     # active (running)
+   sudo systemctl restart aqlight    # if it needs a bounce
+   curl -sf http://127.0.0.1:8080/health   # {"status":"ok"}
    ```
-2. **Point NOCgentic at it.** Two options:
-   - **Whole app** (verified working 2026-07-30): set `LLM_PROVIDER=local` in `.env.s3` and
-     recreate the agent containers. AQLight handled routing, NL->SQL, synthesis, AND triage
-     end to end at 92.5% accuracy (vs Gemini 98.8%), faster, zero cloud cost. Fine for a
-     dev/air-gapped box or when the Gemini key is capped.
-   - **athena-hunter only**: `LLM_PROVIDER=local` on just that container, Gemini elsewhere.
-     Keeps the classify/triage paths on the frontier model while the data-lake hunt runs
-     local. Lowest blast radius; use if you want to hedge on the ~6-point accuracy trade.
-   - **A/B a single query** without changing the deployment: override provider per call (the
-     `provider=`/`model=` args on `llm_complete` already support this), useful for `bench/`.
+   Manual fallback (no service): `~/llama.cpp/build/bin/llama-server -m
+   ~/slm-athena/training/gguf/athena-v3-q4_k_m.gguf --host 0.0.0.0 --port 8080 -ngl 99
+   -c 8192 --alias AQLight &`. It MUST bind 0.0.0.0, not 127.0.0.1 (see Gotchas).
+2. **Enable hybrid** (the default): in `.env.s3` set `LLM_PROVIDER=gemini` and
+   `SQLGEN_PROVIDER=local`, then `docker compose ... up -d athena-hunter`. To turn hybrid
+   OFF and go pure-Gemini, unset `SQLGEN_PROVIDER` and recreate. Other modes:
+   - **Whole app local**: `LLM_PROVIDER=local` (all agents on AQLight). Air-gap / Gemini-key
+     capped only; synthesis quality drops (relevance 0.464, hallucinations).
+   - **A/B a single query**: override provider per call (the `provider=`/`model=` args on
+     `llm_complete`), useful for `bench/`.
 3. **Prompt note (matters):** AQLight was trained with a SHORT ~456-char system prompt, not
    NOCgentic's ~9KB `SQL_GEN_PROMPT`. The big prompt still works (schema knowledge is baked
    into the weights) but wastes context. If SQL quality is off when pointed at AQLight, try
@@ -72,12 +92,21 @@ The plumbing to REACH AQLight exists and defaults to its name, so it is availabl
 | `LOCAL_LLM_BASE_URL` | `http://host.docker.internal:8080/v1` | where AQLight's llama-server listens (host, via the bridge gateway) |
 | `LOCAL_LLM_MODEL` | `AQLight` | served model alias (llama-server `--alias AQLight`) |
 | `LOCAL_LLM_API_KEY` | `not-needed` | placeholder; llama.cpp ignores it |
+| `SQLGEN_PROVIDER` | (unset) | route ONLY NL->SQL gen here; `local` = hybrid (the default on the box). Unset = SQL gen uses `LLM_PROVIDER`. |
+| `SQLGEN_MODEL` | (unset) | optional model override paired with `SQLGEN_PROVIDER` |
 
 Set these in `.env.s3` on the box (authoritative env), then
 `docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d` the affected service.
 
 ## Gotchas
 
+- **Hybrid has NO fallback if AQLight is down.** With `SQLGEN_PROVIDER=local`, the SQL-gen
+  call goes only to AQLight (the local provider does not fall back to cloud, by design). If
+  `aqlight.service` is stopped/crashed, athena-hunter SQL gen ERRORS. That is why AQLight is
+  a systemd service with `Restart=always`. If athena-hunter starts failing on every query,
+  check `systemctl status aqlight` first, or unset `SQLGEN_PROVIDER` to fall back to Gemini
+  SQL gen. (Adding a code-level SQLGEN fallback-to-LLM_PROVIDER on connection error would be
+  a nice hardening; not built yet.)
 - **llama-server MUST bind 0.0.0.0, not 127.0.0.1.** `slm-athena/serve.sh` launches with
   `--host 127.0.0.1`, which only accepts loopback connections. The app containers reach the
   model via `host.docker.internal` (the docker bridge gateway, a non-loopback address), so a
