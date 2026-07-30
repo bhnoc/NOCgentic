@@ -693,3 +693,125 @@ class TestHealth:
         assert "autorun" in data
         # In tests, HUNTER_AUTORUN=0 so autorun should be False
         assert data["autorun"] is False
+
+
+# ---------------------------------------------------------------------------
+# hnt-4: scheduler loop ticks before first sleep
+# ---------------------------------------------------------------------------
+
+class TestSchedulerLoopOrderHnt4:
+    """hnt-4: verify _scheduler_loop runs a tick before sleeping."""
+
+    def test_scheduler_loop_tick_before_sleep_code_structure(self):
+        """Structural check: inspect _scheduler_loop source to confirm tick precedes sleep.
+
+        The invariant is: scheduler_tick(...) is called before asyncio.sleep() in the
+        loop body. We verify this via a short async run that confirms hunts execute
+        on the first iteration without waiting SCHED_TICK_SECONDS.
+        """
+        import asyncio
+        import inspect
+
+        src = inspect.getsource(hunter_main._scheduler_loop)
+        # tick call must appear before sleep call in the function source
+        tick_pos = src.find("scheduler_tick")
+        sleep_pos = src.find("asyncio.sleep")
+        assert tick_pos != -1, "_scheduler_loop must call scheduler_tick"
+        assert sleep_pos != -1, "_scheduler_loop must call asyncio.sleep"
+        assert tick_pos < sleep_pos, (
+            f"hnt-4: scheduler_tick (pos {tick_pos}) must appear before "
+            f"asyncio.sleep (pos {sleep_pos}) in _scheduler_loop"
+        )
+
+    def test_scheduler_runs_hunt_without_full_interval_wait(self):
+        """hnt-4: A hunt that is due runs on the very first tick (no sleep first).
+
+        We override SCHED_TICK_SECONDS to a large value; if the loop slept first the
+        hunt would never run in our short asyncio.wait_for timeout.
+        """
+        import asyncio
+
+        store.register_hunts(HUNT_TEMPLATES)
+        hunt_id = "c2-non-standard-port"
+        # All hunts start as never-run (due immediately)
+
+        ran_ids: list[str] = []
+
+        class CapturingClient:
+            async def investigate(self, query: str, window_hours: int = 24) -> dict:
+                ran_ids.append(hunt_id)
+                return _BENIGN_FINDING
+
+        # Inject the client
+        hunter_main.app.state.investigator_client = CapturingClient()
+
+        # Override tick seconds to a huge value so the test would time out if sleep came first
+        original = hunter_main.SCHED_TICK_SECONDS
+        hunter_main.SCHED_TICK_SECONDS = 9999
+
+        async def _run_loop_briefly():
+            task = asyncio.create_task(hunter_main._scheduler_loop())
+            # Give the loop time to run one tick (the immediate first one)
+            await asyncio.sleep(0.5)
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        try:
+            asyncio.run(_run_loop_briefly())
+        finally:
+            hunter_main.SCHED_TICK_SECONDS = original
+
+        assert len(ran_ids) >= 1, (
+            "hnt-4: expected at least one hunt to run immediately on first tick, "
+            "but none ran — loop may be sleeping before first tick"
+        )
+
+
+# ---------------------------------------------------------------------------
+# hnt-5: POST /run rejects disabled hunt with 409; force=true overrides
+# ---------------------------------------------------------------------------
+
+class TestRunDisabledHunt:
+    """hnt-5: /hunts/{id}/run returns 409 for disabled hunts; ?force=true runs it."""
+
+    def test_disabled_hunt_run_returns_409(self):
+        """hnt-5: POST /run on a disabled hunt returns 409."""
+        client = _client_with(FakeInvestigatorClient(_BENIGN_FINDING))
+        hunt_id = "c2-non-standard-port"
+
+        # Disable the hunt
+        client.post(f"/hunts/{hunt_id}/disable")
+
+        resp = client.post(f"/hunts/{hunt_id}/run")
+        assert resp.status_code == 409, (
+            f"Expected 409 for disabled hunt run, got {resp.status_code}: {resp.text}"
+        )
+        assert "disabled" in resp.json().get("detail", "").lower(), (
+            f"Expected 'disabled' in 409 detail: {resp.json()}"
+        )
+
+    def test_disabled_hunt_run_with_force_succeeds(self):
+        """hnt-5: POST /run?force=true on a disabled hunt runs it (200)."""
+        client = _client_with(FakeInvestigatorClient(_BENIGN_FINDING))
+        hunt_id = "c2-non-standard-port"
+
+        client.post(f"/hunts/{hunt_id}/disable")
+
+        resp = client.post(f"/hunts/{hunt_id}/run?force=true")
+        assert resp.status_code == 200, (
+            f"Expected 200 for force-run of disabled hunt, got {resp.status_code}: {resp.text}"
+        )
+        assert "hunt_run_id" in resp.json()
+
+    def test_enabled_hunt_run_not_affected(self):
+        """hnt-5: /run on an enabled hunt still works as before (no regression)."""
+        client = _client_with(FakeInvestigatorClient(_BENIGN_FINDING))
+        hunt_id = "c2-non-standard-port"
+
+        resp = client.post(f"/hunts/{hunt_id}/run")
+        assert resp.status_code == 200, (
+            f"Expected 200 for enabled hunt run, got {resp.status_code}: {resp.text}"
+        )

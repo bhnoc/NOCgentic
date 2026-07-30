@@ -111,8 +111,10 @@ def premask(raw: str) -> tuple[str, dict[str, list[str]]]:
       5. MAC addresses          → <MAC>
       6. Zeek UIDs (C+15-20)    → <UID>
       7. long hex (>=16 chars)  → <HEX>
-      8. integers >= 3 digits   → <NUM>
-      9. domain names           → <DOMAIN>
+      8. domain names           → <DOMAIN>   (before integers, st-6: prevents digit
+                                               runs inside hostnames from fragmenting
+                                               labels before domain regex can match)
+      9. integers >= 3 digits   → <NUM>
 
     Returns:
         (masked_string, params_dict)
@@ -161,11 +163,25 @@ def premask(raw: str) -> tuple[str, dict[str, list[str]]]:
     # 7. Long hex strings
     s = _RE_HEX.sub(_sub("<HEX>"), s)
 
-    # 8. Standalone integers >= 3 digits
-    s = _RE_NUM.sub(_sub("<NUM>"), s)
+    # 8. Domain names — BEFORE standalone integers (st-6).
+    #    If _RE_NUM ran first, digit runs inside hostnames like 'web01srv.example.com'
+    #    or 'db1234.corp.example.com' would be replaced with <NUM>, fragmenting the
+    #    label and preventing the domain regex from matching the full token.
+    #    st-7: skip domain masking entirely for tokens longer than 253 chars (the
+    #    FQDN max per RFC 1035) to avoid near-catastrophic regex backtracking on
+    #    long dotless blobs (e.g. base64 payloads embedded in a log line).
+    def _domain_guard_sub(m: re.Match) -> str:  # type: ignore[type-arg]
+        token = m.group(0)
+        if len(token) > 253:
+            return token  # too long to be a real FQDN; skip masking
+        captured["<DOMAIN>"].append(token)
+        return "<DOMAIN>"
 
-    # 9. Domain names
-    s = _RE_DOMAIN.sub(_sub("<DOMAIN>"), s)
+    s = _RE_DOMAIN.sub(_domain_guard_sub, s)
+
+    # 9. Standalone integers >= 3 digits (runs AFTER domain masking so digit
+    #    runs inside already-masked <DOMAIN> tokens are not double-processed).
+    s = _RE_NUM.sub(_sub("<NUM>"), s)
 
     return s, dict(captured)
 

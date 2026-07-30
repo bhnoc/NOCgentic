@@ -85,6 +85,11 @@ _investigator_client: InvestigatorClient | None = None
 
 # hnt-2: in-process set of hunt_ids currently executing (best-effort single-process guard)
 # Multi-replica deployments would need a DB advisory lock instead.
+# s2-06: This set has no TTL — a process crash while a hunt is in-flight leaves no orphaned
+# entry (the set is process-local and discarded on restart). The investigator client uses a
+# 120s request timeout (see HttpInvestigatorClient), so the worst-case in-flight window is
+# bounded. In a multi-replica setup, replace this set with a PG advisory lock or a
+# short-TTL distributed lock (e.g. Redis SETNX with TTL ~timeout+buffer).
 _inflight_hunts: set[str] = set()
 
 
@@ -216,9 +221,13 @@ async def scheduler_tick(now: datetime, client: InvestigatorClient) -> list[str]
 
 
 async def _scheduler_loop() -> None:
-    """Background asyncio task: run scheduler_tick every SCHED_TICK_SECONDS."""
+    """Background asyncio task: run scheduler_tick every SCHED_TICK_SECONDS.
+
+    hnt-4: run one tick immediately on startup (before the first sleep) so
+    hunts are not delayed a full interval on fresh deploy.
+    """
     while True:
-        await asyncio.sleep(SCHED_TICK_SECONDS)
+        # hnt-4: tick first, then sleep — inverted from the original sleep-first order.
         try:
             client = _get_investigator_client()
             now = datetime.now(timezone.utc)
@@ -227,6 +236,7 @@ async def _scheduler_loop() -> None:
                 logger.info("hunter: scheduler tick ran %d hunt(s): %s", len(ran), ran)
         except Exception as exc:  # noqa: BLE001
             logger.error("hunter: scheduler loop error (continuing): %s", exc)
+        await asyncio.sleep(SCHED_TICK_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +299,23 @@ async def get_hunt_endpoint(hunt_id: str) -> dict:
 
 
 @app.post("/hunts/{hunt_id}/run")
-async def run_hunt_endpoint(hunt_id: str) -> dict:
-    """Run a hunt immediately (manual trigger)."""
+async def run_hunt_endpoint(hunt_id: str, force: bool = Query(default=False)) -> dict:
+    """Run a hunt immediately (manual trigger).
+
+    hnt-5: Disabled hunts are rejected with 409 unless ?force=true is passed.
+    This prevents accidental runs of hunts the operator has intentionally disabled
+    while still allowing an explicit manual override when needed.
+    """
     hunt = store.get_hunt(hunt_id)
     if hunt is None:
         raise HTTPException(status_code=404, detail=f"hunt not found: {hunt_id}")
+
+    # hnt-5: reject disabled hunt unless ?force=true
+    if not hunt.get("enabled", True) and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"hunt disabled: {hunt_id}. Pass ?force=true to override."
+        )
 
     client = _get_investigator_client()
 

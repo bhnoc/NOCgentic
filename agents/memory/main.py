@@ -245,6 +245,54 @@ async def transition_memory_endpoint(memory_id: str, body: TransitionIn) -> dict
 _VALID_SWEEP_MODES = {"off", "shadow", "live"}
 
 
+def _assess_candidate_drift(memory_id: str, mem: dict) -> dict:
+    """mem-5: assess drift for a candidate memory using the candidacy-transition timestamp.
+
+    A candidate has promoted_at=NULL, so store.assess_memory_drift() always uses
+    created_at as the split point.  All outcomes are then 'after' (n_before=0),
+    the z-test is invalid, and the result is always 'insufficient_data'.
+
+    Fix: look up the most recent memory_event where to_status='candidate' for this
+    memory; that timestamp is the true split point.  Outcomes recorded before the
+    memory became a candidate serve as the 'before' baseline; outcomes after as
+    'after'.  If no such event exists, fall back to the store default.
+    """
+    import psycopg as _psycopg  # noqa: PLC0415
+    from datetime import timezone as _tz  # noqa: PLC0415
+
+    candidate_ts = None
+    pool = store._get_pool()
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT at FROM memory_events
+            WHERE memory_id = %s AND to_status = 'candidate'
+            ORDER BY at DESC
+            LIMIT 1
+            """,
+            (memory_id,),
+        ).fetchone()
+        if row is not None:
+            candidate_ts = row[0]
+
+    if candidate_ts is None:
+        # No candidacy event — fall back to store default (uses created_at).
+        return store.assess_memory_drift(memory_id)
+
+    # Ensure tz-aware
+    if candidate_ts.tzinfo is None:
+        candidate_ts = candidate_ts.replace(tzinfo=_tz.utc)
+
+    fails_before, n_before, fails_after, n_after, ordered_after = store.memory_outcomes_split(
+        memory_id, candidate_ts
+    )
+
+    import drift_stats as _drift_stats  # noqa: PLC0415
+    drift = _drift_stats.assess_drift(fails_before, n_before, fails_after, n_after, ordered_after)
+    drift["memory_status"] = mem["memory_status"]
+    return drift
+
+
 @app.post("/memory/{memory_id}/outcome")
 async def record_outcome(memory_id: str, body: OutcomeIn) -> dict:
     """Record a run outcome (pass/fail) for a memory.
@@ -295,12 +343,24 @@ async def run_sweep(body: SweepIn) -> dict:
         memory_id = mem["id"]
         memory_status = mem["memory_status"]
 
-        # Assess drift
-        try:
-            drift = store.assess_memory_drift(memory_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("sweep: assess_memory_drift failed for %s: %s", memory_id, exc)
-            continue
+        # mem-5: For candidates, promoted_at is NULL so all outcomes land in 'after'
+        # (n_before=0) making the z-test always invalid → insufficient_data → never
+        # promotes. Fix: find the timestamp when the memory *entered* candidate status
+        # from memory_events and use that as the split point.  If no such event exists
+        # (shouldn't happen, but be defensive), fall back to the store default.
+        drift: dict
+        if memory_status == "candidate":
+            try:
+                drift = _assess_candidate_drift(memory_id, mem)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sweep: assess candidate drift failed for %s: %s", memory_id, exc)
+                continue
+        else:
+            try:
+                drift = store.assess_memory_drift(memory_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sweep: assess_memory_drift failed for %s: %s", memory_id, exc)
+                continue
 
         # Always update drift score
         store.update_drift_score(memory_id, drift["drift_score_pct"])
@@ -347,12 +407,25 @@ async def run_sweep(body: SweepIn) -> dict:
             except (ValueError, KeyError) as exc:
                 logger.warning("sweep live: promote failed for %s: %s", memory_id, exc)
         elif action == "adjust_confidence":
-            # Nudge confidence based on drift direction; keep minimal — just record.
-            cur = mem.get("confidence_pct") or 50
-            if drift["level"] in {"alert", "watch"}:
-                target = max(0, cur - 10)
+            # mem-6: derive a TARGET confidence from the measured effect rather than
+            # applying an unconditional +/-10 delta every sweep.  This makes the sweep
+            # idempotent: re-running without new outcomes produces the same target and
+            # therefore the same no-op UPDATE.
+            #
+            # Target derivation:
+            #   watch   → clamp to 40  (degrading but not yet alarm)
+            #   improving (active) → clamp to 80  (beneficial, but not promoted)
+            #   anything else → leave unchanged
+            cur = mem.get("confidence_pct")
+            if cur is None:
+                cur = 50
+            if drift["level"] == "watch":
+                target = 40
+            elif drift["level"] == "improving":
+                target = 80
             else:
-                target = min(100, cur + 10)
+                target = cur  # no-op for unrecognised levels
+
             if target != cur:
                 import psycopg as _psycopg  # noqa: PLC0415
                 pool = store._get_pool()

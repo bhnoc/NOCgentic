@@ -77,19 +77,20 @@ _RAW_PATTERNS: list[str] = [
     r"forget\s+(everything|all|previous)",
     r"\boverride\b",
     # mem-1 additions — semantic injection families
+    # Only HIGH-PRECISION patterns retained; over-broad bare phrases dropped (s2-01).
     r"\byour\s+(real\s+)?task\s+is\b",
     r"\bthe\s+real\s+task\s+is\b",
-    r"\binstead[,;]?\s+(do|mark|classify|approve|respond|ignore)\b",
-    r"\bfrom\s+now\s+on\b",
-    r"\balways\s+(respond|answer|classify|mark)\s",
-    r"\bdo\s+not\s+(mention|reveal|tell|report)\b",
-    r"\bthe\s+actual\s+instructions?\b",
+    # "always respond/answer" are clear model-instruction hijacks; "always mark/classify"
+    # are common benign SOC ops phrases (s2-01: dropped mark/classify).
+    r"\balways\s+(respond|answer)\s",
+    # "do not reveal/tell" = high-precision (no benign SOC use); drop mention/report (s2-01).
+    r"\bdo\s+not\s+(reveal|tell)\b",
     r"\bnew\s+task:",
-    r"\boutput\s+the\s+following\b",
     # Narrowed to avoid false-positives on benign "print the alert count" etc.
     r"\bprint\s+(the|your)\s+(system|prompt|instructions?|contents?|source|directives?)\b",
     # Markdown/code fence role token injection (mem-3: MULTILINE, broader match)
-    r"(?:^|\n)\s*(assistant|system|user|developer)\s*:",
+    # "user:" removed — too common in benign ops text ("user: joe reported…"); s2-01.
+    r"(?:^|\n)\s*(assistant|system|developer)\s*:",
     r"```[^\n]*\n.*?(assistant|system)\s*:",  # role token inside a code fence
     # Prompt-boundary tokens
     r"<\|im_start\|>",

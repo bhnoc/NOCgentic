@@ -241,6 +241,53 @@ class TestEmitUniqueSeq:
         seqs = [e["seq"] for e in result["events"]]
         assert seqs == [1, 2], f"expected [1, 2], got {seqs}"
 
+    def test_three_sequential_emits_get_123(self):
+        """s2-03 gate: three sequential emits produce seq 1, 2, 3."""
+        run_id = store.start_run("seq-test", {})
+        store.emit(run_id, "e1", {"n": 1})
+        store.emit(run_id, "e2", {"n": 2})
+        store.emit(run_id, "e3", {"n": 3})
+        result = store.get_run(run_id)
+        seqs = [e["seq"] for e in result["events"]]
+        assert seqs == [1, 2, 3], f"expected [1, 2, 3], got {seqs}"
+
+    def test_forced_duplicate_seq_handled_by_retry(self):
+        """s2-03 gate: manually inserting a duplicate seq then calling emit does not raise.
+
+        Simulates the concurrent-emit collision by pre-inserting seq=1, then
+        calling emit() which will try seq=1 again, hit UniqueViolation, retry,
+        and succeed with seq=2.
+        """
+        import psycopg as _pg
+        from psycopg.types.json import Jsonb
+
+        run_id = store.start_run("retry-test", {})
+        # Manually insert seq=1 to simulate one half of a concurrent pair
+        with _pg.connect(_PG_DSN) as conn:
+            conn.execute(
+                "INSERT INTO agent_events (run_id, seq, event_type, data) VALUES (%s, %s, %s, %s)",
+                (run_id, 1, "pre_inserted", Jsonb({"x": "pre"})),
+            )
+            conn.commit()
+
+        # emit() will compute MAX(seq)=1 -> try seq=1 -> UniqueViolation -> retry -> seq=2
+        # This should NOT raise.
+        store.emit(run_id, "after_conflict", {"x": "retry"})
+
+        result = store.get_run(run_id)
+        seqs = sorted(e["seq"] for e in result["events"])
+        assert 1 in seqs, "pre-inserted seq=1 must still be present"
+        assert 2 in seqs, "retried emit must have landed at seq=2"
+
+    def test_emit_retry_code_exists(self):
+        """s2-03 gate: emit() source contains retry logic for UniqueViolation."""
+        import inspect
+        source = inspect.getsource(store.emit)
+        assert "UniqueViolation" in source, "emit must handle psycopg.errors.UniqueViolation"
+        assert "retry" in source.lower() or "attempt" in source.lower(), (
+            "emit must contain a retry loop"
+        )
+
     def test_unique_index_exists_on_agent_events(self):
         """agent_events_run_seq_uniq UNIQUE index exists in the schema."""
         import psycopg as _pg

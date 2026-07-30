@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Protocol
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
@@ -141,6 +141,47 @@ class TransitionIn(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def normalize_severity(raw: int | None, source: str | None = None) -> int:
+    """Normalize incoming severity to the canonical 1=most-severe convention.
+
+    CANONICAL INVARIANT: severity 1 is the MOST critical; higher numbers are
+    less critical (matches Suricata/Corelight DATA-SCHEMA.md, seed_demo.py,
+    athena-hunter, root-cause alert_severity<=2=HIGH, UI sevLabel 1->critical).
+
+    Suricata and Zeek notice sources already use 1=highest — pass through with
+    a floor of 1 (reject 0 or negative, which are not valid Suricata values).
+
+    Anomaly/ML sources that use inverted (higher=worse) or score-based systems
+    MUST add a mapping case here as each connector lands.  The default today is
+    pass-through with a logged note for unknown sources, so new connectors are
+    obvious in the logs without silently mangling severities.
+
+    Args:
+        raw:    Raw severity integer from the ingest payload. None treated as 1.
+        source: Optional connector_source string (e.g. 'suricata', 'zeek_notice',
+                'anomaly_ml').  Used to select the right normalization mapping.
+
+    Returns:
+        Canonical severity int >= 1 (1 = most severe).
+    """
+    if raw is None:
+        return 1
+    value = int(raw)
+    # Known Corelight sources that already use 1=highest: pass through, floor at 1.
+    known_passthrough = {None, "suricata", "zeek_notice", "corelight", "zeek"}
+    src_lower = source.lower() if source else None
+    if src_lower in known_passthrough or source is None:
+        return max(1, value)
+    # Placeholder: future anomaly/ML sources that use higher=worse would map here.
+    # e.g. "anomaly_ml": return max(1, 5 - value)  # invert a 1-5 score-based scale
+    logger.info(
+        "normalize_severity: unknown source %r; passing through severity %d as-is. "
+        "Add a mapping in normalize_severity() if this source uses a non-1=highest convention.",
+        source, value,
+    )
+    return max(1, value)
+
+
 def _derive_dedup_key(alert: AlertIn) -> str:
     """Deterministically derive a dedup key from alert fields if not supplied."""
     sig = alert.signature or ""
@@ -202,9 +243,12 @@ async def ingest_alerts(body: dict) -> dict:
         alert = AlertIn(**{k: v for k, v in raw.items() if k in AlertIn.model_fields})
         if not alert.dedup_key:
             alert.dedup_key = _derive_dedup_key(alert)
+        # s2-02: normalize to canonical 1=most-severe before upsert so all downstream
+        # store logic (LEAST dedup, ASC ordering, reopen condition) is consistent.
+        canonical_sev = normalize_severity(alert.severity, alert.connector_source)
         alert_id = store.upsert_alert(
             dedup_key=alert.dedup_key,
-            severity=alert.severity or 0,
+            severity=canonical_sev,
             source_ip=alert.source_ip,
             dest_ip=alert.dest_ip,
             alert_type=alert.alert_type,
@@ -313,11 +357,16 @@ async def get_triage_detail(alert_id: str) -> dict:
 
 
 @app.post("/triage/reap")
-async def reap_stale_validating(older_than_minutes: int = 5) -> dict:
+async def reap_stale_validating(
+    older_than_minutes: int = Query(default=5, ge=1, description="Minimum age in minutes; must be >= 1"),
+) -> dict:
     """tri-2: Operator endpoint to recover alerts stuck in 'validating'.
 
     Force-transitions any alert that has been in 'validating' for longer than
     older_than_minutes back to 'alerts' so it can be re-investigated.
+
+    s2-04: older_than_minutes must be >= 1 (enforced by FastAPI Query validator AND
+    clamped in store.reap_stale_validating) to prevent reaping in-flight investigations.
     Returns {reaped: N}.
     """
     reaped = store.reap_stale_validating(older_than_minutes=older_than_minutes)

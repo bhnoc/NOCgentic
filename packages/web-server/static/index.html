@@ -2140,7 +2140,9 @@
       });
       let html = '';
       Object.keys(grouped).forEach(bucket => {
-        const label = BUCKET_LABELS[bucket] || escHtml(bucket);
+        // ui-3: use raw bucket string for unknown labels — escHtml() is applied
+        // at interpolation time (line below), so pre-escaping here would double-escape.
+        const label = BUCKET_LABELS[bucket] || bucket;
         html += `<div class="triage-bucket-group"><div class="triage-bucket-header">${escHtml(label)} (${grouped[bucket].length})</div>`;
         grouped[bucket].forEach(a => {
           html += buildTriageRow(a);
@@ -2160,8 +2162,11 @@
     }
   }
 
-  // Triage alerts carry a NUMERIC severity from the store (Suricata convention:
-  // 1 = highest ... 4 = low). Map it to a label; also tolerate a string severity.
+  // Triage alerts carry a NUMERIC severity from the store (Suricata/Corelight convention:
+  // CANONICAL INVARIANT: 1 = most severe / critical; higher numbers = less critical.
+  // This matches store.py list_alerts ORDER BY severity ASC, upsert LEAST() dedup,
+  // and the reopen condition severity < old_severity in upsert_alert (s2-02).
+  // Do NOT change the mapping below without updating the store convention too.
   function sevLabel(raw) {
     if (typeof raw === 'number') return { 1:'critical', 2:'high', 3:'medium', 4:'low' }[raw] || 'informational';
     return String(raw || 'low').toLowerCase();
@@ -2264,7 +2269,11 @@
   function renderGlassBox(data) {
     const body = document.getElementById('glass-box-body');
     const run = data.run || {};
-    const events = Array.isArray(data.events) ? data.events : [];
+    // ui-2: sort events by seq (fallback to ts) so out-of-order server delivery
+    // doesn't scramble the timeline when events arrive before the poll tick.
+    const events = (Array.isArray(data.events) ? data.events : [])
+      .slice()
+      .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
     const status = run.status || 'unknown';
     const statusClass = status === 'done' || status === 'completed' ? 'gb-status-done'
       : status === 'error' || status === 'failed' ? 'gb-status-error'

@@ -141,24 +141,51 @@ def _is_auth_error(exc: Exception) -> bool:
     vector store. They are raised so the caller surfaces the root cause.
 
     Transient errors (timeout, rate-limit, 5xx, import errors when the package
-    is temporarily unavailable) may fall back with a loud WARNING.
+    is temporarily unavailable, InvalidArgument for oversized/malformed input)
+    may fall back with a loud WARNING.
+
+    Classification rules (s2-05):
+      * Exception TYPE name matches PermissionDenied, Unauthenticated, or
+        AuthenticationError → always auth.
+      * Exception TYPE name is InvalidArgument → auth ONLY if the message
+        contains an api-key phrase; otherwise treat as transient/payload error
+        and fall back to stub.
+      * HTTP status 401/403 or keywords unauthorized/invalid api key/
+        api key not valid/api_key_invalid in the message → auth.
     """
-    exc_name = type(exc).__name__.lower()
+    exc_cls = type(exc).__name__
+    exc_cls_lower = exc_cls.lower()
     exc_str = str(exc).lower()
-    auth_signals = (
+
+    # --- Type-name based auth signals (most precise) ---
+    type_auth_names = {"permissiondenied", "unauthenticated", "authenticationerror"}
+    if exc_cls_lower in type_auth_names:
+        return True
+
+    # --- InvalidArgument: auth ONLY if the message specifically references an API key ---
+    api_key_phrases = (
+        "api key",
+        "api_key",
+        "api key not valid",
+        "api_key_invalid",
+        "invalid api key",
+    )
+    if exc_cls_lower == "invalidargument":
+        return any(phrase in exc_str for phrase in api_key_phrases)
+
+    # --- Message-based auth signals (applies to any exception type) ---
+    msg_auth_signals = (
         "unauthorized",
         "403",
         "401",
         "invalid api key",
-        "permission denied",
-        "authentication",
-        "authenticationerror",
-        "permissiondenied",
-        "invalidargument",  # google-genai invalid key variant
+        "api key not valid",
         "api_key_invalid",
+        "authentication",
         "unauthenticated",
+        "permission denied",
     )
-    return any(sig in exc_name or sig in exc_str for sig in auth_signals)
+    return any(sig in exc_str for sig in msg_auth_signals)
 
 
 async def _embed_real(texts: list[str]) -> list[list[float]]:

@@ -482,3 +482,201 @@ class TestActiveOrCandidateMemories:
         _make_memory("just-draft")
         memories = store.active_or_candidate_memories()
         assert len(memories) == 0
+
+
+# ---------------------------------------------------------------------------
+# mem-5: candidate with strong post-candidacy improvement must auto-promote
+# ---------------------------------------------------------------------------
+
+def _seed_outcomes_around_candidacy(memory_id: str, n_before: int, fails_before: int,
+                                     n_after: int, fails_after: int) -> None:
+    """Insert outcomes split around the candidacy-transition event timestamp."""
+    import psycopg as _psycopg
+    with _psycopg.connect(_PG_DSN) as conn:
+        # Find the candidacy event timestamp
+        row = conn.execute(
+            "SELECT at FROM memory_events WHERE memory_id = %s AND to_status = 'candidate' ORDER BY at DESC LIMIT 1",
+            (memory_id,),
+        ).fetchone()
+        assert row is not None, "no candidacy event found"
+        candidate_ts = row[0]
+        if candidate_ts.tzinfo is None:
+            from datetime import timezone
+            candidate_ts = candidate_ts.replace(tzinfo=timezone.utc)
+
+        before_ts = candidate_ts - timedelta(hours=1)
+        after_ts = candidate_ts + timedelta(hours=1)
+
+        for i in range(n_before):
+            conn.execute(
+                "INSERT INTO memory_outcomes (id, memory_id, run_id, failed, at) VALUES (%s, %s, %s, %s, %s)",
+                (f"cb{i}-{memory_id[:8]}", memory_id, f"run-cb{i}", i < fails_before, before_ts),
+            )
+        for i in range(n_after):
+            conn.execute(
+                "INSERT INTO memory_outcomes (id, memory_id, run_id, failed, at) VALUES (%s, %s, %s, %s, %s)",
+                (f"ca{i}-{memory_id[:8]}", memory_id, f"run-ca{i}", i < fails_after, after_ts),
+            )
+        conn.commit()
+
+
+class TestMem5CandidateAutoPromote:
+    """mem-5: a candidate with strong post-candidacy improvement must auto-promote
+    (previously stuck at insufficient_data because promoted_at is NULL)."""
+
+    def test_candidate_improving_yields_promote_action(self):
+        """Strong improvement after candidacy → assess returns 'improving' → plan 'promote'."""
+        mid = _make_candidate("mem5-improve")
+        # 40% failure before, 5% after candidacy → strongly improving
+        _seed_outcomes_around_candidacy(mid, 100, 40, 100, 5)
+
+        # Import the helper from main.py
+        import sys
+        from pathlib import Path
+        _MEMORY_AGENT = str(Path(__file__).resolve().parents[2] / "agents" / "memory")
+        if _MEMORY_AGENT not in sys.path:
+            sys.path.insert(0, _MEMORY_AGENT)
+        from main import _assess_candidate_drift
+
+        mem = store.get_memory(mid)
+        drift = _assess_candidate_drift(mid, mem)
+
+        assert drift["level"] == "improving", (
+            f"Expected 'improving' for candidate but got {drift['level']!r} "
+            f"(mem-5 regression: candidacy split point not used). "
+            f"z={drift.get('z')}, delta_pct={drift.get('delta_pct')}"
+        )
+
+        plan = drift_stats.plan_action("candidate", drift["level"])
+        assert plan["action"] == "promote"
+
+    def test_candidate_improving_live_sweep_promotes(self):
+        """End-to-end: live sweep auto-promotes a strongly-improving candidate."""
+        mid = _make_candidate("mem5-live-promote")
+        _seed_outcomes_around_candidacy(mid, 100, 40, 100, 5)
+
+        # Run the same sweep logic as main.py POST /memory/sweep (live mode)
+        import sys
+        from pathlib import Path
+        _MEMORY_AGENT = str(Path(__file__).resolve().parents[2] / "agents" / "memory")
+        if _MEMORY_AGENT not in sys.path:
+            sys.path.insert(0, _MEMORY_AGENT)
+        from main import _assess_candidate_drift
+
+        memories = store.active_or_candidate_memories()
+        for mem in memories:
+            if mem["id"] != mid:
+                continue
+            drift = _assess_candidate_drift(mid, mem)
+            store.update_drift_score(mid, drift["drift_score_pct"])
+            plan = drift_stats.plan_action(mem["memory_status"], drift["level"])
+            if plan["action"] == "promote":
+                store.transition_memory(mid, "active", actor="self-improve")
+
+        updated = store.get_memory(mid)
+        assert updated["memory_status"] == "active", (
+            f"Expected 'active' after live sweep but got {updated['memory_status']!r} "
+            "(mem-5 regression: candidate not promoted)"
+        )
+
+    def test_candidate_no_outcomes_still_insufficient_data(self):
+        """Candidate with zero outcomes → insufficient_data (not regression)."""
+        mid = _make_candidate("mem5-no-outcomes")
+
+        import sys
+        from pathlib import Path
+        _MEMORY_AGENT = str(Path(__file__).resolve().parents[2] / "agents" / "memory")
+        if _MEMORY_AGENT not in sys.path:
+            sys.path.insert(0, _MEMORY_AGENT)
+        from main import _assess_candidate_drift
+
+        mem = store.get_memory(mid)
+        drift = _assess_candidate_drift(mid, mem)
+        assert drift["level"] == "insufficient_data"
+
+
+# ---------------------------------------------------------------------------
+# mem-6: confidence adjustment must converge (not keep decrementing each sweep)
+# ---------------------------------------------------------------------------
+
+class TestMem6ConfidenceConverges:
+    """mem-6: running the live sweep 5x on unchanged outcomes must NOT keep
+    decrementing confidence — it must converge to a stable target."""
+
+    def _run_sweep_once(self, memories):
+        """Mirror the live adjust_confidence branch from main.py."""
+        import sys
+        from pathlib import Path
+        _MEMORY_AGENT = str(Path(__file__).resolve().parents[2] / "agents" / "memory")
+        if _MEMORY_AGENT not in sys.path:
+            sys.path.insert(0, _MEMORY_AGENT)
+
+        for mem in memories:
+            memory_id = mem["id"]
+            memory_status = mem["memory_status"]
+
+            try:
+                drift = store.assess_memory_drift(memory_id)
+            except Exception:
+                continue
+
+            store.update_drift_score(memory_id, drift["drift_score_pct"])
+            plan = drift_stats.plan_action(memory_status, drift["level"])
+            action = plan["action"]
+
+            if action == "adjust_confidence":
+                cur = mem.get("confidence_pct")
+                if cur is None:
+                    cur = 50
+                if drift["level"] == "watch":
+                    target = 40
+                elif drift["level"] == "improving":
+                    target = 80
+                else:
+                    target = cur
+
+                if target != cur:
+                    import psycopg as _psycopg
+                    with _psycopg.connect(_PG_DSN) as conn:
+                        conn.execute(
+                            "UPDATE agent_memory SET confidence_pct = %s, updated_at = now() WHERE id = %s",
+                            (target, memory_id),
+                        )
+                        conn.commit()
+
+    def test_watch_memory_confidence_converges_not_decrements(self):
+        """A 'watch'-level active memory's confidence should converge to 40, not
+        keep decrementing toward 0 on each sweep."""
+        mid = _make_active("mem6-watch-converge", confidence_pct=70)
+        # Seed borderline-watch outcomes: 10/100 before, 20/100 after
+        _seed_outcomes_around_promotion(mid, 100, 10, 100, 20)
+
+        # Run 5 sweeps
+        confidences = []
+        for _ in range(5):
+            memories = store.active_or_candidate_memories()
+            self._run_sweep_once(memories)
+            updated = store.get_memory(mid)
+            confidences.append(updated["confidence_pct"])
+
+        # After the first adjustment the value must stabilize — not keep dropping
+        final = confidences[-1]
+        # All sweeps after the first should have the same value (idempotent)
+        assert confidences[-1] == confidences[-2] == confidences[-3], (
+            f"Confidence should converge but kept changing: {confidences} "
+            "(mem-6 regression: confidence not idempotent under repeated sweep)"
+        )
+        # The final value must be positive (not driven to 0)
+        assert final > 0, f"Confidence was driven to 0: {confidences}"
+
+    def test_sweep_idempotent_no_outcomes_no_change(self):
+        """An active memory with no outcomes gets insufficient_data → action=None → confidence unchanged."""
+        mid = _make_active("mem6-no-outcomes", confidence_pct=60)
+        initial = store.get_memory(mid)["confidence_pct"]
+
+        memories = store.active_or_candidate_memories()
+        for _ in range(3):
+            self._run_sweep_once(memories)
+
+        final = store.get_memory(mid)["confidence_pct"]
+        assert final == initial, f"Confidence changed on no-outcomes memory: {initial} → {final}"

@@ -265,3 +265,68 @@ async def test_stub_when_no_key_still_works(monkeypatch: pytest.MonkeyPatch) -> 
     result = await embeddings.embed(["hello world"])
     assert len(result) == 1
     assert len(result[0]) == embeddings.EMBED_DIM
+
+
+# ---------------------------------------------------------------------------
+# s2-05 gate: InvalidArgument (oversized/malformed) falls back to stub, not raise
+# ---------------------------------------------------------------------------
+
+async def test_invalid_argument_oversized_falls_back_to_stub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """s2-05: InvalidArgument from oversized/malformed input is NOT an auth error.
+    embed() must fall back to stub vectors, not raise.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-but-present-key")
+    monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+
+    class InvalidArgument(Exception):
+        """Simulates google.api_core.exceptions.InvalidArgument for oversized input."""
+        pass
+
+    async def _raise_invalid_arg(_texts: list[str]) -> list[list[float]]:
+        raise InvalidArgument("400 Request payload size exceeds the limit: 30000 bytes")
+
+    monkeypatch.setattr(embeddings, "_embed_real", _raise_invalid_arg)
+
+    # Must NOT raise — must fall back to stub
+    result = await embeddings.embed(["x" * 100])
+    assert len(result) == 1
+    assert len(result[0]) == embeddings.EMBED_DIM
+
+
+async def test_invalid_argument_with_api_key_phrase_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """s2-05: InvalidArgument where the message contains 'api key' IS an auth error → raises."""
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-but-present-key")
+    monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+
+    class InvalidArgument(Exception):
+        pass
+
+    async def _raise_bad_key(_texts: list[str]) -> list[list[float]]:
+        raise InvalidArgument("400 INVALID_ARGUMENT: API key not valid. Please pass a valid API key.")
+
+    monkeypatch.setattr(embeddings, "_embed_real", _raise_bad_key)
+
+    with pytest.raises(InvalidArgument):
+        await embeddings.embed(["test"])
+
+
+async def test_bad_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """s2-05: A genuine bad-key auth error (PermissionDenied type) must raise."""
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-but-present-key")
+    monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+
+    class PermissionDenied(Exception):
+        """Simulates google.api_core.exceptions.PermissionDenied."""
+        pass
+
+    async def _raise_perm_denied(_texts: list[str]) -> list[list[float]]:
+        raise PermissionDenied("403 Permission denied on resource project")
+
+    monkeypatch.setattr(embeddings, "_embed_real", _raise_perm_denied)
+
+    with pytest.raises(PermissionDenied):
+        await embeddings.embed(["test"])

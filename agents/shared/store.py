@@ -342,22 +342,39 @@ def emit(run_id: str, event_type: str, data: Any) -> None:
 
     seq is auto-computed as max(seq)+1 for this run, so events are ordered
     by insertion within a run regardless of wall-clock time.
+
+    s2-03: Concurrent emits on the same run_id can race to SELECT the same
+    MAX(seq) and then collide on the UNIQUE(run_id, seq) constraint.  Retry
+    up to 5 times, recomputing MAX(seq)+1 on each attempt.
     """
+    import psycopg.errors  # noqa: PLC0415 — lazy to avoid top-level import churn
+
     pool = _get_pool()
-    with pool.connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO agent_events (run_id, seq, event_type, data)
-            VALUES (
-                %s,
-                (SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_events WHERE run_id = %s),
-                %s,
-                %s
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            with pool.connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO agent_events (run_id, seq, event_type, data)
+                    VALUES (
+                        %s,
+                        (SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_events WHERE run_id = %s),
+                        %s,
+                        %s
+                    )
+                    """,
+                    (run_id, run_id, event_type, Jsonb(data)),
+                )
+                conn.commit()
+            return  # success
+        except psycopg.errors.UniqueViolation:
+            if attempt == max_attempts - 1:
+                raise
+            logger.debug(
+                "emit: seq collision on run %s (attempt %d/%d), retrying",
+                run_id, attempt + 1, max_attempts,
             )
-            """,
-            (run_id, run_id, event_type, Jsonb(data)),
-        )
-        conn.commit()
 
 
 def finish_run(run_id: str, status: str, output: Any) -> None:
@@ -475,7 +492,12 @@ def upsert_alert(
 ) -> str:
     """Insert or increment an alert by dedup_key.
 
-    ON CONFLICT increments count, keeps highest severity, refreshes last_seen.
+    CANONICAL SEVERITY CONVENTION: 1 = most severe (matches Suricata/Corelight
+    DATA-SCHEMA.md, seed_demo.py, athena-hunter, root-cause <=2=HIGH).
+    The UI sevLabel(1) -> 'critical' is consistent with this convention.
+
+    ON CONFLICT: increments count, keeps the WORST (lowest-numbered) severity
+    via LEAST(...), refreshes last_seen.
     Returns the alert id (uuid4 hex).
     """
     alert_id = uuid4().hex
@@ -489,7 +511,8 @@ def upsert_alert(
             (dedup_key,),
         ).fetchone()
 
-        # Standard coalescing upsert (bucket is NOT changed here)
+        # Standard coalescing upsert (bucket is NOT changed here).
+        # LEAST keeps the WORST (lowest = most critical) severity.
         row = conn.execute(
             """
             INSERT INTO alerts
@@ -499,7 +522,7 @@ def upsert_alert(
             ON CONFLICT (dedup_key) DO UPDATE SET
                 count      = alerts.count + 1,
                 last_seen  = now(),
-                severity   = GREATEST(alerts.severity, EXCLUDED.severity),
+                severity   = LEAST(alerts.severity, EXCLUDED.severity),
                 updated_at = now()
             RETURNING id
             """,
@@ -511,11 +534,12 @@ def upsert_alert(
         assert row is not None
         returned_id: str = row[0]
 
-        # tri-3: reopen if existing alert was in a terminal bucket AND new severity is strictly higher
+        # tri-3: reopen if existing alert was in a terminal bucket AND new severity
+        # is strictly MORE severe (lower number = worse in canonical 1=highest convention).
         if existing_row is not None:
             old_bucket: str = existing_row[1]
             old_severity: int = existing_row[2]
-            if old_bucket in TERMINAL_BUCKETS and severity > old_severity:
+            if old_bucket in TERMINAL_BUCKETS and severity < old_severity:
                 # Reopen: move back to 'alerts' and write audit row
                 conn.execute(
                     "UPDATE alerts SET bucket = 'alerts', updated_at = now() WHERE id = %s",
@@ -530,7 +554,7 @@ def upsert_alert(
                     """,
                     (
                         transition_id, returned_id, old_bucket, "alerts",
-                        "reopened: higher-severity recurrence", None,
+                        "reopened: higher-severity recurrence (lower sev number)", None,
                     ),
                 )
 
@@ -576,7 +600,8 @@ def get_alert(alert_id: str) -> dict | None:
 def list_alerts(bucket: str | None = None, severity_min: int | None = None) -> list[dict]:
     """Return alerts, optionally filtered by bucket and/or minimum severity.
 
-    Ordered by severity DESC, last_seen DESC.
+    Ordered by severity ASC (1=most critical first), last_seen DESC as tiebreaker.
+    Canonical convention: 1 = most severe (Suricata/Corelight DATA-SCHEMA.md).
     """
     pool = _get_pool()
     conditions: list[str] = []
@@ -599,7 +624,7 @@ def list_alerts(bucket: str | None = None, severity_min: int | None = None) -> l
                    last_seen, connector_source, created_at, updated_at
             FROM alerts
             {where_clause}
-            ORDER BY severity DESC, last_seen DESC
+            ORDER BY severity ASC, last_seen DESC
             """,
             params,
         ).fetchall()
@@ -716,7 +741,14 @@ def reap_stale_validating(older_than_minutes: int = 5) -> int:
 
     Writes a bucket_transitions audit row for each reaped alert.
     Returns the count of alerts reaped.
+
+    s2-04: older_than_minutes is clamped to a minimum of 1 to prevent a
+    negative/zero value from matching ALL validating alerts (including in-flight
+    investigations), which would cause a race against running handlers.
     """
+    # s2-04: floor at 1 minute; caller-supplied 0 or negative would otherwise
+    # match now()+|n|min and reap every in-flight investigation.
+    older_than_minutes = max(1, older_than_minutes)
     pool = _get_pool()
     with pool.connection() as conn:
         # Find alerts stuck in 'validating' longer than the threshold (by updated_at)

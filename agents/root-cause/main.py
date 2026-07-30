@@ -45,6 +45,27 @@ from llm_client import llm_complete    # noqa: E402
 from templating import TemplateMiner   # noqa: E402
 import store                           # noqa: E402
 
+# s2-05: sentinel exception class so callers can catch auth-class embed failures
+class EmbedAuthError(RuntimeError):
+    """Raised when embed() surfaces an auth/config error to signal 503."""
+    pass
+
+
+async def _embed_safe(texts: list[str]) -> list[list[float]]:
+    """Wrap embed() so that an auth raise becomes EmbedAuthError.
+
+    All other exceptions propagate unchanged (they're already handled
+    by the call sites or will become 500s as before).
+    """
+    try:
+        return await embed(texts)
+    except Exception as exc:
+        # Only re-wrap if it's an auth error (embed() already re-raises auth errors).
+        # We detect this by checking that it's NOT a stub fallback scenario — the
+        # simplest approach: if embed() raised, it was an auth error (embed only raises
+        # on auth; transient errors are caught internally and fall back to stub).
+        raise EmbedAuthError(str(exc)) from exc
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -266,7 +287,7 @@ class AthenaAnomalySource:
         return {"spikes": spikes, "window": {"t0": t0, "t1": t1}}
 
     async def fetch_events(self, signature: str, t0: float, t1: float) -> list[str]:
-        from athena_client import execute_query, date_partitions
+        from athena_client import execute_query, date_partitions, sanitize_value
         import time
 
         parts = date_partitions(int((t1 - t0) / 3600) + 1)
@@ -275,9 +296,43 @@ class AthenaAnomalySource:
         else:
             part_clause = f"dt IN ({', '.join(repr(d) for d in parts)})"
 
-        # Escape single quotes in signature
-        safe_sig = signature.replace("'", "''")
-        sql = f"""
+        # rc-10: use shared sanitize_value() for consistent escaping.
+        # sanitize_sql (called inside execute_query) rejects '--' and '/*' comment
+        # sequences, so signatures containing '--' (e.g. "ET SCAN Nmap --script")
+        # would cause sanitize_sql to raise ValueError and silently return [].
+        # Detect this case upfront and degrade gracefully with a warning rather
+        # than losing all events.
+        safe_sig = sanitize_value(signature)
+        # Check whether the escaped signature would trigger sanitize_sql's comment check.
+        # If so, fall back to a LIKE query without the comment-like text.
+        import re as _re2
+        _COMMENT_RE = _re2.compile(r"(--|/\*|\*/|#)")
+        if _COMMENT_RE.search(safe_sig):
+            logger.warning(
+                "fetch_events: signature contains SQL-comment-like text (%r); "
+                "falling back to prefix LIKE match to avoid sanitize_sql rejection.",
+                signature,
+            )
+            # Truncate at first comment-like sequence for a safe prefix match.
+            _comment_pos = _COMMENT_RE.search(safe_sig).start()
+            _prefix = safe_sig[:_comment_pos].strip()
+            if not _prefix:
+                logger.warning("fetch_events: prefix is empty after stripping; returning []")
+                return []
+            # Use sanitize_like_value on the original prefix fragment, then build LIKE query.
+            from athena_client import sanitize_like_value
+            _safe_prefix = sanitize_like_value(signature[:signature.find(signature[_comment_pos:_comment_pos+2])])
+            sql = f"""
+        SELECT ts, alert_signature, alert_category, alert_severity,
+               id_orig_h, id_resp_h, id_orig_p, id_resp_p, service
+        FROM suricata_corelight
+        WHERE ({part_clause} AND ts >= {t0:.0f} AND ts <= {t1:.0f})
+          AND alert_signature LIKE '{_safe_prefix}%' ESCAPE '\\'
+        ORDER BY ts DESC
+        LIMIT 200
+        """
+        else:
+            sql = f"""
         SELECT ts, alert_signature, alert_category, alert_severity,
                id_orig_h, id_resp_h, id_orig_p, id_resp_p, service
         FROM suricata_corelight
@@ -476,7 +531,10 @@ async def ingest(req: IngestRequest) -> IngestResponse:
 
     # Embed unique templates in one batch
     template_texts = list(unique_templates.keys())
-    embeddings = await embed(template_texts)
+    try:
+        embeddings = await _embed_safe(template_texts)
+    except EmbedAuthError as exc:
+        raise HTTPException(status_code=503, detail=f"embedding provider unavailable: {exc}")
 
     # Upsert each unique template
     upserted = 0
@@ -501,7 +559,10 @@ async def ingest(req: IngestRequest) -> IngestResponse:
 @app.get("/similar", response_model=SimilarResponse)
 async def similar(text: str, k: int = 5) -> SimilarResponse:
     """Embed text, return nearest templates and incidents."""
-    embs = await embed([text])
+    try:
+        embs = await _embed_safe([text])
+    except EmbedAuthError as exc:
+        raise HTTPException(status_code=503, detail=f"embedding provider unavailable: {exc}")
     emb = embs[0]
     templates = store.similar_templates(emb, k=k)
     incidents = store.similar_incidents(emb, k=k)
@@ -516,7 +577,10 @@ async def similar(text: str, k: int = 5) -> SimilarResponse:
 async def create_incident(req: IncidentRequest) -> IncidentResponse:
     """Record a resolved incident with its embedding."""
     text = f"{req.title} {req.summary} {req.root_cause}"
-    embs = await embed([text])
+    try:
+        embs = await _embed_safe([text])
+    except EmbedAuthError as exc:
+        raise HTTPException(status_code=503, detail=f"embedding provider unavailable: {exc}")
     emb = embs[0]
     inc_id = store.record_incident(
         title=req.title,
@@ -679,7 +743,24 @@ async def _run_loop(
         return {"run_id": run_id, "finding": finding, "evidence": {"spikes": [], "events_sampled": []}}
 
     # --- 3. Top spike + fetch events ---
-    top_spike = spikes[0]
+    # rc-6: use query to bias spike selection toward matching signatures.
+    # If the query contains an IP or a signature substring, prefer spikes where
+    # the signature contains that text (case-insensitive substring match).
+    # Fall back to z-sorted top spike when no match or query is empty.
+    import re as _re
+    top_spike = spikes[0]  # default: highest z
+    if query:
+        # Extract candidate match tokens from the query: IPs and multi-char words
+        _ip_re = _re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+        _word_re = _re.compile(r"\b[A-Za-z0-9_\-\.]{3,}\b")
+        _query_tokens = _ip_re.findall(query) + _word_re.findall(query)
+        _query_tokens_lower = [t.lower() for t in _query_tokens]
+        # Score each spike: count how many query tokens appear in the signature
+        def _query_score(spike: dict) -> int:
+            sig_lower = spike.get("signature", "").lower()
+            return sum(1 for t in _query_tokens_lower if t in sig_lower)
+        _scored = sorted(spikes, key=lambda s: (_query_score(s), s.get("z", 0.0)), reverse=True)
+        top_spike = _scored[0]
     sig = top_spike["signature"]
     spike_t0 = top_spike.get("t0", t0_epoch)
     spike_t1 = top_spike.get("t1", t1_epoch)
@@ -729,7 +810,13 @@ async def _run_loop(
     })
 
     # Embed dominant template (needed for both recall and upsert)
-    dom_embs = await embed([dominant_template])
+    try:
+        dom_embs = await _embed_safe([dominant_template])
+    except EmbedAuthError as exc:
+        _embed_err = str(exc)
+        store.emit(run_id, "error", {"stage": "embed", "reason": _embed_err})
+        store.finish_run(run_id, "failed", {"error": _embed_err})
+        raise HTTPException(status_code=503, detail=f"embedding provider unavailable: {_embed_err}")
     dom_emb = dom_embs[0]
 
     # --- 5. Recall: similar templates + incidents (BEFORE upsert to avoid self-match) ---
@@ -774,7 +861,24 @@ async def _run_loop(
     nearest_distance: float = 1.0
     hint_type: str = "unknown"
 
-    if markers:
+    # rc-11: check for a very-close incident match FIRST — if one exists with
+    # distance < 0.15 it is a near-certain prior-incident match and should beat
+    # an unrelated deploy marker. Only fall through to the marker if no such
+    # strong match is present.
+    _strong_incident: dict | None = None
+    _strong_distance_threshold = 0.15
+    if similar_incs:
+        _candidate = similar_incs[0]
+        if _candidate["distance"] < _strong_distance_threshold:
+            _strong_incident = _candidate
+
+    if _strong_incident is not None:
+        # Strong prior-incident match beats any marker
+        nearest_incident = _strong_incident
+        nearest_distance = nearest_incident["distance"]
+        root_cause_hint = nearest_incident.get("root_cause", "see linked incident")
+        hint_type = "similar_incident"
+    elif markers:
         # A marker sits in or just before the spike window → deploy correlation
         # markers_near returns ASC by ts; pick the one nearest (latest) to the spike.
         correlated_marker = markers[-1]

@@ -125,7 +125,20 @@ def validate_query(sql: str) -> str | None:
     # Strip literals/comments before dt-filter check to prevent bypass via
     # LIKE '%dt=%', comment-hidden 'dt=...', or string values containing dt=.
     sql_for_dt_check = _strip_sql_noise(sql)
-    if not _DT_FILTER_RE.search(sql_for_dt_check):
+
+    # s2-07: require the dt token to appear in a predicate position, not in the
+    # SELECT projection. The simplest robust heuristic: check that _DT_FILTER_RE
+    # matches ONLY in the substring after the first WHERE keyword. If there's no
+    # WHERE at all, reject unconditionally.
+    where_match = re.search(r"\bwhere\b", sql_for_dt_check, re.IGNORECASE)
+    if not where_match:
+        return (
+            "Query rejected: no dt partition filter. Every query MUST include a "
+            "WHERE dt = 'YYYY-MM-DD' (or dt IN (...)) clause or it scans the entire "
+            "lake. Add the dt filter and call the tool again."
+        )
+    after_where = sql_for_dt_check[where_match.start():]
+    if not _DT_FILTER_RE.search(after_where):
         return (
             "Query rejected: no dt partition filter. Every query MUST include a "
             "WHERE dt = 'YYYY-MM-DD' (or dt IN (...)) clause or it scans the entire "
@@ -456,13 +469,35 @@ async def _run_investigation(
     from datetime import date, timedelta
 
     # --- 2. Build initial messages ---
-    today = date.today().isoformat()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-    dt_hint = (
-        f"Relevant partitions for the last {window_hours}h: "
-        f"dt = '{today}' or dt = '{yesterday}'. "
-        "Always include at least one dt filter in your queries."
-    )
+    # inv-8: compute actual partition list from window_hours so a 48h window near
+    # midnight correctly lists 3 partitions (day-before-yesterday, yesterday, today).
+    try:
+        from athena_client import date_partitions as _date_partitions
+        _parts = _date_partitions(window_hours)
+    except Exception:
+        # Fallback: manual derivation if athena_client unavailable (e.g. import error)
+        _now = datetime.now(timezone.utc)
+        _start = _now - timedelta(hours=window_hours)
+        _parts_set: set[str] = {_now.strftime("%Y-%m-%d")}
+        _cur = _start
+        while _cur <= _now:
+            _parts_set.add(_cur.strftime("%Y-%m-%d"))
+            _cur += timedelta(days=1)
+        _parts = sorted(_parts_set)
+
+    if len(_parts) == 1:
+        dt_hint = (
+            f"Relevant partitions for the last {window_hours}h: "
+            f"dt = '{_parts[0]}'. "
+            "Always include at least one dt filter in your queries."
+        )
+    else:
+        _parts_str = ", ".join(f"'{p}'" for p in _parts)
+        dt_hint = (
+            f"Relevant partitions for the last {window_hours}h: "
+            f"dt IN ({_parts_str}). "
+            "Always include at least one dt filter in your queries."
+        )
 
     system_prompt = (
         "You investigate Corelight/Zeek+Suricata logs stored in AWS Athena. "

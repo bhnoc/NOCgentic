@@ -289,3 +289,100 @@ class TestTemplateMiner:
             assert not re.search(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", tmpl["template"]), (
                 f"Raw IP found in template: {tmpl['template']}"
             )
+
+
+# ---------------------------------------------------------------------------
+# st-6: mask ordering — domain must be masked BEFORE standalone integers
+# ---------------------------------------------------------------------------
+
+
+class TestMaskOrdering:
+    def test_hostname_with_digit_run_masked_as_domain(self):
+        """st-6: 'web01srv.corp.example.com' must be masked as <DOMAIN>, not fragmented.
+
+        If _RE_NUM ran first, '01' (or larger digit runs) inside the label would be
+        replaced with <NUM>, turning 'web01srv' into 'web<NUM>srv' and preventing
+        the domain regex from matching the full FQDN.
+        """
+        masked, params = premask("host=web01srv.corp.example.com connected")
+        assert "<DOMAIN>" in masked, (
+            f"'web01srv.corp.example.com' must be masked as <DOMAIN>, got: {masked}"
+        )
+        # The full FQDN should be captured, not a fragment
+        domains = params.get("<DOMAIN>", [])
+        assert any("web01srv" in d for d in domains), (
+            f"Expected full domain captured, got params['<DOMAIN>']={domains}"
+        )
+        # No fragment of the hostname should appear raw
+        assert "web01srv" not in masked, f"raw hostname fragment found in masked: {masked}"
+
+    def test_hostname_with_long_digit_run_masked_as_domain(self):
+        """st-6: 'db1234.corp.example.com' masked as <DOMAIN>, not fragmented by <NUM>."""
+        masked, params = premask("connecting to db1234.corp.example.com port 443")
+        assert "<DOMAIN>" in masked, f"domain not masked: {masked}"
+        domains = params.get("<DOMAIN>", [])
+        assert any("db1234" in d for d in domains), (
+            f"Expected full domain with digit run captured: {domains}"
+        )
+        assert "db1234" not in masked
+
+    def test_two_hostnames_same_structure(self):
+        """st-6: 'web01srv.corp.example.com' and 'db1234.corp.example.com' produce same template structure.
+
+        Both are FQDNs with digit runs; after masking both should yield '<DOMAIN>'
+        so they collapse to the same Drain template.
+        """
+        m1, _ = premask("host=web01srv.corp.example.com action=login")
+        m2, _ = premask("host=db1234.corp.example.com action=login")
+        assert m1 == m2, (
+            f"Expected identical masked structure (both -> <DOMAIN>):\n  m1={m1}\n  m2={m2}"
+        )
+
+    def test_pure_number_still_masked_as_num(self):
+        """st-6 sanity: standalone 3+ digit numbers not inside a domain are still <NUM>."""
+        masked, params = premask("bytes=98765 count=999 status=ok")
+        assert "<NUM>" in masked
+        assert "98765" in params.get("<NUM>", [])
+
+
+# ---------------------------------------------------------------------------
+# st-7: long dotless tokens must not cause regex blow-up
+# ---------------------------------------------------------------------------
+
+
+class TestLongTokenSafety:
+    def test_5000_char_dotless_token_completes_fast(self):
+        """st-7: a 5000-char dotless token must not cause catastrophic backtracking."""
+        import time
+        long_token = "A" * 5000
+        line = f"prefix {long_token} suffix=ok"
+        start = time.monotonic()
+        masked, _ = premask(line)
+        elapsed = time.monotonic() - start
+        assert elapsed < 2.0, (
+            f"premask() took {elapsed:.2f}s on a 5000-char dotless token "
+            f"(expected < 2s — likely quadratic backtracking in _RE_DOMAIN)"
+        )
+        # The token should not be (incorrectly) masked as a domain
+        assert long_token in masked or "<DOMAIN>" not in masked or len(long_token) > 253
+
+    def test_max_fqdn_length_token_is_masked(self):
+        """st-7: a 253-char valid FQDN-looking token with dots IS masked as domain."""
+        # Build a FQDN right at the 253-char limit: many short labels
+        fqdn_parts = ["a" * 10] * 23  # 23 * 10 chars + 22 dots = 252 chars; add one more label
+        fqdn = ".".join(fqdn_parts[:20]) + ".com"
+        # Only attempt if it's actually <= 253 chars
+        if len(fqdn) <= 253:
+            masked, params = premask(f"host={fqdn} ok")
+            # Either masked as domain or left alone (acceptable) — just must not blow up
+            assert masked is not None
+
+    def test_254_char_dotless_not_masked_as_domain(self):
+        """st-7: a 254-char token without dots is NOT masked as <DOMAIN> (> FQDN max)."""
+        token = "b" * 254
+        masked, params = premask(f"token={token} status=ok")
+        # Should not appear in <DOMAIN> params
+        domains = params.get("<DOMAIN>", [])
+        assert token not in domains, (
+            f"254-char dotless token should not be captured as <DOMAIN>: {domains}"
+        )

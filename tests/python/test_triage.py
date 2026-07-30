@@ -3,7 +3,7 @@ test_triage.py — Acceptance tests for agents/triage/main.py
 
 Covers all SLICE3.md acceptance criteria:
   1. POST /alerts single + batch; dedup: repeat -> count==2.
-  2. GET /triage/queue ordered by severity desc.
+  2. GET /triage/queue ordered by severity ASC (1=critical first).
   3. Full investigate->verdict->two-transitions flow with linked run_id.
      FakeInvestigatorClient returns scripted findings.
   4. Analyst override: legal edge works; audit row written.
@@ -13,6 +13,10 @@ Covers all SLICE3.md acceptance criteria:
 
 Requires live Postgres+pgvector. Module skipped if PG_DSN unreachable.
 No real investigator, no Athena, no Gemini.
+
+CANONICAL SEVERITY CONVENTION: 1 = most severe (matches Suricata/Corelight,
+store.py list_alerts ORDER BY severity ASC, upsert LEAST() dedup, reopen
+condition severity < old_severity).
 """
 
 from __future__ import annotations
@@ -177,15 +181,18 @@ class TestIngestAlerts:
         assert len(data["ids"]) == 2
 
     def test_dedup_increments_count(self):
-        """Posting the same dedup_key twice -> one row, count==2."""
+        """Posting the same dedup_key twice -> one row, count==2, LEAST severity kept.
+
+        Canonical 1=highest: LEAST(existing, new) keeps the more-critical (lower) number.
+        """
         client = _client_with()
         resp1 = client.post("/alerts", json={
             "dedup_key": "et-scan|10.0.0.1|10.0.0.2",
-            "severity": 2,
+            "severity": 3,
         })
         resp2 = client.post("/alerts", json={
             "dedup_key": "et-scan|10.0.0.1|10.0.0.2",
-            "severity": 5,
+            "severity": 1,  # more critical recurrence
         })
         assert resp1.status_code == 200
         assert resp2.status_code == 200
@@ -194,11 +201,13 @@ class TestIngestAlerts:
         id2 = resp2.json()["ids"][0]
         assert id1 == id2
 
-        # Verify count==2 and severity upgraded
+        # Verify count==2 and severity kept as LEAST (most critical)
         alert = store.get_alert(id1)
         assert alert is not None
         assert alert["count"] == 2
-        assert alert["severity"] == 5  # GREATEST applied
+        assert alert["severity"] == 1, (
+            f"expected LEAST(3,1)=1 (most critical), got {alert['severity']}"
+        )
 
     def test_dedup_key_derived_if_absent(self):
         """If dedup_key is not provided, it's derived from signature|source|dest."""
@@ -218,10 +227,14 @@ class TestIngestAlerts:
 
 
 class TestTriageQueue:
-    def test_ordered_by_severity_desc(self):
-        """Insert 3 alerts with different severities -> queue ordered severity desc."""
+    def test_ordered_by_severity_asc(self):
+        """Insert 3 alerts with different severities -> queue ordered severity ASC (1=critical first).
+
+        Canonical 1=highest convention: list_alerts ORDER BY severity ASC puts the
+        most critical (sev 1) at the top, not the bottom.
+        """
         client = _client_with()
-        for sev, key in [(1, "low-sev"), (5, "high-sev"), (3, "mid-sev")]:
+        for sev, key in [(1, "sev1-critical"), (3, "sev3-medium"), (4, "sev4-low")]:
             client.post("/alerts", json={"dedup_key": key, "severity": sev})
 
         resp = client.get("/triage/queue")
@@ -229,7 +242,10 @@ class TestTriageQueue:
         data = resp.json()
         assert data["count"] == 3
         severities = [a["severity"] for a in data["alerts"]]
-        assert severities == sorted(severities, reverse=True)
+        # severity ASC: [1, 3, 4] — most critical first
+        assert severities == sorted(severities), (
+            f"expected ascending severity (1=critical first), got {severities}"
+        )
 
     def test_filter_by_bucket(self):
         """Filtering by bucket=alerts returns only new alerts."""
@@ -492,33 +508,36 @@ class TestInvestigatorFailure:
 
 
 # ---------------------------------------------------------------------------
-# tri-3 — dedup suppression: reopen on higher severity
+# tri-3 — dedup suppression: reopen on higher severity (canonical 1=highest)
 # ---------------------------------------------------------------------------
 
 
 class TestDedupReopen:
-    def test_higher_severity_reopens_dismissed_alert(self):
-        """tri-3: Dismiss an alert, then re-upsert with HIGHER severity -> bucket back to 'alerts' + audit transition exists."""
-        # Insert initial alert (severity 3)
+    def test_more_critical_recurrence_reopens_dismissed_alert(self):
+        """tri-3 (1=highest): Dismiss a sev-4 alert; a sev-1 recurrence (more critical) reopens it.
+
+        With the canonical 1=highest convention: severity < old_severity means MORE critical.
+        A Cobalt Strike beacon (sev 1) recurrence of a dismissed policy alert (sev 4)
+        MUST reopen the alert and write an audit transition row.
+        """
+        # Insert initial alert at sev 4 (low priority)
         alert_id = store.upsert_alert(
             dedup_key="tri3-reopen-test|1.1.1.1|2.2.2.2",
-            severity=3,
-            signature="ET TEST",
+            severity=4,
+            signature="ET POLICY",
             source_ip="1.1.1.1",
             dest_ip="2.2.2.2",
         )
-        # Dismiss it (force, since dismissed is not a direct edge from alerts via legal path,
-        # but we can do alerts->dismissed which IS a legal edge)
         store.transition_alert(alert_id, "dismissed", reason="false positive")
         alert_after_dismiss = store.get_alert(alert_id)
         assert alert_after_dismiss is not None
         assert alert_after_dismiss["bucket"] == "dismissed"
 
-        # Re-upsert same dedup_key with HIGHER severity (8 > 3)
+        # Re-upsert same dedup_key with sev 1 (MORE critical than 4; 1 < 4)
         returned_id = store.upsert_alert(
             dedup_key="tri3-reopen-test|1.1.1.1|2.2.2.2",
-            severity=8,
-            signature="ET TEST",
+            severity=1,
+            signature="ET MALWARE CobaltStrike Beacon",
             source_ip="1.1.1.1",
             dest_ip="2.2.2.2",
         )
@@ -527,7 +546,8 @@ class TestDedupReopen:
         alert_after_reopen = store.get_alert(alert_id)
         assert alert_after_reopen is not None
         assert alert_after_reopen["bucket"] == "alerts", (
-            f"expected bucket='alerts' after higher-severity reopen, got {alert_after_reopen['bucket']}"
+            f"expected bucket='alerts' after more-critical (sev 1 < sev 4) reopen, "
+            f"got {alert_after_reopen['bucket']}"
         )
 
         # Audit transition row must exist: dismissed -> alerts
@@ -539,40 +559,43 @@ class TestDedupReopen:
         assert len(reopen_transitions) >= 1, "expected a dismissed->alerts audit transition"
         assert "higher-severity" in (reopen_transitions[0]["reason"] or "").lower()
 
-    def test_same_or_lower_severity_stays_dismissed(self):
-        """tri-3: Dismiss an alert, then re-upsert with SAME severity -> stays dismissed, count bumped."""
+    def test_less_critical_recurrence_stays_dismissed(self):
+        """tri-3 (1=highest): A sev-4 recurrence of a dismissed sev-1 does NOT reopen.
+
+        sev 4 > sev 1 (less critical) -> condition severity < old_severity is False -> stays dismissed.
+        """
         alert_id = store.upsert_alert(
             dedup_key="tri3-stay-dismissed|3.3.3.3|4.4.4.4",
-            severity=5,
-            signature="ET STAY",
+            severity=1,  # originally critical
+            signature="ET MALWARE",
             source_ip="3.3.3.3",
             dest_ip="4.4.4.4",
         )
-        store.transition_alert(alert_id, "dismissed", reason="fp")
+        store.transition_alert(alert_id, "dismissed", reason="analyst closed")
 
-        # Re-upsert with same severity (5 == 5)
+        # Re-upsert with less critical sev 4 (4 > 1, NOT more severe)
         store.upsert_alert(
             dedup_key="tri3-stay-dismissed|3.3.3.3|4.4.4.4",
-            severity=5,
+            severity=4,
         )
         alert = store.get_alert(alert_id)
         assert alert is not None
         assert alert["bucket"] == "dismissed", (
-            "bucket should remain dismissed when new severity <= existing severity"
+            "bucket should remain dismissed when new severity is LESS critical (higher number)"
         )
-        assert alert["count"] == 2, "count should be incremented"
+        assert alert["count"] == 2, "count should still be incremented"
 
-    def test_lower_severity_stays_dismissed(self):
-        """tri-3: Dismiss an alert, re-upsert with LOWER severity -> stays dismissed."""
+    def test_same_severity_stays_dismissed(self):
+        """tri-3: Dismiss an alert, then re-upsert with SAME severity -> stays dismissed."""
         alert_id = store.upsert_alert(
-            dedup_key="tri3-lower-sev|5.5.5.5|6.6.6.6",
-            severity=7,
+            dedup_key="tri3-same-sev|5.5.5.5|6.6.6.6",
+            severity=3,
         )
         store.transition_alert(alert_id, "dismissed", reason="fp")
 
         store.upsert_alert(
-            dedup_key="tri3-lower-sev|5.5.5.5|6.6.6.6",
-            severity=2,
+            dedup_key="tri3-same-sev|5.5.5.5|6.6.6.6",
+            severity=3,
         )
         alert = store.get_alert(alert_id)
         assert alert is not None
@@ -664,6 +687,106 @@ class TestReapStaleValidating:
         data = resp.json()
         assert "reaped" in data
         assert isinstance(data["reaped"], int)
+
+
+# ---------------------------------------------------------------------------
+# s2-02 gate: severity convention locking tests
+# ---------------------------------------------------------------------------
+
+
+class TestSeverityConvention:
+    def test_list_alerts_sev1_before_sev3(self):
+        """s2-02 gate: list_alerts returns sev-1 (critical) before sev-3 (medium)."""
+        store.upsert_alert(dedup_key="sev3-alert|1.1.1.1|2.2.2.2", severity=3)
+        store.upsert_alert(dedup_key="sev1-alert|3.3.3.3|4.4.4.4", severity=1)
+        alerts = store.list_alerts()
+        assert len(alerts) == 2
+        severities = [a["severity"] for a in alerts]
+        assert severities[0] == 1, (
+            f"expected sev-1 (critical) first in list_alerts ORDER BY severity ASC, "
+            f"got {severities}"
+        )
+        assert severities[1] == 3
+
+    def test_dedup_keeps_most_critical_severity(self):
+        """s2-02 gate: LEAST(existing, new) keeps the more-critical (lower) severity."""
+        aid = store.upsert_alert(dedup_key="dedup-least|1.1.1.1|2.2.2.2", severity=4)
+        store.upsert_alert(dedup_key="dedup-least|1.1.1.1|2.2.2.2", severity=2)
+        alert = store.get_alert(aid)
+        assert alert is not None
+        assert alert["severity"] == 2, (
+            f"LEAST(4, 2) should be 2 (more critical), got {alert['severity']}"
+        )
+
+    def test_normalize_severity_passthrough_suricata(self):
+        """s2-02 gate: normalize_severity with suricata source passes through 1..4 unchanged."""
+        from triage_main import normalize_severity
+        assert normalize_severity(1, "suricata") == 1
+        assert normalize_severity(3, "suricata") == 3
+        assert normalize_severity(4, "zeek") == 4
+
+    def test_normalize_severity_floors_at_1(self):
+        """s2-02 gate: normalize_severity clamps 0 and negative to 1."""
+        from triage_main import normalize_severity
+        assert normalize_severity(0, None) == 1
+        assert normalize_severity(-5, "suricata") == 1
+
+    def test_normalize_severity_none_input_returns_1(self):
+        """s2-02 gate: normalize_severity(None) returns 1 (most critical default)."""
+        from triage_main import normalize_severity
+        assert normalize_severity(None, None) == 1
+
+    def test_normalize_severity_unknown_source_passthrough(self):
+        """s2-02 gate: unknown source passes through (with a log note) rather than mangling."""
+        from triage_main import normalize_severity
+        assert normalize_severity(2, "some_future_ml_source") == 2
+
+
+# ---------------------------------------------------------------------------
+# s2-04 gate: reap clamping tests
+# ---------------------------------------------------------------------------
+
+
+class TestReapClamping:
+    def test_reap_minus_one_clamped_does_not_reap_fresh_validating(self):
+        """s2-04 gate: older_than_minutes=-1 is clamped to 1; a just-created validating alert is NOT reaped."""
+        import psycopg as _pg
+
+        # Create and immediately move to validating (updated_at = now)
+        alert_id = store.upsert_alert(
+            dedup_key="s2-04-clamp-test|1.2.3.4|5.6.7.8",
+            severity=2,
+        )
+        store.transition_alert(alert_id, "validating", reason="in-flight test")
+
+        # Pass -1; should be clamped to 1 minute threshold -> just-created alert NOT reaped
+        count = store.reap_stale_validating(older_than_minutes=-1)
+        assert count == 0, (
+            f"reap_stale_validating(-1) should be clamped to 1 min; "
+            f"a just-created validating alert must NOT be reaped, got count={count}"
+        )
+
+        alert = store.get_alert(alert_id)
+        assert alert is not None
+        assert alert["bucket"] == "validating", (
+            f"in-flight alert must remain 'validating', got {alert['bucket']}"
+        )
+
+    def test_reap_endpoint_rejects_zero(self):
+        """s2-04 gate: POST /triage/reap?older_than_minutes=0 returns 422 (FastAPI Query ge=1)."""
+        client = _client_with()
+        resp = client.post("/triage/reap?older_than_minutes=0")
+        assert resp.status_code == 422, (
+            f"expected 422 for older_than_minutes=0, got {resp.status_code}"
+        )
+
+    def test_reap_endpoint_rejects_negative(self):
+        """s2-04 gate: POST /triage/reap?older_than_minutes=-5 returns 422."""
+        client = _client_with()
+        resp = client.post("/triage/reap?older_than_minutes=-5")
+        assert resp.status_code == 422, (
+            f"expected 422 for older_than_minutes=-5, got {resp.status_code}"
+        )
 
 
 # ---------------------------------------------------------------------------

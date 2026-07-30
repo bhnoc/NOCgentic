@@ -650,6 +650,80 @@ async def test_no_gemini_key_returns_503():
 # inv-2: system prompt contains the untrusted-data warning
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# s2-07: dt= in SELECT projection must be rejected (predicate-position check)
+# ---------------------------------------------------------------------------
+
+def test_validate_query_rejects_dt_in_projection():
+    """s2-07: 'SELECT dt=1 FROM conn' has no WHERE → rejected (no WHERE at all)."""
+    result = inv_main.validate_query("SELECT dt=1 FROM conn")
+    assert result is not None, (
+        "Expected rejection: dt= is in the SELECT projection (no WHERE clause)"
+    )
+
+
+def test_validate_query_rejects_dt_as_alias():
+    """s2-07: 'SELECT foo AS dt FROM conn' has no WHERE dt filter → rejected."""
+    result = inv_main.validate_query("SELECT foo AS dt FROM conn WHERE ts > 0")
+    assert result is not None, (
+        "Expected rejection: dt is only in SELECT alias, not WHERE predicate"
+    )
+
+
+def test_validate_query_accepts_dt_in_where_after_fix():
+    """s2-07: valid WHERE dt='x' still accepted."""
+    result = inv_main.validate_query("SELECT * FROM conn WHERE dt = '2026-07-30'")
+    assert result is None, f"Expected None (accepted), got: {result}"
+
+
+def test_validate_query_accepts_dt_between():
+    """s2-07: WHERE dt BETWEEN still accepted."""
+    result = inv_main.validate_query(
+        "SELECT * FROM conn WHERE dt BETWEEN '2026-07-29' AND '2026-07-30'"
+    )
+    assert result is None, f"Expected None (accepted), got: {result}"
+
+
+def test_validate_query_accepts_dt_in_list():
+    """s2-07: WHERE dt IN (...) still accepted after WHERE-position check."""
+    result = inv_main.validate_query(
+        "SELECT ts FROM conn WHERE dt IN ('2026-07-29', '2026-07-30') LIMIT 10"
+    )
+    assert result is None, f"Expected None (accepted), got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# inv-8: dt_hint includes correct partition list for window_hours
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dt_hint_includes_partitions_for_window():
+    """inv-8: for window_hours=48 the hint contains >= 2 partition dates."""
+    # We check what dt_hint gets injected into the system prompt by inspecting
+    # the first user message seen by the provider.
+    provider = tp.FixtureProvider([{"text": "Done."}])
+    inv_main.app.state.tool_provider = provider
+    inv_main.app.state.athena_execute = _make_fake_athena([])
+
+    transport = ASGITransport(app=inv_main.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        await c.post("/investigate", json={"query": "48h window test", "window_hours": 48})
+
+    assert provider.seen_messages, "provider never called"
+    first_turn = provider.seen_messages[0]
+    # The user message carries the dt_hint
+    user_msg = next((mm for mm in first_turn if mm.get("role") == "user"), None)
+    assert user_msg is not None
+    content = user_msg["content"]
+    # For 48h we expect the hint to reference multiple partitions
+    # Count how many YYYY-MM-DD dates appear
+    import re
+    dates_found = re.findall(r"\d{4}-\d{2}-\d{2}", content)
+    assert len(dates_found) >= 2, (
+        f"Expected >= 2 partition dates in 48h window hint, found {dates_found!r} in: {content[:300]}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_system_prompt_contains_tool_data_warning():
     """inv-2 smoke: the system prompt must warn the LLM not to follow tool result instructions."""
