@@ -119,20 +119,34 @@ Persistence decided: **Postgres+pgvector** container. First slice: **vector sear
 - **Verified from CLEAN**: full compose stack up, seeded, headless-Chrome screenshots of BOTH surfaces (triage queue + glass-box trace) render correctly against live services. Screenshots in temp/shots/.
 - Delivers 3 headline features: Glass Box Transparency, Investigations Triage Hub, AI Chatbot Interface (chat preserved).
 
+### SLICE 5 — DONE & GREEN (2026-07-30). Operational-context memory / semantic DB.
+- New migration `0002_memory.sql`: agent_memory (versioned, lifecycle status, confidence, usage, drift cols for later) + memory_events audit.
+- store.py: MEMORY_STATUSES/CATEGORIES/LIFECYCLE + upsert_memory (version bump on agent_slug+key) / get / list / transition_memory (guard mirrors alert bucket) / active_memories / bump_memory_usage.
+- `agents/shared/memory_prompt.py`: SECURITY-CRITICAL sanitizer — 15-pattern injection deny-list, in-place [redacted], length cap, control-char strip; build_memory_block routes EVERY string through it + defensive header. PURE.
+- `agents/memory/` service (:8009): CRUD + promote/retire/transition + /memory/context. ZERO LLM (deterministic store + regex).
+- INTEGRATION: investigator injects the sanitized active-memory block into its system prompt (in-process, guarded; emits memory_write trace event). tool_provider.FixtureProvider now records seen_messages.
+- docker-compose: `memory` service (:8009).
+- Gates: test_memory_prompt (35, pure) + test_memory (30) + investigator memory-injection integration test. Full acid **224 green**. Security gate PROVEN to bite (neuter sanitizer → 20 fail).
+- **Verified from CLEAN**: memory service container lifecycle over HTTP (draft→candidate→active, 409 on illegal promote, /memory/context redacts injection while keeping the operational fact). Used `down -v` to reset pgdata volume when a stale-volume reading confused a smoke run — lesson: reset the volume for clean container smokes.
+- Delivers: Operational Context Memory, Semantic Database, Automated Learning (manual/API-driven promotion this slice; auto-drift engine deferred).
+
 ## CURRENT STANDING (2026-07-30)
-Branch level9000, 5 commits past main. Python acid 82 green + web-server vitest 36 green. Docker: colima;
-throwaway `nocgentic-pgtest` on host:5432 for the acid gate. NOT deployed to the AING box yet (local only).
-NOT wired into the orchestrator's intent router yet (deferred — orchestrator has a tuned eval suite; wiring
-investigator/triage/root-cause as routable intents is a gated future step). No Gemini key locally, so
-investigate/embed live paths degrade gracefully (503/stub) and are proven in-process; full LLM path needs
-the key on the box.
+Branch level9000, 8 commits past main. Python acid **224 green** + web-server vitest 36 green. Docker: colima;
+throwaway `nocgentic-pgtest` on host:5432 for the acid gate (NOTE: compose has a `pgdata` volume — use
+`docker compose down -v` for a truly clean container smoke). NOT deployed to AING box (local only).
+
+SIX new services/modules, all API+container verified from clean, none yet wired into the orchestrator's
+intent router. BLOCKER for orchestrator wiring: `bench/prompt_eval/run_eval.py` hits a LIVE app
+(aing.bhnoc.com) + real Gemini classifier — cannot gate that change locally without the key/box. Must be
+done on/against the box. No Gemini key locally → investigate/embed live LLM paths degrade gracefully
+(503/stub) and are proven in-process; full LLM path needs the key on the box.
 
 ### Remaining candidate slices (not yet built)
-- Wire new services into orchestrator intent routing (gated vs bench/prompt_eval).
-- Operational-context memory / semantic DB (VR agent_memory lifecycle: draft→active→retired + drift stats).
-- Proactive threat-hunting scheduler (cron the investigator over hunt templates).
+- Wire new services into orchestrator intent routing — GATED vs bench/prompt_eval, must run against the box.
+- Auto-drift memory engine (VR memorySelfImprove: z-test/CUSUM/Wilson promote/retire) — deferred from slice 5.
+- Proactive threat-hunting scheduler (cron the investigator over MITRE hunt templates from VR th-guide.json).
 - Autonomous agent collaboration (orchestrator delegates + shares context across the new agents).
-- Deploy to AING box + on-box smoke with real Gemini key.
+- Deploy to AING box + on-box smoke with real Gemini key + run prompt_eval.
 
 ### SLICE 3 (original heading, superseded):
 Port VR's alert `bucket` lifecycle (alerts→validating→validated_TP/FP/bad_hygiene + hunting_*) +
