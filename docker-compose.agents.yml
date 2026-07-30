@@ -249,6 +249,10 @@ services:
     environment:
       - ORCHESTRATOR_URL=http://orchestrator:8001
       - ATHENA_HUNTER_URL=http://athena-hunter:8005
+      # level9000 services proxied through web-server for the glass-box + triage UI.
+      - INVESTIGATOR_URL=http://investigator:8007
+      - TRIAGE_URL=http://triage:8008
+      - ROOT_CAUSE_URL=http://root-cause:8006
       # Lets the alert feed read the orchestrator kill-switch so "kill athena"
       # also freezes the live feed, not just chat (QA sweep 4, cc-1).
       - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
@@ -260,6 +264,9 @@ services:
     depends_on:
       - orchestrator
       - athena-hunter
+      - investigator
+      - triage
+      - root-cause
     restart: unless-stopped
 
   nginx:

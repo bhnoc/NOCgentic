@@ -6,6 +6,7 @@ import fastifyCookie from '@fastify/cookie';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import { registerChatRoutes } from './api/chat';
+import { registerProxyRoutes } from './api/proxy';
 import { alertCache } from './services/alertCache';
 import {
   SECURITY_HEADERS,
@@ -83,6 +84,7 @@ async function main() {
 
   // Chat API routes
   registerChatRoutes(server);
+  registerProxyRoutes(server);
 
   // WebSocket endpoint for real-time updates (server pushes the shared alert feed).
   server.get('/ws', { websocket: true }, (connection, request) => {
