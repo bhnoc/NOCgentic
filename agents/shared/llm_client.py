@@ -29,6 +29,9 @@ Environment variables:
     OPENROUTER_MODEL    default: anthropic/claude-3-haiku
     LOCAL_LLM_BASE_URL  OpenAI-compatible local server (llama.cpp/Ollama/vLLM). Default http://localhost:8080/v1
     LOCAL_LLM_MODEL     served model name for the local provider. Default "AQLight"
+    SQLGEN_PROVIDER     optional: route ONLY NL->SQL gen to this provider (e.g. "local"),
+                        leaving synthesis/classify/triage on LLM_PROVIDER. Hybrid mode.
+    SQLGEN_MODEL        optional model override paired with SQLGEN_PROVIDER
     LOCAL_LLM_API_KEY   placeholder key for local servers. Default "not-needed"
 
 Provider selection is per-box: a CPU/no-GPU host runs LLM_PROVIDER=gemini (cloud),
@@ -167,6 +170,17 @@ OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku"
 LOCAL_LLM_BASE_URL: str = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8080/v1")
 LOCAL_LLM_MODEL: str = os.getenv("LOCAL_LLM_MODEL", "AQLight")
 LOCAL_LLM_API_KEY: str = os.getenv("LOCAL_LLM_API_KEY", "not-needed")
+
+# HYBRID knob: route ONLY the NL->SQL generation step to a chosen provider, leaving every
+# other call (classify, synthesis, triage) on LLM_PROVIDER. This exists because the
+# capability eval (2026-07-30) showed AQLight is EXCELLENT at NL->SQL (routing 100%, its
+# own eval 0.962) but HALLUCINATES in free-text synthesis (relevance 0.464 vs Gemini's
+# 0.718 whole-app; it invented alert details and told the analyst to block the DNS
+# forwarder). So the win is hybrid: AQLight writes the SQL, Gemini writes the prose.
+# Unset by default -> SQL gen uses whatever LLM_PROVIDER already is (no behavior change).
+# Set SQLGEN_PROVIDER=local (+ the LOCAL_LLM_* vars) to send only SQL gen to AQLight.
+SQLGEN_PROVIDER: str = os.getenv("SQLGEN_PROVIDER", "").lower()
+SQLGEN_MODEL: str = os.getenv("SQLGEN_MODEL", "")
 
 
 # ---------------------------------------------------------------------------

@@ -83,6 +83,10 @@ services:
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
+      # HYBRID: set SQLGEN_PROVIDER=local to route ONLY NL->SQL gen to AQLight while
+      # synthesis stays on LLM_PROVIDER (Gemini). Unset -> SQL gen uses LLM_PROVIDER too.
+      - SQLGEN_PROVIDER=${SQLGEN_PROVIDER:-}
+      - SQLGEN_MODEL=${SQLGEN_MODEL:-}
       - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
       - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
       - ATHENA_REGION=${ATHENA_REGION:-us-west-2}

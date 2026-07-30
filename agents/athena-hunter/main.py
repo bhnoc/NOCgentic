@@ -30,7 +30,10 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
-from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
+from llm_client import (  # noqa: E402
+    llm_complete, get_last_llm_metrics,
+    SQLGEN_PROVIDER, SQLGEN_MODEL, LLM_PROVIDER,
+)
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, instrument_fastapi_app,
     set_agent_span, set_chain_span, set_tool_span, set_tool_resource,
@@ -409,6 +412,13 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
             "existence check ('are there ANY X') the extra bound is harmless, so add it too."
         )
 
+        # HYBRID: NL->SQL is the ONE step to route to a SQL-specialist (AQLight) when
+        # configured, while synthesis below stays on LLM_PROVIDER (Gemini). SQLGEN_PROVIDER
+        # is unset by default, so provider/model resolve to None and this behaves exactly
+        # as before. See llm_client SQLGEN_PROVIDER + docs/llm/AQLight-integration.md.
+        sqlgen_provider = SQLGEN_PROVIDER or None
+        sqlgen_model = SQLGEN_MODEL or None
+        span.set_attribute("sqlgen.provider", sqlgen_provider or (LLM_PROVIDER or "gemini"))
         try:
             raw = await llm_complete(
                 # Truncation guard for SQL generation. On flash-lite, thinking_budget=0
@@ -425,6 +435,8 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
                 max_tokens=4096,
                 temperature=0.0,
                 thinking_budget=512,
+                provider=sqlgen_provider,
+                model=sqlgen_model,
             )
             span.set_attribute("llm.response_length", len(raw))
         except RuntimeError as exc:
