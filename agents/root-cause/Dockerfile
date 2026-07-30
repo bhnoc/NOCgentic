@@ -10,9 +10,9 @@ RUN pip install --no-cache-dir -r requirements.txt -r /app/shared/requirements.t
 # Copy shared module (parents[2]/shared = /app/shared)
 COPY agents/shared/ /app/shared/
 
-# Copy agent source + migrations
+# Copy agent source. The recall migration ships inside agents/shared/migrations/
+# (copied above with agents/shared/), so no separate migration COPY is needed.
 COPY agents/root-cause/main.py .
-COPY agents/root-cause/migrations/ migrations/
 
 EXPOSE 8006
 

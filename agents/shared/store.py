@@ -1,7 +1,7 @@
 """
 store.py — Postgres/pgvector persistence layer for NOCgentic recall + agentic trace.
 
-Tables (defined in agents/root-cause/migrations/0000_recall.sql):
+Tables (defined in agents/shared/migrations/0000_recall.sql):
     log_templates   — drain-clustered event templates with 768-dim embeddings
     incidents       — resolved incidents with embeddings for recall
     deploy_markers  — code-push / config-change events for correlation
@@ -45,9 +45,9 @@ def _resolve_migration_path() -> Path:
         return Path(override)
     here = Path(__file__).resolve()
     candidates = [
-        here.parents[1] / "root-cause" / "migrations" / "0000_recall.sql",          # repo: agents/root-cause
-        here.parents[1] / "agents" / "root-cause" / "migrations" / "0000_recall.sql",  # container: /app/agents/root-cause
-        Path("/app/agents/root-cause/migrations/0000_recall.sql"),                   # container absolute fallback
+        here.parent / "migrations" / "0000_recall.sql",                    # canonical: beside store.py (shipped with agents/shared/)
+        here.parents[1] / "root-cause" / "migrations" / "0000_recall.sql", # legacy repo layout (pre-move)
+        Path("/app/shared/migrations/0000_recall.sql"),                    # container absolute fallback
     ]
     for c in candidates:
         if c.exists():
@@ -98,7 +98,7 @@ def _get_pool() -> psycopg_pool.ConnectionPool:
 def init_schema() -> None:
     """Idempotent schema initialisation.
 
-    Reads agents/root-cause/migrations/0000_recall.sql and executes it.
+    Reads agents/shared/migrations/0000_recall.sql and executes it.
     Safe to call multiple times (all DDL is IF NOT EXISTS).
     """
     sql = _MIGRATION_PATH.read_text()

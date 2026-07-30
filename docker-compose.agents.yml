@@ -48,6 +48,33 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Investigator: autonomous multi-step Athena tool loop with an event-sourced
+  # glass-box trace (agent_runs/agent_events in postgres). Internal only.
+  investigator:
+    build:
+      context: .
+      dockerfile: agents/investigator/Dockerfile
+    expose:
+      - "8007"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      - PG_DSN=${PG_DSN:-postgresql://nocgentic:nocgentic@postgres:5432/nocgentic}
+      - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
+      - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
+      - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=bhnocgentic-investigator
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   orchestrator:
     build:
       context: .

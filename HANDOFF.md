@@ -91,7 +91,26 @@ Persistence decided: **Postgres+pgvector** container. First slice: **vector sear
 - Throwaway `nocgentic-pgtest` container (port 5432) is up for the acid harness between rounds.
 - NOT YET wired into orchestrator routing (deferred: orchestrator has a tuned eval suite; wire in a later gated step). Service is standalone + API-verified.
 
-### SLICE 2 — NEXT: autonomous investigation loop + glass-box in the orchestrator/chat path.
+### SLICE 2 — DONE & GREEN (2026-07-30). Autonomous investigation loop + glass-box trace.
+- New: `agents/shared/tool_provider.py` (ToolProvider protocol; GeminiToolProvider via langchain_google_genai bind_tools, lazy import; FixtureProvider + InfiniteToolProvider for offline tests; is_stub()).
+- New service: `agents/investigator/` (FastAPI :8007) — `POST /investigate {query,window_hours,max_depth}` → `{run_id,finding,evidence}`, `GET /runs/{id}`, `GET /health`. Ported PostCog `_chat_with_tools` recursive Athena tool loop + `validate_query` (dt-filter/SELECT guard) + `format_results` (_FIELD_BUDGETS) + `detect_high_signal` (_HIGH_SIGNAL_RE). Reuses store.py run/event tables (kind="investigation"), NO new tables.
+- Data/voice split: code owns validate/format/high-signal/severity/verdict/evidence; ONE llm_complete prose call + the tool-loop provider.chat (both irreducible). Codification pass done.
+- docker-compose: `investigator` service added (:8007, depends postgres healthy).
+- Gates: added test_investigator.py to acid.sh. Full suite now **63 green** (20+13+11+12+7).
+- **Verified from CLEAN**: acid 63 green; cold `docker compose up postgres investigator` → schema init OK, /health llm_stub:true, /investigate w/o key → clean **503** + persisted failed run (trace: plan,error).
+- BUG FIXED (caught by container verify, same class as slice 1): the recall migration was only COPYed by root-cause's Dockerfile, so investigator couldn't init schema. MOVED migration to `agents/shared/migrations/0000_recall.sql` (ships with agents/shared/ to every service); store._resolve_migration_path() now finds it beside store.py; removed root-cause Dockerfile's migration COPY.
+- ROBUSTNESS FIX: /investigate creates the run + emits "plan" BEFORE constructing the provider, so an immediate provider failure still leaves an auditable trace; provider-init failure → 503 (config problem) not 500 (bug).
+- NOT yet wired into orchestrator/UI (deferred, same as root-cause).
+
+### SLICE 3 — NEXT: triage hub + alert bucket state machine.
+Port VR's alert `bucket` lifecycle (alerts→validating→validated_TP/FP/bad_hygiene + hunting_*) +
+`bucket_transitions` audit + finding contract, with an autonomous triage worker that pulls alerts
+(alert-triage agent / Athena alerts table), runs the investigator loop per alert, and files a
+verdict into a bucket. Reuses store.py (add alerts + bucket_transitions tables via a new migration
+0001) + the investigator service. Surfaces as a triage queue API. This is the "Investigations Triage
+Hub" feature. THEN: wire investigator+root-cause+triage into orchestrator routing (gated vs its eval suite); UI glass-box.
+
+### (superseded) SLICE 2 original heading:
 Rationale: slice 1 built the trace/store substrate (agent_runs+agent_events) + a proven loop pattern
 for ONE analysis type. Slice 2 generalizes it: port PostCog's `_chat_with_tools` multi-step Athena
 loop into a first-class investigation engine the orchestrator can invoke, persisting the same
