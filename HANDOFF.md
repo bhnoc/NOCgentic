@@ -130,8 +130,16 @@ Persistence decided: **Postgres+pgvector** container. First slice: **vector sear
 - **Verified from CLEAN**: memory service container lifecycle over HTTP (draft→candidate→active, 409 on illegal promote, /memory/context redacts injection while keeping the operational fact). Used `down -v` to reset pgdata volume when a stale-volume reading confused a smoke run — lesson: reset the volume for clean container smokes.
 - Delivers: Operational Context Memory, Semantic Database, Automated Learning (manual/API-driven promotion this slice; auto-drift engine deferred).
 
+### SLICE 6 — DONE & GREEN (2026-07-30). Proactive threat-hunting scheduler.
+- New `agents/hunter/` service (:8010) + `hunt_templates.py` (7 MITRE-mapped NL hunts: C2 non-standard-port T1571 / encrypted-channel T1573, brute-force T1110, net-service-discovery T1046, lateral SMB/RDP T1210, external-remote-services T1133, large-transfer exfil T1030).
+- migration `0003_hunts.sql`: hunts + hunt_runs. store.py: register_hunts/list/get/set_enabled/mark_ran/**due_hunts (PURE, injected clock)**/record_hunt_run/list_hunt_runs.
+- Scheduler: pure `scheduler_tick(now, client)` + guarded asyncio background loop (HUNTER_AUTORUN, SCHED_TICK_SECONDS). Runs each due hunt via InvestigatorClient seam, files findings tagged with MITRE technique. ZERO LLM in scheduler (investigator does the thinking).
+- Gates: test_hunts.py (29). Full acid **253 green**. due_hunts timing gate PROVEN to bite (neuter interval → 3 fail).
+- **Verified from CLEAN**: cold compose up, 7 templates registered, enable/disable live, and a failed hunt (keyless investigator → 502) does NOT set last_run_at → it RETRIES. Confirmed over HTTP.
+- Delivers: Proactive Threat Hunting, 24/7 hunt, MITRE TTP extraction.
+
 ## CURRENT STANDING (2026-07-30)
-Branch level9000, 8 commits past main. Python acid **224 green** + web-server vitest 36 green. Docker: colima;
+Branch level9000, 10 commits past main. Python acid **253 green** + web-server vitest 36 green. Docker: colima;
 throwaway `nocgentic-pgtest` on host:5432 for the acid gate (NOTE: compose has a `pgdata` volume — use
 `docker compose down -v` for a truly clean container smoke). NOT deployed to AING box (local only).
 
