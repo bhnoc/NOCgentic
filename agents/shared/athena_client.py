@@ -16,6 +16,7 @@ Environment variables:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import re
@@ -82,6 +83,13 @@ _RE_COMMENT = re.compile(r"(--|/\*|\*/|#)")
 # Dotted quads appearing anywhere in a statement, for the scope check below.
 _RE_IP_LITERAL = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
+# Partial dotted prefixes (2-3 octets), optionally regex-escaped, as used in
+# LIKE/regexp_like subnet predicates. Matched only when followed by a separator
+# or wildcard so a full quad's leading octets don't re-trigger here.
+_RE_IP_PREFIX = re.compile(
+    r"\b(\d{1,3}(?:\\?\.\d{1,3}){1,2})\\?\.(?=[%_*']|$)"
+)
+
 
 def sanitize_sql(sql: str) -> str:
     """Validate and strip dangerous SQL — only allow a single SELECT query.
@@ -119,8 +127,21 @@ def sanitize_sql(sql: str) -> str:
     # an out-of-scope host cannot execute even if the model is talked into
     # writing one.
     for literal in _RE_IP_LITERAL.findall(sql):
+        # Only judge things that are actually addresses. A dotted-numeric token
+        # like a version string ("1.2.3.400") matches the candidate pattern but
+        # is not an IP, and rejecting it would break legitimate queries.
+        try:
+            ipaddress.ip_address(literal)
+        except ValueError:
+            continue
         if not ipscope.is_in_scope(literal):
             raise ValueError(f"Out-of-scope IP in query: {literal}")
+
+    # Partial prefixes too: LIKE '192.168.1.%' and regexp_like(h, '^10\.0\.')
+    # target an out-of-scope subnet without containing a full dotted quad.
+    for prefix in _RE_IP_PREFIX.findall(sql):
+        if ipscope.prefix_is_out_of_scope(prefix.replace("\\", "")):
+            raise ValueError(f"Out-of-scope IP prefix in query: {prefix}")
     return sql
 
 

@@ -13,6 +13,7 @@ Full OpenTelemetry tracing sent to Manifold.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -959,6 +960,18 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
     uid = row.get("uid") or ""
     orig_h = row.get("orig_h") or ""
     resp_h = row.get("resp_h") or ""
+
+    # Identity is derived from the RAW host, before redaction, then hashed. Using
+    # the redacted value would collapse every out-of-scope host onto one id, and
+    # the UI drops duplicate ids (index.html dedups on data-id), silently losing
+    # alerts. Using the raw value would re-leak the address, since the id is
+    # written to a data-id DOM attribute. A hash keeps it unique and opaque.
+    host_key = (
+        hashlib.sha256(orig_h.encode()).hexdigest()[:12]
+        if orig_h and not ipscope.is_in_scope(orig_h)
+        else orig_h
+    )
+
     # The alert feed reaches the browser via web-server's alertCache, which does
     # NOT pass through the orchestrator's output sanitizer — so scope-redact here
     # or out-of-scope addresses ship straight to the UI.
@@ -968,7 +981,7 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
     if resp_h and not ipscope.is_in_scope(resp_h):
         resp_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
     alert_id = (
-        f"{alert_name}|{orig_h}|{ts_raw}"
+        f"{alert_name}|{host_key}|{ts_raw}"
         if alert_name
         else uid or f"alrt-{hash((ts_raw, description)) & 0xFFFFFFFF:08x}"
     )

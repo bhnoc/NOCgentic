@@ -17,6 +17,7 @@ from shared.ipscope import (  # noqa: E402
     IN_SCOPE_NETWORKS,
     filter_rows,
     is_in_scope,
+    prefix_is_out_of_scope,
     redact_obj,
     redact_text,
     row_in_scope,
@@ -164,3 +165,46 @@ class TestOldRegexWouldFail:
         assert legacy.sub("[INTERNAL-IP]", "10.0.1.63") == "[INTERNAL-IP].63"
         # The replacement must not.
         assert redact_text("10.0.1.63") == OUT_OF_SCOPE_PLACEHOLDER
+
+
+class TestRowFilterResistsAliasing:
+    """QA sweep: row_in_scope used a fixed column-name allowlist, which aliasing
+    defeats. agents/alert-triage/main.py really does `SELECT id_orig_h as ip`."""
+
+    def test_aliased_address_column_still_caught(self):
+        assert not row_in_scope({"ip": "10.0.1.63", "connection_count": "4213"})
+
+    def test_arbitrary_alias_caught(self):
+        assert not row_in_scope({"host": "10.0.1.63"})
+        assert not row_in_scope({"whatever_column_name": "192.168.1.7"})
+
+    def test_ip_embedded_in_free_text_caught(self):
+        """A DNS answers column or alert detail can carry an address."""
+        assert not row_in_scope({"answers": "resolved to 10.0.0.5", "n": "1"})
+
+    def test_in_scope_aliased_row_still_allowed(self):
+        assert row_in_scope({"ip": "10.220.40.7", "connection_count": "9"})
+
+    def test_public_address_allowed_under_any_alias(self):
+        assert row_in_scope({"peer": "45.83.193.150"})
+
+    def test_non_string_values_do_not_crash(self):
+        assert row_in_scope({"count": 4213, "ratio": 0.5, "flag": None})
+
+
+class TestPrefixScope:
+    def test_fully_out_of_scope_prefixes(self):
+        assert prefix_is_out_of_scope("192.168.1")
+        assert prefix_is_out_of_scope("10.0")
+        assert prefix_is_out_of_scope("172.16")
+
+    def test_in_scope_prefixes_not_blocked(self):
+        assert not prefix_is_out_of_scope("10.220.40")
+        assert not prefix_is_out_of_scope("10.220")
+
+    def test_public_prefixes_not_blocked(self):
+        assert not prefix_is_out_of_scope("45.83.193")
+
+    def test_single_octet_and_full_quad_ignored(self):
+        assert not prefix_is_out_of_scope("10")
+        assert not prefix_is_out_of_scope("10.0.1.63")

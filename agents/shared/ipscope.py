@@ -29,6 +29,7 @@ __all__ = [
     "IN_SCOPE_NETWORKS",
     "OUT_OF_SCOPE_PLACEHOLDER",
     "is_in_scope",
+    "prefix_is_out_of_scope",
     "redact_text",
     "redact_obj",
     "row_in_scope",
@@ -74,6 +75,31 @@ def is_in_scope(value: str) -> bool:
     return bool(addr.is_global)
 
 
+def prefix_is_out_of_scope(prefix: str) -> bool:
+    """True if NO address under this partial dotted prefix is in scope.
+
+    Exists because a SQL predicate can target a subnet without ever writing a
+    full dotted quad: `id_orig_h LIKE '192.168.1.%'` or `regexp_like(h, '^10\\.0\\.')`
+    reaches out-of-scope hosts while a literal-only check sees nothing to reject.
+    A prefix is blocked only when the ENTIRE block it covers is out of scope, so
+    in-scope prefixes ("10.220.40") and public ones ("45.83.193") stay queryable.
+    """
+    parts = prefix.split(".")
+    if not (2 <= len(parts) <= 3):
+        return False
+    if not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+        return False
+    padded = parts + ["0"] * (4 - len(parts))
+    try:
+        block = ipaddress.ip_network(".".join(padded) + f"/{8 * len(parts)}", strict=False)
+    except ValueError:
+        return False
+    if any(block.overlaps(net) for net in IN_SCOPE_NETWORKS):
+        return False
+    # Public prefixes are threat-actor space and stay allowed.
+    return not block[0].is_global
+
+
 def redact_text(text: str) -> str:
     """Replace every out-of-scope IPv4 literal in free text."""
     if not isinstance(text, str) or not text:
@@ -104,33 +130,28 @@ def redact_obj(obj: Any) -> Any:
     return obj
 
 
-# Athena column names that carry an endpoint address, either direction.
-_ADDRESS_FIELDS: tuple[str, ...] = (
-    "id_orig_h",
-    "id_resp_h",
-    "orig_h",
-    "resp_h",
-    "srcIp",
-    "dstIp",
-    "src_ip",
-    "dst_ip",
-    "host_ip",
-    "query_ip",
-)
-
-
 def row_in_scope(row: dict[str, Any]) -> bool:
-    """True if every populated address field on this row is in scope.
+    """True if no value on this row contains an out-of-scope address.
+
+    Scans EVERY value rather than a list of known address column names. A
+    name-based allowlist is trivially defeated by aliasing — this repo really
+    does `SELECT id_orig_h as ip` (agents/alert-triage/main.py) — and it misses
+    addresses embedded in free text (a DNS `answers` column, an alert detail).
+    Scanning values needs no maintenance when a query adds a column or alias.
 
     Both directions must qualify: a flow from an out-of-scope private host is
     not ours to show even when the peer is a legitimate public address.
     """
-    for field in _ADDRESS_FIELDS:
-        value = row.get(field)
-        if value in (None, "", "-"):
+    for value in row.values():
+        if not isinstance(value, str) or not value:
             continue
-        if not is_in_scope(str(value)):
-            return False
+        for candidate in _IPV4_CANDIDATE.findall(value):
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue  # not a real address; not ours to judge
+            if not is_in_scope(candidate):
+                return False
     return True
 
 

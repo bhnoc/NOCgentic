@@ -77,3 +77,43 @@ class TestPreExistingGuardsStillHold:
 
     def test_trailing_semicolon_still_ok(self):
         assert sanitize_sql("SELECT 1 FROM conn;") == "SELECT 1 FROM conn"
+
+
+class TestPrefixBypass:
+    """QA sweep: a LIKE/regexp prefix targets a subnet with no full dotted quad,
+    so a literal-only check saw nothing to reject (both enforcement layers missed
+    it: a COUNT(*) row carries no address for the row filter to catch either)."""
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT COUNT(*) FROM conn WHERE id_orig_h LIKE '192.168.1.%'",
+            "SELECT COUNT(*) FROM conn WHERE id_orig_h LIKE '10.0.%'",
+            "SELECT COUNT(*) FROM conn WHERE id_orig_h LIKE '172.16.%'",
+            r"SELECT h FROM conn WHERE regexp_like(id_orig_h, '^10\.0\.')",
+        ],
+    )
+    def test_out_of_scope_prefix_rejected(self, sql):
+        with pytest.raises(ValueError, match="Out-of-scope IP prefix"):
+            sanitize_sql(sql)
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT COUNT(*) FROM conn WHERE id_orig_h LIKE '10.220.40.%'",
+            "SELECT COUNT(*) FROM conn WHERE id_orig_h LIKE '10.220.%'",
+            "SELECT COUNT(*) FROM conn WHERE id_resp_h LIKE '45.83.193.%'",
+        ],
+    )
+    def test_in_scope_and_public_prefixes_allowed(self, sql):
+        """Over-blocking is a product defect: these must stay queryable."""
+        assert sanitize_sql(sql) == sql
+
+
+class TestDottedNonAddressAllowed:
+    """A dotted-numeric token that is not a valid address must not be treated as
+    an out-of-scope IP; rejecting it broke legitimate queries."""
+
+    def test_version_like_value_allowed(self):
+        sql = "SELECT * FROM conn WHERE version = '1.2.3.400'"
+        assert sanitize_sql(sql) == sql
