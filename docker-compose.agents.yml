@@ -31,6 +31,9 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
     # Resolve host.docker.internal to the host on Linux, so the default
     # LOCAL_LLM_BASE_URL can reach the host's llama-server (AQLight) when
@@ -63,6 +66,9 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-alert-triage
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -93,6 +99,9 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-athena-hunter
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -116,6 +125,9 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-thousandeyes-analyst
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -159,6 +171,7 @@ services:
       - ALERT_MAX_FETCH=${ALERT_MAX_FETCH:-200}
       - PORT=3000
       - NODE_ENV=production
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-https://aing.bhnoc.com}
     depends_on:
       - orchestrator
       - athena-hunter

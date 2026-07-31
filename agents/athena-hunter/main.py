@@ -39,6 +39,7 @@ from telemetry import (  # noqa: E402
     set_agent_span, set_chain_span, set_tool_span, set_tool_resource,
 )
 from athena_client import (  # noqa: E402
+    ATHENA_DATABASE,
     execute_custom_sql,
     date_filter,
     sanitize_value,
@@ -138,7 +139,7 @@ def classify_iocs(iocs: list[str]) -> dict[str, list[str]]:
 
 SQL_GEN_PROMPT = (
     "You are a SQL query generator for Corelight/Zeek network security data in AWS Athena.\n\n"
-    "DATABASE: blackhat_pope_logs\n\n"
+    f"DATABASE: {ATHENA_DATABASE}\n\n"
     "════════════════════════════════════════════════════════════\n"
     "CRITICAL — COLUMN PREFIX RULE (read twice):\n"
     "════════════════════════════════════════════════════════════\n"
@@ -472,6 +473,12 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
         def _sub_tokens(s: str) -> str:
             for tok, real in _token_dates.items():
                 s = re.sub(rf"(?i)'{tok}'", f"'{real}'", s)
+            # AQLight is fine-tuned to emit the literal schema `blackhat_pope_logs.<table>`
+            # regardless of prompt. Rewrite that baked-in prefix to the configured
+            # ATHENA_DATABASE so the catalog can be named per-tenant (e.g. blackhatnoc_glue).
+            # No-op when ATHENA_DATABASE == blackhat_pope_logs (the original/aing case).
+            if ATHENA_DATABASE != "blackhat_pope_logs":
+                s = re.sub(r"(?i)\bblackhat_pope_logs\.", f"{ATHENA_DATABASE}.", s)
             return s
 
         # Inject date partition if missing
@@ -650,7 +657,7 @@ async def gather_athena_context(
                 # TOOL invocation against the Athena data lake — drives the
                 # Agent → Tool INVOKES and Tool → Resource ACCESSES graph edges.
                 set_tool_span(qspan, name="athena.query", input_value=sql)
-                set_tool_resource(qspan, db_system="athena", db_name="blackhat_pope_logs")
+                set_tool_resource(qspan, db_system="athena", db_name=ATHENA_DATABASE)
                 try:
                     rows, meta = await execute_custom_sql(sql)
                     qspan.set_attribute("sql.row_count", len(rows))
@@ -982,7 +989,7 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
         span.set_attribute("hours", hours)
         span.set_attribute("limit", limit)
         set_tool_span(span, name="athena.query", parameters={"hours": hours, "limit": limit})
-        set_tool_resource(span, db_system="athena", db_name="blackhat_pope_logs")
+        set_tool_resource(span, db_system="athena", db_name=ATHENA_DATABASE)
 
         dt = date_filter(hours)
         # Exclude noisy ET INFO signatures — they're informational, not
