@@ -1289,10 +1289,12 @@
 
   // ========== Chat ==========
   function fillQuery(btn) {
+    if (document.getElementById('send-btn').disabled) return;
     const input = document.getElementById('query-input');
-    input.value = btn.textContent;
+    input.value = btn.textContent.trim();
     autoResize(input);
     input.focus();
+    sendQuery();
   }
 
   function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; }

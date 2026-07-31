@@ -7,6 +7,7 @@
     "dev": "npm run dev --workspace=packages/web-server",
     "build": "npm run build --workspaces",
     "test": "npm test --workspaces",
+    "test:ui": "./tests/ui/run.sh",
     "lint": "eslint packages/*/src/**/*.ts"
   }
 }
