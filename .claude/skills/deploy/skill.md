@@ -372,3 +372,42 @@ export LLAMA_CACHE=/home/ubuntu/models
   `actions.runner.bhnoc-NOCgentic.aing-nocgentic.service`, runs as `ubuntu` (in the `docker`
   group + passwordless sudo). Registered with label `nocgentic`. **Distinct** from the
   `postcog` runner at `/home/ubuntu/actions-runner` — same box, different repo.
+
+---
+
+## main is now host-agnostic + auto-deploys to the nocgentic box (2026-07-31)
+
+`main` was updated so the SAME code deploys to any host without host-specific edits, and the
+CI runner moved off aing onto the Product-Research **nocgentic box**.
+
+### What changed on main (commit 86f998a)
+- **nginx host-agnostic:** `nginx/nginx-ssl.conf` uses `server_name _;` (catch-all) and cert
+  paths `/etc/letsencrypt/live/current/{fullchain,privkey}.pem`. **Each box owns a symlink**
+  `current -> /etc/letsencrypt/live/<its-fqdn>` — set it once per box:
+  `sudo ln -sfn /etc/letsencrypt/live/<fqdn> /etc/letsencrypt/live/current`. The rsync deploy
+  (`--delete`, no nginx exclude) would otherwise clobber a box's server_name/cert path; the
+  catch-all + symlink makes one conf safe everywhere. (deploy.sh health-check still sends
+  `Host: aing.bhnoc.com` — harmless, catch-all answers any Host.)
+- **Per-tenant catalog:** athena-hunter rewrites AQLight's baked-in `blackhat_pope_logs.`
+  prefix → `ATHENA_DATABASE` (no-op when equal). Set `ATHENA_DATABASE/WORKGROUP/REGION` in
+  `.env.s3`.
+- **Per-tenant origin + traces:** compose passes `ALLOWED_ORIGIN` (web-server WS origin check —
+  set to `https://<fqdn>` or the UI shows RECONNECT) and `TRACE_S3_*` (trace bucket) through;
+  defaults preserve aing. Set both in `.env.s3` per box.
+
+### Runner arrangement (2026-07-31)
+- **`nocgentic-box`** runner (label `nocgentic`, x64) lives on the nocgentic box at
+  `/opt/bhasia/actions-runner-nocgentic`, runs as `ubuntu`. **This is the only NOCgentic runner** —
+  `git push origin main` auto-deploys to the nocgentic box.
+- aing's `aing-nocgentic` runner: **stopped + disabled + deregistered**. aing no longer
+  auto-deploys NOCgentic. (aing's PostCog runner was separately retired earlier.)
+- **socgentic has NO runner** (by request) — deploy it manually by rsync when needed.
+- ⚠️ **Before pushing main, ensure only the intended box's runner is online** — a stray online
+  runner with label `nocgentic` would deploy main onto it. One repo, one label → GitHub
+  routes to whichever runner is online.
+
+### Fresh-box CI deps (the nocgentic box lacked these; deploy's test job failed until added)
+The workflow's `test` job runs the regression suite ON the runner box before deploying, so the
+box needs: **`python3.12-venv`** (pytest venv) and **Node/npm** (`curl -fsSL
+https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`) for
+the web-server workspace tests. A container-only box won't have these.
