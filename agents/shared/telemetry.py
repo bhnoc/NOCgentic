@@ -23,6 +23,8 @@ import os
 import re
 import sys
 
+import ipscope
+
 logger = logging.getLogger(__name__)
 
 _tracer = None
@@ -39,17 +41,7 @@ _initialized = False
 # per-agent sanitize() (see agents/*/main.py).
 # ---------------------------------------------------------------------------
 
-# Each private-range branch must consume all four octets. The 10/8 branch is
-# spelled out with its own three trailing octets — an earlier form shared one
-# `\.\d{1,3}\.\d{1,3}` suffix across all branches, which left the 10/8 case one
-# octet short and leaked the final octet (10.0.0.5 -> "[INTERNAL-IP].5").
-_RE_INTERNAL_IP = re.compile(
-    r"\b(?:"
-    r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
-    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
-    r"|192\.168\.\d{1,3}\.\d{1,3}"
-    r")\b"
-)
+# IP redaction lives in ipscope (scope allowlist); only secret patterns are here.
 # Catch long base64-ish secret tokens (API keys, JWT segments, etc.) but NOT
 # pure-hex strings, which are almost always legitimate hash IOCs (MD5=32,
 # SHA-1=40, SHA-256=64 hex chars) that we want to keep in telemetry. The
@@ -86,7 +78,7 @@ def _redact(text: str) -> str:
     """Scrub internal IPs, secrets, passwords and API keys from free text."""
     if not isinstance(text, str) or not text:
         return text
-    text = _RE_INTERNAL_IP.sub("[INTERNAL-IP]", text)
+    text = ipscope.redact_text(text)
     text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
     text = _RE_PASSWORD.sub("password: [REDACTED]", text)
     text = _RE_API_KEY.sub("api_key: [REDACTED]", text)

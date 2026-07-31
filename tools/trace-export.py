@@ -42,12 +42,11 @@ BACKUPS_DIR = REPO_ROOT / "backups"
 
 
 # ---------------------------------------------------------------------------
-# Redaction. Same patterns the telemetry pipeline uses (kept inline so this
-# tool has no import dependency on the agents package).
+# Redaction. Secret/password patterns stay inline; IP scope comes from the
+# canonical allowlist so this tool can't drift from what the agents enforce.
 # ---------------------------------------------------------------------------
-_RE_INTERNAL_IP = re.compile(
-    r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
-)
+sys.path.insert(0, str(REPO_ROOT / "agents" / "shared"))
+import ipscope  # noqa: E402
 _RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
 _RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
 _RE_API_KEY = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
@@ -63,7 +62,7 @@ def redact_text(text):
     """Scrub internal IPs, secrets, passwords, API keys and bearer tokens."""
     if not isinstance(text, str) or not text:
         return text
-    text = _RE_INTERNAL_IP.sub("[INTERNAL-IP]", text)
+    text = ipscope.redact_text(text)
     text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
     text = _RE_PASSWORD.sub("password: [REDACTED]", text)
     text = _RE_API_KEY.sub("api_key: [REDACTED]", text)

@@ -30,6 +30,7 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
+import ipscope  # noqa: E402
 from llm_client import (  # noqa: E402
     llm_complete, get_last_llm_metrics,
     SQLGEN_PROVIDER, SQLGEN_MODEL, LLM_PROVIDER,
@@ -86,9 +87,6 @@ logger = logging.getLogger("athena-hunter")
 # Security helpers
 # ---------------------------------------------------------------------------
 
-_RE_INTERNAL_IP = re.compile(
-    r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
-)
 _RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
 _RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
 _RE_API_KEY_PAT = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
@@ -101,7 +99,10 @@ _RE_UID = re.compile(r"\b[A-Za-z][A-Za-z0-9]{15,25}\b")
 
 
 def sanitize(text: str) -> str:
-    text = _RE_INTERNAL_IP.sub("[INTERNAL-IP]", text)
+    # Scope allowlist (agents/shared/ipscope.py) replaces the old per-agent
+    # internal-IP regex, which shared one octet suffix across its private
+    # branches and leaked the final octet of any 10/8 address.
+    text = ipscope.redact_text(text)
     text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
     text = _RE_PASSWORD.sub("password: [REDACTED]", text)
     text = _RE_API_KEY_PAT.sub("api_key: [REDACTED]", text)
@@ -957,6 +958,15 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
     ts_raw = row.get("ts_datetime", "")
     uid = row.get("uid") or ""
     orig_h = row.get("orig_h") or ""
+    resp_h = row.get("resp_h") or ""
+    # The alert feed reaches the browser via web-server's alertCache, which does
+    # NOT pass through the orchestrator's output sanitizer — so scope-redact here
+    # or out-of-scope addresses ship straight to the UI.
+    description = ipscope.redact_text(description)
+    if orig_h and not ipscope.is_in_scope(orig_h):
+        orig_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
+    if resp_h and not ipscope.is_in_scope(resp_h):
+        resp_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
     alert_id = (
         f"{alert_name}|{orig_h}|{ts_raw}"
         if alert_name
@@ -970,7 +980,7 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
         "source": (row.get("alert_type") or "corelight").strip().lower() or "corelight",
         "description": description[:500],
         "srcIp": orig_h or None,
-        "dstIp": row.get("resp_h") or None,
+        "dstIp": resp_h or None,
     }
 
 

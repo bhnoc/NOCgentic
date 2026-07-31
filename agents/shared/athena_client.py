@@ -25,6 +25,8 @@ from typing import Any
 
 import boto3
 
+import ipscope
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -77,6 +79,9 @@ _RE_UNION = re.compile(r"\bUNION\b", re.IGNORECASE)
 # SQL comment sequences used to truncate/neutralize the rest of a query.
 _RE_COMMENT = re.compile(r"(--|/\*|\*/|#)")
 
+# Dotted quads appearing anywhere in a statement, for the scope check below.
+_RE_IP_LITERAL = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+
 
 def sanitize_sql(sql: str) -> str:
     """Validate and strip dangerous SQL — only allow a single SELECT query.
@@ -107,6 +112,15 @@ def sanitize_sql(sql: str) -> str:
         raise ValueError(f"Dangerous SQL detected: {sql[:200]}")
     if not sql.upper().startswith("SELECT"):
         raise ValueError(f"Only SELECT queries allowed, got: {sql[:100]}")
+
+    # Scope enforcement, in code and after the LLM. The SQL-generation prompt
+    # asks the model to stay in scope, but a prompt is a suggestion; this is the
+    # control. Any IP literal in the statement must be in scope, so a query for
+    # an out-of-scope host cannot execute even if the model is talked into
+    # writing one.
+    for literal in _RE_IP_LITERAL.findall(sql):
+        if not ipscope.is_in_scope(literal):
+            raise ValueError(f"Out-of-scope IP in query: {literal}")
     return sql
 
 
@@ -280,7 +294,18 @@ async def execute_query(
     # Fetch results
     rows = await _fetch_results(query_id)
 
-    return rows, metadata
+    # Row-level egress filter — second layer behind the SQL scope check, so a
+    # query that reaches Athena without an explicit IP literal (a broad scan, a
+    # JOIN) still cannot return out-of-scope hosts.
+    kept = ipscope.filter_rows(rows)
+    if len(kept) != len(rows):
+        dropped = len(rows) - len(kept)
+        logger.info(
+            "Scope filter dropped %d/%d rows: id=%s", dropped, len(rows), query_id
+        )
+        metadata["rows_dropped_out_of_scope"] = dropped
+
+    return kept, metadata
 
 
 async def _fetch_results(query_id: str) -> list[dict[str, str]]:

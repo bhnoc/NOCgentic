@@ -38,6 +38,7 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
+import ipscope  # noqa: E402
 from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, instrument_fastapi_app,
@@ -114,16 +115,16 @@ def _norm_sev(sev: Any) -> str:
 # Security helpers
 # ---------------------------------------------------------------------------
 
-_RE_INTERNAL_IP  = re.compile(
-    r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
-)
 _RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
 _RE_PASSWORD     = re.compile(r"(?i)password\s*[:=]\s*\S+")
 _RE_API_KEY_PAT  = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
 
 
 def sanitize(text: str) -> str:
-    text = _RE_INTERNAL_IP.sub("[INTERNAL-IP]", text)
+    # Scope allowlist (agents/shared/ipscope.py) replaces the old per-agent
+    # internal-IP regex, which shared one octet suffix across its private
+    # branches and leaked the final octet of any 10/8 address.
+    text = ipscope.redact_text(text)
     text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
     text = _RE_PASSWORD.sub("password: [REDACTED]", text)
     text = _RE_API_KEY_PAT.sub("api_key: [REDACTED]", text)

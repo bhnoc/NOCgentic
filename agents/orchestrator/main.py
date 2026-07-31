@@ -37,6 +37,7 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
+import ipscope  # noqa: E402
 from llm_client import llm_complete  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
@@ -77,9 +78,6 @@ MAX_QUERY_LEN = 5000
 # Security: sanitize before sending to LLM
 # ---------------------------------------------------------------------------
 
-_RE_INTERNAL_IP  = re.compile(
-    r"\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b"
-)
 _RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
 _RE_PASSWORD     = re.compile(r"(?i)password\s*[:=]\s*\S+")
 _RE_API_KEY      = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
@@ -87,7 +85,10 @@ _RE_API_KEY      = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
 
 def sanitize(text: str) -> str:
     """Remove internal IPs and credential patterns before sending to external LLM."""
-    text = _RE_INTERNAL_IP.sub("[INTERNAL-IP]", text)
+    # Scope allowlist (agents/shared/ipscope.py) replaces the old per-agent
+    # internal-IP regex, which shared one octet suffix across its private
+    # branches and leaked the final octet of any 10/8 address.
+    text = ipscope.redact_text(text)
     text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
     text = _RE_PASSWORD.sub("password: [REDACTED]", text)
     text = _RE_API_KEY.sub("api_key: [REDACTED]", text)
@@ -111,6 +112,13 @@ def sanitize(text: str) -> str:
 _RESTRICTED_OCTETS = {12, 13, 14, 15, 150, 152, 153, 154, 199}
 _RESTRICTED_IP_RE  = re.compile(r"\b10\.220\.(\d{1,3})\.(\d{1,3})\b")
 _DECOY_THIRD_OCTET = 69  # target for rewrites
+
+# NOTE: the decoy rewrite below is retained but DISABLED. The ipscope allowlist
+# already excludes every restricted octet, so a restricted address is redacted
+# before any decoy rewrite could apply — leaving both active would mean an
+# address was first rewritten to a plausible-looking .69 host and then shown,
+# which is worse than redacting. Kept because the deception layer may be wanted
+# later; re-enable by restoring the _mask_ip call in sanitize_output_text().
 
 # Zone-name scrubbing — re-label these areas as generic "internal".
 # Case-insensitive so lowercase "tools"/"registration" can't evade the scrub.
@@ -165,7 +173,9 @@ def sanitize_output_text(text: str) -> str:
     in any string intended for the UI."""
     if not text:
         return text
-    text = _RESTRICTED_IP_RE.sub(_mask_ip, text)
+    # Decoy rewrite disabled — superseded by the ipscope allowlist (see above).
+    # text = _RESTRICTED_IP_RE.sub(_mask_ip, text)
+    text = ipscope.redact_text(text)
     text = _ZONE_RE.sub("internal", text)
     for pat, repl in _SERVICE_PATTERNS:
         text = pat.sub(repl, text)
