@@ -32,6 +32,7 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
+from event import EVENT_LABEL  # noqa: E402
 from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, instrument_fastapi_app,
@@ -446,7 +447,7 @@ async def gather_te_context(query: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = (
-    "You are a NetOps analyst at Black Hat Asia 2026 SOC. You work from network "
+    f"You are a NetOps analyst at {EVENT_LABEL} SOC. You work from network "
     "monitoring telemetry (synthetic tests, active alerts, BGP paths, latency, "
     "packet loss, jitter, response time, availability).\n\n"
     "The context JSON contains a pre-computed health roll-up — it is authoritative. "

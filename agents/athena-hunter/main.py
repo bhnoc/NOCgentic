@@ -30,6 +30,7 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
+from event import EVENT_LABEL  # noqa: E402
 from llm_client import (  # noqa: E402
     llm_complete, get_last_llm_metrics,
     SQLGEN_PROVIDER, SQLGEN_MODEL, LLM_PROVIDER,
@@ -706,7 +707,7 @@ async def gather_athena_context(
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = (
-    "You are a SOC analyst at Black Hat Asia 2026. You queried Corelight/Zeek "
+    f"You are a SOC analyst at {EVENT_LABEL}. You queried Corelight/Zeek "
     "telemetry via AWS Athena.\n\n"
     "CONTEXT:\n"
     "- conn = every connection; uid links related logs across sourcetypes\n"

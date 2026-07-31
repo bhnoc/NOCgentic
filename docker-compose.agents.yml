@@ -35,6 +35,8 @@ services:
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
+      # Public event-edition label (display only). Nation + year, e.g. "USA 2027".
+      - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     # Resolve host.docker.internal to the host on Linux, so the default
     # LOCAL_LLM_BASE_URL can reach the host's llama-server (AQLight) when
     # LLM_PROVIDER=local. Harmless when the local provider is not used.
@@ -70,6 +72,7 @@ services:
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-alert-triage
+      - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -103,6 +106,7 @@ services:
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-athena-hunter
+      - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -129,6 +133,7 @@ services:
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-thousandeyes-analyst
+      - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -172,6 +177,8 @@ services:
       - PORT=3000
       - NODE_ENV=production
       - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-https://aing.bhnoc.com}
+      # Public event-edition label shown in the UI (served via /api/v1/config).
+      - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     depends_on:
       - orchestrator
       - athena-hunter

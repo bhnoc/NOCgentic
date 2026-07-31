@@ -123,6 +123,12 @@ async function main() {
   // Health check
   server.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
+  // Public event-edition branding for the UI. Display only — single source of
+  // truth is EVENT_EDITION (nation + year, e.g. "USA 2026"); "Black Hat" is the
+  // static wrapper. Never tie system config (S3 prefixes, IAM) to this.
+  const EVENT_LABEL = `Black Hat ${(process.env.EVENT_EDITION ?? 'USA 2026').trim()}`;
+  server.get('/api/v1/config', async () => ({ eventLabel: EVENT_LABEL }));
+
   // Start the Athena-backed alert cache refresh loop
   alertCache.start();
 

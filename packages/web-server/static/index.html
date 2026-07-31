@@ -1064,7 +1064,7 @@
       <div class="welcome" id="welcome-banner">
         <img src="https://blackhat.com/images/logo.png" alt="Black Hat" style="height:48px; margin-bottom:8px; filter: brightness(1.2);" />
         <h2>BlackHat NOCGentic Operations</h2>
-        <div class="tagline">AI-Powered Network Operations Center // Black Hat Asia 2026</div>
+        <div class="tagline">AI-Powered Network Operations Center // <span id="event-label">Black Hat USA 2026</span></div>
         <p>
           Query live network threats, investigate IOCs, triage firewall alerts,
           or ask about suspicious activity. AI agents analyze NOC telemetry in real time.
@@ -1709,6 +1709,18 @@
   function elapsed(start, end) { const ms = new Date(end) - new Date(start); return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`; }
   function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
 
+  // Pull the public event-edition label (e.g. "Black Hat USA 2026") from the
+  // server so re-branding is a single env change. Falls back to static markup.
+  async function loadEventLabel() {
+    try {
+      const resp = await fetch('/api/v1/config', { signal: AbortSignal.timeout(3000) });
+      if (!resp.ok) return;
+      const { eventLabel } = await resp.json();
+      const el = document.getElementById('event-label');
+      if (eventLabel && el) el.textContent = eventLabel;
+    } catch (_) { /* keep static fallback */ }
+  }
+
   async function checkApiHealth() {
     try {
       const resp = await fetch('/health', { signal: AbortSignal.timeout(3000) });
@@ -1721,6 +1733,7 @@
 
   // ========== Boot ==========
   connectWS();
+  loadEventLabel();
   loadInitialAlerts();
   applyMobileAlertMode();
   // Real alerts now trickle from the Athena-backed cache via WebSocket.

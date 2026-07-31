@@ -38,6 +38,7 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
+from event import EVENT_LABEL  # noqa: E402
 from llm_client import llm_complete, get_last_llm_metrics  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, instrument_fastapi_app,
@@ -630,7 +631,7 @@ def _apply_keyword_filter(events: list[dict], keywords: list[str]) -> list[dict]
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = (
-    "You are a SOC triage specialist at Black Hat Asia 2026. You work from "
+    f"You are a SOC triage specialist at {EVENT_LABEL}. You work from "
     "Corelight/Zeek telemetry queried via AWS Athena.\n\n"
     "CONTEXT:\n"
     "- conn = every connection; uid links logs across sourcetypes (dns, http, ssl, files, suricata)\n"
