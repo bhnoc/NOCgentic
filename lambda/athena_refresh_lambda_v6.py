@@ -15,6 +15,7 @@ Event shapes
 import boto3
 
 import asset_classification
+import entity_context
 import derived_views
 import json
 import os
@@ -87,16 +88,48 @@ def save_watermark(log_type, date_str, ts):
 
 
 def sanitize_column_name(field_name):
+    """Map a raw Zeek field name to a safe Athena column name.
+
+    Only structural fixes: dots and dashes to underscores, drop anything else,
+    prefix a leading digit. Reserved words are deliberately NOT renamed here, see
+    quote_column below.
+    """
     name = re.sub(r'[.\-]', '_', field_name)
     name = re.sub(r'[^a-zA-Z0-9_]', '', name)
     if name and name[0].isdigit():
         name = 'f_' + name
-    reserved = {'from', 'to', 'date', 'time', 'user', 'group', 'order',
-                'table', 'index', 'database', 'schema', 'column', 'row',
-                'select', 'insert', 'update', 'delete', 'create', 'drop'}
-    if name.lower() in reserved:
-        name = name + '_'
     return name.lower()
+
+
+def quote_column(name):
+    """Backtick every column in generated DDL.
+
+    This replaced a hand-maintained 19-word reserved list that renamed collisions
+    to `name_`. Two problems with that approach, both of which bit us:
+
+      * The list always lags the parser. Corelight started emitting a `net_perf`
+        log whose schema has a column literally called `window`, which was not in
+        the list, so CREATE TABLE died with a ParseException and that whole log
+        type stayed invisible. Any future log type with a reserved column would
+        fail the same way, silently, until someone noticed a missing table.
+      * Renaming means the column no longer matches the field name in the Parquet
+        file, so the schema and the data drift apart and every consumer has to
+        know about the rewrite. Seven columns in this catalog carry a trailing
+        underscore for exactly this reason (date_, from_, index_, to_, user_,
+        ja3_string_, ja3s_string_), and each one is a papercut the agents' prompt
+        has to document.
+
+    Quoting is unconditional on purpose: no list to maintain, nothing to keep in
+    sync with the parser, and a name that survives verbatim from the raw log to
+    the query. Verified against Athena that backticked reserved words work in both
+    CREATE EXTERNAL TABLE and SELECT.
+
+    Existing tables keep their renamed columns: they were created with the old
+    scheme and CREATE TABLE IF NOT EXISTS will not rewrite them. Only new log
+    types get the verbatim name, which is why the trailing-underscore columns
+    above are still documented as-is.
+    """
+    return f"`{name}`"
 
 
 def get_log_types_in_s3(date_str):
@@ -186,11 +219,18 @@ def create_new_table(log_type, date_str):
         print(f"  Could not get schema for {log_type}")
         return False
 
-    columns = ["ts_datetime string"]
+    columns = [f"{quote_column('ts_datetime')} string"]
+    seen = {'ts_datetime'}
     for field in fields:
         col_name = sanitize_column_name(field)
+        # Two raw fields can sanitize to the same name (e.g. `id.orig_h` and
+        # `id-orig_h`). A duplicate column makes CREATE TABLE fail, so keep the
+        # first and skip the rest rather than losing the whole table.
+        if not col_name or col_name in seen:
+            continue
+        seen.add(col_name)
         col_type = 'DOUBLE' if field.lower() == 'ts' else 'string'
-        columns.append(f"{col_name} {col_type}")
+        columns.append(f"{quote_column(col_name)} {col_type}")
 
     columns_str = ',\n  '.join(columns)
     table_name = log_type.replace('-', '_')
@@ -441,6 +481,77 @@ def rebuild_asset_classification(date_str):
     return {'built': True, 'view': True, 'table': table}
 
 
+def _rebuild_materialized(module, label, date_str, timeout=900):
+    """DROP + CTAS + re-point the stable view, for a per-day materialized table.
+
+    Shared by asset_classification and entity_context because they need the exact
+    same dance, including the two traps it exists to avoid:
+
+      * the workgroup sets EnforceWorkGroupConfiguration, so a CTAS may NOT name
+        its own external_location. Athena picks a random UUID prefix, and DROP
+        TABLE removes only the catalog entry, so the data survives and the next
+        CTAS fails TABLE_ALREADY_EXISTS against an orphan. Read the location off
+        the existing table and delete it.
+      * a failed DROP must be fatal. Ignoring its return state hid a missing
+        glue:DeleteTable grant: the first run worked and every run after failed
+        with a misleading downstream error.
+    """
+    catalog = _catalog_columns()
+    table = module.table_name(date_str)
+    ddl = module.build_ctas(GLUE_DATABASE, date_str, catalog)
+    if not ddl:
+        print(f"{label}: source tables absent, skipped")
+        return {'built': False, 'reason': 'sources_absent'}
+
+    stale_location = None
+    try:
+        existing = glue.get_table(DatabaseName=GLUE_DATABASE, Name=table)['Table']
+        stale_location = existing.get('StorageDescriptor', {}).get('Location')
+    except glue.exceptions.EntityNotFoundException:
+        pass
+
+    _, drop_state, drop_reason = run_athena_query(
+        f"DROP TABLE IF EXISTS {GLUE_DATABASE}.{table}", timeout=120, retries=1)
+    if drop_state != 'SUCCEEDED':
+        print(f"  DROP {table} FAILED: {(drop_reason or '')[:300]}")
+        return {'built': False, 'reason': f"drop_failed: {(drop_reason or '')[:200]}"}
+
+    for _ in range(20):
+        try:
+            glue.get_table(DatabaseName=GLUE_DATABASE, Name=table)
+        except glue.exceptions.EntityNotFoundException:
+            break
+        time.sleep(1.5)
+    else:
+        return {'built': False, 'reason': 'drop_not_visible'}
+
+    if stale_location and stale_location.startswith('s3://'):
+        bucket, _, prefix = stale_location[5:].partition('/')
+        deleted = 0
+        for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix):
+            keys = [{'Key': o['Key']} for o in page.get('Contents', [])]
+            if keys:
+                s3.delete_objects(Bucket=bucket, Delete={'Objects': keys})
+                deleted += len(keys)
+        if deleted:
+            print(f"  cleared {deleted} objects from the previous {label} build")
+
+    _, state, reason = run_athena_query(ddl, timeout=timeout, retries=1)
+    if state != 'SUCCEEDED':
+        print(f"  {label} FAILED: {(reason or '')[:250]}")
+        return {'built': False, 'reason': (reason or '')[:200]}
+
+    stable = label
+    view = (f"CREATE OR REPLACE VIEW {GLUE_DATABASE}.{stable} AS "
+            f"SELECT * FROM {GLUE_DATABASE}.{table}")
+    _, v_state, v_reason = run_athena_query(view, timeout=120, retries=1)
+    if v_state != 'SUCCEEDED':
+        print(f"  {label} view FAILED: {(v_reason or '')[:200]}")
+        return {'built': True, 'view': False, 'reason': (v_reason or '')[:200]}
+    print(f"{label} rebuilt -> {table}")
+    return {'built': True, 'view': True, 'table': table}
+
+
 def dispatch_for_date(date_str):
     log_types = get_log_types_in_s3(date_str)
     if not log_types:
@@ -473,6 +584,9 @@ def dispatch_for_date(date_str):
     # catalog and gets picked up on the same run that created it.
     views = rebuild_derived_views()
     assets = rebuild_asset_classification(date_str)
+    # LAST: entity_context aggregates over alerts, uid_lookup and
+    # asset_classification, so all of those must already be current.
+    entities = _rebuild_materialized(entity_context, 'entity_context', date_str)
 
     result = {
         'date': date_str,
@@ -482,6 +596,7 @@ def dispatch_for_date(date_str):
         'workers_dispatched': fanned,
         'derived_views': views,
         'asset_classification': assets,
+        'entity_context': entities,
     }
     print(json.dumps(result))
     return result
