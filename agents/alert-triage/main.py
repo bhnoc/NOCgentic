@@ -451,6 +451,30 @@ async def athena_session_context(uids: list[str], hours: int = 24) -> list[dict]
     return await _athena_query(sql, "session_ctx")
 
 
+async def athena_entity_context(ips: list[str]) -> list[dict]:
+    """Who/what are these hosts? One row per IP from entity_context.
+
+    Triage previously enriched alerts by SESSION only (uid_lookup), so it could say
+    what a host did but never whose device it was. entity_context already joins
+    identity, accounts, exposure and alert history per host, so this is one cheap
+    query instead of six.
+
+    Not partition-filtered: entity_context is a view over the current day's
+    materialized table, so it is already scoped to today.
+    """
+    if not ips:
+        return []
+    ip_list = ", ".join(f"'{sanitize_value(i)}'" for i in ips[:20])
+    sql = (
+        "SELECT ip, hostname, os_name, device_type, org_name, vendor_mac, "
+        "mgmt_tooling, randomized_mac, observed_users, service_count, services, "
+        "alert_count, high_alert_count, session_count, network_name, room_name, "
+        "id_confidence "
+        f"FROM entity_context WHERE ip IN ({ip_list})"
+    )
+    return await _athena_query(sql, "entity_ctx")
+
+
 async def athena_generic_log(
     log_type: str,
     hours: int = 24,
@@ -1027,6 +1051,22 @@ async def triage(req: TriageRequest) -> TriageResponse:
             except (asyncio.TimeoutError, Exception) as exc:
                 logger.warning("Session enrichment skipped: %s", exc)
 
+        # Host enrichment via entity_context. Session context says what happened;
+        # this says WHOSE device it happened on, which is what an analyst actually
+        # needs to decide whether an alert matters. Run concurrently with a short
+        # timeout: it is enrichment, so a slow lookup must not delay the verdict.
+        entity_context_rows = []
+        alert_ips = list({a.get("orig_h") or a.get("id_orig_h") or ""
+                          for a in enriched_alerts[:15]} - {""})
+        if alert_ips:
+            try:
+                entity_context_rows = await asyncio.wait_for(
+                    athena_entity_context(alert_ips),
+                    timeout=5.0,
+                )
+            except (asyncio.TimeoutError, Exception) as exc:
+                logger.warning("Entity enrichment skipped: %s", exc)
+
         # === PHASE 4: LLM triage (Flash = ~200 tok/s, rich output) ===
         # reg-1: the alert set is the merge of suricata + unified, so its total is
         # capped if EITHER underlying query hit its LIMIT. flows/dns map 1:1.
@@ -1090,6 +1130,17 @@ async def triage(req: TriageRequest) -> TriageResponse:
             triage_data["dns_logs"] = dns_logs[:15]
         if session_context:
             triage_data["session_context"] = session_context[:30]
+        if entity_context_rows:
+            # Placed as its own key so the LLM can attribute an alert to a named,
+            # owned device rather than describing a bare IP.
+            triage_data["host_identity"] = {
+                "note": ("Who/what each alerting host IS. hostname/os_name/org_name "
+                         "identify the device and its owner; observed_users are "
+                         "accounts seen on it; mgmt_tooling means it is centrally "
+                         "managed. Use these names in the report instead of raw IPs "
+                         "where available."),
+                "hosts": entity_context_rows[:15],
+            }
         if extra_log_data:
             # Most entries are event lists (slice to 15); same_source_alert_summary is
             # a dict (keep whole) so the corroboration signal reaches the LLM intact.

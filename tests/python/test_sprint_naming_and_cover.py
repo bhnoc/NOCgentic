@@ -260,3 +260,62 @@ class TestKnownInventoryTablesAreDocumented:
     def test_username_table_is_flagged_sensitive(self):
         """Observed usernames are the strongest identity signal in the dataset."""
         assert "Treat as sensitive" in self._prompt()
+
+
+class TestNewTablesAreReachableByTheApp:
+    """Building a table is only half the job. Twice now a table has existed with
+    real data while the app could not use it, because nothing told the SQL
+    generator it was there. An undocumented table is an invisible table."""
+
+    def _prompt(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "..",
+                            "agents", "athena-hunter", "main.py")
+        return open(path).read()
+
+    @pytest.mark.parametrize("table", [
+        "entity_context", "kerberos", "krb5_auth", "ntlm", "net_perf",
+    ])
+    def test_table_is_documented(self, table):
+        assert f"- {table}:" in self._prompt(), f"{table} is invisible to the model"
+
+    def test_host_keyed_join_convention_is_explained(self):
+        """entity_context and the known_* family key on ip/host_ip, NOT orig_h.
+        Without this the model writes orig_h and gets COLUMN_NOT_FOUND."""
+        src = self._prompt()
+        assert "HOST-KEYED" in src
+        assert "entity_context.ip = alerts.orig_h" in src
+
+    def test_reserved_column_needs_quoting_is_called_out(self):
+        """net_perf.window is a reserved word: unquoted it is a parse error."""
+        src = self._prompt()
+        assert "RESERVED WORD" in src
+        assert "`window`" in src
+
+    def test_entity_context_is_recommended_over_hand_joining(self):
+        """The whole point is one join instead of six."""
+        assert "instead of joining" in self._prompt()
+
+    def test_alert_count_semantics_are_stated(self):
+        """alert_count excludes ET INFO noise and alert_count_all does not. A
+        consumer that mixes them up reports a DNS resolver as catastrophic."""
+        src = self._prompt()
+        assert "alert_count EXCLUDES" in src
+        assert "alert_count_all" in src
+
+
+class TestAlertTriageEnrichesByHost:
+    def test_entity_lookup_exists(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "..",
+                            "agents", "alert-triage", "main.py")
+        src = open(path).read()
+        assert "async def athena_entity_context" in src
+        assert "FROM entity_context WHERE ip IN" in src
+
+    def test_host_identity_reaches_the_llm_payload(self):
+        """Triage used to enrich by SESSION only, so it could say what a host did
+        but never whose device it was."""
+        path = os.path.join(os.path.dirname(__file__), "..", "..",
+                            "agents", "alert-triage", "main.py")
+        src = open(path).read()
+        assert 'triage_data["host_identity"]' in src
+        assert "instead of raw IPs" in src
