@@ -1043,7 +1043,7 @@
       <img class="header-logo-img" src="https://blackhat.com/images/logo.png" alt="Black Hat" />
       <div>
         <div class="header-title">BLACKHAT NOCGentic</div>
-        <div class="header-subtitle">AI-Powered Network Operations Center // 2026</div>
+        <div class="header-subtitle">AI-Powered Network Operations Center // <span id="event-label-header">NOC</span></div>
       </div>
     </div>
     <div class="header-status">
@@ -1064,7 +1064,9 @@
       <div class="welcome" id="welcome-banner">
         <img src="https://blackhat.com/images/logo.png" alt="Black Hat" style="height:48px; margin-bottom:8px; filter: brightness(1.2);" />
         <h2>BlackHat NOCGentic Operations</h2>
-        <div class="tagline">AI-Powered Network Operations Center // Black Hat Asia 2026</div>
+        <!-- Fallback text is edition-free on purpose: if /api/v1/config fails, a
+             hardcoded edition would name the WRONG show. Better to say nothing. -->
+        <div class="tagline">AI-Powered Network Operations Center // <span id="event-label">Black Hat</span></div>
         <p>
           Query live network threats, investigate IOCs, triage firewall alerts,
           or ask about suspicious activity. AI agents analyze NOC telemetry in real time.
@@ -1711,6 +1713,24 @@
   function elapsed(start, end) { const ms = new Date(end) - new Date(start); return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`; }
   function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
 
+  // Pull the public event-edition label (e.g. "Black Hat USA 2026") from the
+  // server so re-branding is a single env change. Falls back to static markup.
+  async function loadEventLabel() {
+    try {
+      const resp = await fetch('/api/v1/config', { signal: AbortSignal.timeout(3000) });
+      if (!resp.ok) return;
+      const { eventLabel } = await resp.json();
+      if (!eventLabel) return;
+      const banner = document.getElementById('event-label');
+      if (banner) banner.textContent = eventLabel;
+      // The banner label is inside #welcome-banner, which sendQuery() removes on
+      // the first query. Without this the header is the only branding left after
+      // one question, and it was hardcoded to a bare year.
+      const header = document.getElementById('event-label-header');
+      if (header) header.textContent = eventLabel.replace(/^Black Hat\s+/, '');
+    } catch (_) { /* keep static fallback */ }
+  }
+
   async function checkApiHealth() {
     try {
       const resp = await fetch('/health', { signal: AbortSignal.timeout(3000) });
@@ -1723,6 +1743,7 @@
 
   // ========== Boot ==========
   connectWS();
+  loadEventLabel();
   loadInitialAlerts();
   applyMobileAlertMode();
   // Real alerts now trickle from the Athena-backed cache via WebSocket.
