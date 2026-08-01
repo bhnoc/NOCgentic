@@ -31,8 +31,9 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
-import ipscope  # noqa: E402
 import credscrub  # noqa: E402
+import ipscope  # noqa: E402
+from llm_sanitize import sanitize_for_llm  # noqa: E402
 from event import EVENT_LABEL  # noqa: E402
 from llm_client import (  # noqa: E402
     llm_complete, get_last_llm_metrics,
@@ -101,16 +102,9 @@ _RE_SHA256 = re.compile(r"\b[0-9a-fA-F]{64}\b")
 _RE_UID = re.compile(r"\b[A-Za-z][A-Za-z0-9]{15,25}\b")
 
 
-def sanitize(text: str) -> str:
-    # Scope allowlist (agents/shared/ipscope.py) replaces the old per-agent
-    # internal-IP regex, which shared one octet suffix across its private
-    # branches and leaked the final octet of any 10/8 address.
-    text = ipscope.redact_text(text)
-    # Credentials via the shared scrubber: the old local pattern also ate
-    # entirely-hex tokens, destroying MD5/SHA-1/SHA-256 file hashes that are
-    # legitimate IOCs an analyst needs to see.
-    text = credscrub.scrub_secrets(text)
-    return text[:8000]
+# sanitize() lives in agents/shared/llm_sanitize.py: it was four identical
+# copies, and a policy change had to be made in all four without missing one.
+sanitize = sanitize_for_llm
 
 
 # ---------------------------------------------------------------------------

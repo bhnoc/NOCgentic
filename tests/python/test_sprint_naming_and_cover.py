@@ -80,6 +80,12 @@ def orch():
         spec.loader.exec_module(mod)
     except Exception as exc:
         pytest.skip(f"orchestrator deps unavailable: {exc}")
+    # Loading by path (the dir name has a hyphen, so it is not importable as a
+    # package) leaves pydantic unable to resolve the `Any` in QueryResponse from
+    # this module's namespace. A normal import in the container resolves fine, so
+    # this is a harness artifact, not an app defect: rebuild the model explicitly.
+    from typing import Any  # noqa: F401  (needed in scope for model_rebuild)
+    mod.QueryResponse.model_rebuild(_types_namespace={"Any": Any, **vars(mod)})
     return mod
 
 
@@ -151,3 +157,76 @@ def test_pool_is_well_distributed(orch):
     """A correct hash that happens to collapse onto 2 buckets is still a tell."""
     seen = {orch.restricted_cover_response(q) for q in _PROBE_QUERIES}
     assert len(seen) >= min(8, len(orch._COVER_RESPONSES))
+
+
+class TestCoverPathsAreOneImplementation:
+    """Clean-code pass: the cover response was assembled at three call sites in
+    near-identical blocks, and they had already drifted. The restricted-range path
+    returned the pool text raw while the other two ran sanitize_output_text. Cover
+    text is author-written so nothing leaked, but a single missed sanitize on a
+    deception path becomes a real leak the moment a value gets interpolated."""
+
+    def test_all_guardrail_paths_go_through_one_helper(self, orch):
+        import inspect
+        src = inspect.getsource(orch)
+        # Exactly one place builds a cover QueryResponse.
+        assert src.count("def _serve_cover") == 1
+        # And nobody assembles one by hand any more.
+        assert "cover_hints = restricted_cover_hints" not in src, (
+            "a call site is building the cover response inline again"
+        )
+
+    def test_cover_answer_is_always_sanitized(self, orch):
+        r = orch._serve_cover("what is on 10.220.12.5", start=0.0)
+        assert "10.220.12" not in r.answer
+        assert "Registration" not in r.answer
+
+    def test_every_path_returns_an_identical_shape(self, orch):
+        """A path distinguishable by confidence or agent_used would fingerprint
+        which guardrail fired."""
+        rs = [orch._serve_cover("q", start=0.0, salt=s)
+              for s in ("hints", "refused", "kill_switch")]
+        assert len({r.confidence for r in rs}) == 1
+        assert len({r.agent_used for r in rs}) == 1
+        assert all(r.data is None for r in rs)
+
+    def test_salt_decorrelates_hints_from_the_path(self, orch):
+        """Hints must not be a reliable oracle for WHICH guardrail fired.
+
+        With a handful of hint pools two salts do collide on some queries, and
+        that is fine. An earlier version of this test asserted the hints differ
+        for one specific query and failed on exactly such a collision. The real
+        property is statistical: neither always-same (salt ignored) nor
+        always-different (the hint pair identifies the path)."""
+        total, collisions = 40, 0
+        for i in range(total):
+            q = f"probe query {i}"
+            a = orch._serve_cover(q, start=0.0, salt="refused").hints
+            b = orch._serve_cover(q, start=0.0, salt="kill_switch").hints
+            if a == b:
+                collisions += 1
+        assert 0 < collisions < total, f"{collisions}/{total} collisions"
+
+
+class TestSanitizeIsSharedNotCopied:
+    """It was four byte-identical copies across the agents; the old internal-IP
+    regex drifted the same way, with five copies and only one fixed."""
+
+    def test_agents_alias_the_shared_implementation(self):
+        import subprocess
+        proc = subprocess.run(
+            ["git", "grep", "-c", "^def sanitize(text", "--", "agents/*/main.py"],
+            capture_output=True, text=True,
+            cwd=os.path.join(os.path.dirname(__file__), "..", ".."),
+        )
+        assert not proc.stdout.strip(), (
+            "an agent defines sanitize() locally again:\n" + proc.stdout
+        )
+
+    def test_shared_sanitize_scrubs_before_truncating(self):
+        """Capping first would let a secret survive by sitting past the cut."""
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "agents", "shared"))
+        import llm_sanitize
+        padded = "x" * (llm_sanitize.MAX_LLM_CHARS - 5) + " AKIAIOSFODNN7EXAMPLE"
+        out = llm_sanitize.sanitize_for_llm(padded)
+        assert "AKIAIOSFODNN7EXAMPLE" not in out

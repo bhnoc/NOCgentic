@@ -38,8 +38,9 @@ _SHARED = str(Path(__file__).resolve().parents[2] / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
-import ipscope  # noqa: E402
 import credscrub  # noqa: E402
+import ipscope  # noqa: E402
+from llm_sanitize import sanitize_for_llm  # noqa: E402
 from event import EVENT_LABEL  # noqa: E402
 from llm_client import llm_complete  # noqa: E402
 from telemetry import (  # noqa: E402
@@ -82,18 +83,9 @@ MAX_QUERY_LEN = 5000
 # ---------------------------------------------------------------------------
 
 
-
-def sanitize(text: str) -> str:
-    """Remove internal IPs and credential patterns before sending to external LLM."""
-    # Scope allowlist (agents/shared/ipscope.py) replaces the old per-agent
-    # internal-IP regex, which shared one octet suffix across its private
-    # branches and leaked the final octet of any 10/8 address.
-    text = ipscope.redact_text(text)
-    # Credentials via the shared scrubber: the old local pattern also ate
-    # entirely-hex tokens, destroying MD5/SHA-1/SHA-256 file hashes that are
-    # legitimate IOCs an analyst needs to see.
-    text = credscrub.scrub_secrets(text)
-    return text[:8000]  # hard cap
+# sanitize() lives in agents/shared/llm_sanitize.py: it was four identical
+# copies, and a policy change had to be made in all four without missing one.
+sanitize = sanitize_for_llm
 
 
 # ---------------------------------------------------------------------------
@@ -431,11 +423,6 @@ def extract_iocs(query: str) -> list[str]:
     iocs.extend(_RE_SHA256.findall(query)[:3])
     return list(dict.fromkeys(iocs))[:10]
 
-
-def has_iocs(query: str) -> bool:
-    """Return True if the query contains any IOC-like indicators."""
-    iocs = extract_iocs(query)
-    return len(iocs) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -900,6 +887,40 @@ async def set_athena_kill(body: KillSwitchBody, authorization: str | None = Head
     return dict(_kill_switches)
 
 
+def _serve_cover(
+    query: str,
+    *,
+    start: float,
+    salt: str = "hints",
+    agent_used: str = "athena-hunter",
+) -> "QueryResponse":
+    """Build the guardrail cover response, identically on every path.
+
+    This was three near-identical blocks (~66 lines, ~70% the same) and they had
+    already drifted: the restricted-range path returned the cover text raw while
+    the other two ran it through sanitize_output_text. Cover text is
+    author-written so nothing leaked in practice, but a single missed call on a
+    deception path is the kind of inconsistency that becomes a real leak the
+    moment someone adds an interpolated value to the pool.
+
+    `salt` varies which follow-up hints are offered per path so the three
+    guardrail routes are not distinguishable from each other by their hints.
+    """
+    answer = sanitize_output_text(restricted_cover_response(query))
+    hints = restricted_cover_hints(query, salt=salt)
+    elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+    _request_counter.add(1, {"agent.used": agent_used})
+    _request_duration.record(elapsed_ms, {"agent.used": agent_used})
+    return QueryResponse(
+        answer=answer,
+        agent_used=agent_used,
+        # Matches the confidence a real "nothing notable" answer would carry;
+        # a distinctive value here would fingerprint the filter.
+        confidence=0.7,
+        data=None,
+        hints=hints,
+    )
+
 @app.post("/query", response_model=QueryResponse)
 async def handle_query(req: QueryRequest) -> QueryResponse:
     tracer = get_tracer()
@@ -934,20 +955,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
             span.set_attribute("routing.intent", "cover")
             span.set_attribute("filter.restricted", True)
             logger.info("job=%s restricted-range cover served", req.job_id)
-            cover = restricted_cover_response(req.query)
-            # Give the analyst real hunt hints so the interaction still feels
-            # productive — none of these reveal the filter.
-            cover_hints = restricted_cover_hints(req.query)
-            elapsed_ms = round((time.monotonic() - start) * 1000, 1)
-            _request_counter.add(1, {"agent.used": "athena-hunter"})
-            _request_duration.record(elapsed_ms, {"agent.used": "athena-hunter"})
-            return QueryResponse(
-                answer=cover,
-                agent_used="athena-hunter",
-                confidence=0.7,
-                data=None,
-                hints=cover_hints,
-            )
+            return _serve_cover(req.query, start=start)
 
         # 1. Classify intent — LLM-first for quality (~500 ms with Flash + thinking_budget=0),
         # heuristic fallback guarantees we never crash on classifier errors.
@@ -984,26 +992,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     rt_span.set_attribute("filter.guardrail", True)
                     rt_span.set_attribute("filter.reason",
                                           classification.get("reasoning", "off-topic"))
-                    answer = restricted_cover_response(req.query)
-                    cover_hints = restricted_cover_hints(req.query, salt="refused")
-                    confidence = 0.7
-                    data = None
-                    agent_used = "athena-hunter"
-                    # Surface the hints the same way non-guardrail paths do
-                    hints_for_refused = cover_hints
-                # Intentionally fall through to the final response block so
-                # hints_for_refused flows into the QueryResponse below.
-                elapsed_ms = round((time.monotonic() - start) * 1000, 1)
-                _request_counter.add(1, {"agent.used": agent_used})
-                _request_duration.record(elapsed_ms, {"agent.used": agent_used})
-                answer = sanitize_output_text(answer)
-                return QueryResponse(
-                    answer=answer,
-                    agent_used=agent_used,
-                    confidence=confidence,
-                    data=data,
-                    hints=hints_for_refused,
-                )
+                return _serve_cover(req.query, start=start, salt="refused")
 
             elif intent == "thousandeyes_analyst":
                 with tracer.start_as_current_span("orchestrator.route.thousandeyes_analyst") as rt_span:
@@ -1040,19 +1029,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     span.set_attribute("routing.intent", "athena_killed")
                     span.set_attribute("filter.kill_switch", True)
                     logger.warning("job=%s athena kill-switch ACTIVE — serving cover", req.job_id)
-                    answer = restricted_cover_response(req.query)
-                    cover_hints = restricted_cover_hints(req.query, salt="kill_switch")
-                    elapsed_ms = round((time.monotonic() - start) * 1000, 1)
-                    _request_counter.add(1, {"agent.used": "athena-hunter"})
-                    _request_duration.record(elapsed_ms, {"agent.used": "athena-hunter"})
-                    answer = sanitize_output_text(answer)
-                    return QueryResponse(
-                        answer=answer,
-                        agent_used="athena-hunter",
-                        confidence=0.7,
-                        data=None,
-                        hints=cover_hints,
-                    )
+                    return _serve_cover(req.query, start=start, salt="kill_switch")
                 with tracer.start_as_current_span("orchestrator.route.athena_hunter") as rt_span:
                     iocs = extract_iocs(req.query)
                     rt_span.set_attribute("iocs.count", len(iocs))
