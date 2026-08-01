@@ -93,3 +93,37 @@ class TestUserFacingEgressAppliesIt:
         assert "LEAKEDKEYVALUE99" not in out
         assert "hunter2" not in out
         assert "10.0.1.63" not in out
+
+
+class TestTelemetryUsesTheSharedScrubber:
+    """Debt sweep: telemetry.py carried its own copy of the secret patterns and
+    drifted. credscrub grew provider-prefixed-key and aws_secret rules that the
+    copy never got, so AKIA/sk- keys reached the OTLP endpoint and the permanent
+    S3 trace archive unredacted. Lock the two paths together."""
+
+    @pytest.mark.parametrize(
+        "text,leak",
+        [
+            ("token AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"),
+            ("key sk-proj-AbCdEf1234567890GhIjKlMn", "sk-proj-AbCdEf1234567890GhIjKlMn"),
+            ("aws_secret_access_key=wJalrXUtnFEMI0K7MDENGbPxRfiCYEXAMPLEKEY", "wJalrXUtnFEMI"),
+            ("password: hunter2", "hunter2"),
+            ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc", "eyJhbGciOiJIUzI1NiJ9"),
+        ],
+    )
+    def test_telemetry_redaction_matches_credscrub(self, text, leak):
+        import telemetry
+        assert leak not in telemetry._redact(text), "telemetry redaction drifted from credscrub"
+
+    def test_telemetry_still_preserves_hash_iocs(self):
+        import telemetry
+        assert SHA256 in telemetry._redact(f"file {SHA256} seen")
+
+    def test_telemetry_has_no_local_secret_patterns(self):
+        """A reintroduced local copy is how this drifted the first time."""
+        import inspect
+
+        import telemetry
+        src = inspect.getsource(telemetry)
+        for name in ("_RE_SECRET_TOKEN", "_RE_PASSWORD", "_RE_API_KEY", "_RE_BEARER"):
+            assert name not in src, f"{name} is back in telemetry.py; use credscrub"

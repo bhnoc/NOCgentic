@@ -23,6 +23,7 @@ import os
 import re
 import sys
 
+import credscrub
 import ipscope
 
 logger = logging.getLogger(__name__)
@@ -41,16 +42,11 @@ _initialized = False
 # per-agent sanitize() (see agents/*/main.py).
 # ---------------------------------------------------------------------------
 
-# IP redaction lives in ipscope (scope allowlist); only secret patterns are here.
-# Catch long base64-ish secret tokens (API keys, JWT segments, etc.) but NOT
-# pure-hex strings, which are almost always legitimate hash IOCs (MD5=32,
-# SHA-1=40, SHA-256=64 hex chars) that we want to keep in telemetry. The
-# negative lookahead skips only tokens that are ENTIRELY hex; a real base64
-# secret contains at least one non-hex char (g-z/G-Z, +, /) and is still caught.
-_RE_SECRET_TOKEN = re.compile(r"\b(?![A-Fa-f0-9]{40,}\b)[A-Za-z0-9+/]{40,}\b")
-_RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
-_RE_API_KEY = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
-_RE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
+# IP redaction lives in ipscope (scope allowlist); credentials in credscrub.
+# This file used to carry its own copy of the secret patterns, which drifted:
+# credscrub grew provider-prefixed-key (sk-/AKIA/xoxb) and aws_secret_access_key
+# rules that this copy never got, so those keys reached the OTLP endpoint and the
+# S3 trace archive in the clear. Import the shared one instead of re-deriving it.
 
 # Span attribute keys that may carry sensitive free text (LLM prompts/
 # completions, HTTP bodies, raw SQL). Matched case-insensitively by substring.
@@ -79,10 +75,7 @@ def _redact(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
     text = ipscope.redact_text(text)
-    text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
-    text = _RE_PASSWORD.sub("password: [REDACTED]", text)
-    text = _RE_API_KEY.sub("api_key: [REDACTED]", text)
-    text = _RE_BEARER.sub("bearer [REDACTED]", text)
+    text = credscrub.scrub_secrets(text)
     return text
 
 
