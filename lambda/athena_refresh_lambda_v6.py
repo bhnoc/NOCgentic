@@ -21,16 +21,32 @@ import time
 import re
 from datetime import datetime, timezone, timedelta
 
-# All config is env-driven so one code artifact serves any tenant/dataset
-# (dev vs show) without hardcoded account/project names.
-REGION = os.environ.get('REGION', 'us-west-2')
-S3_LOG_BUCKET = os.environ.get('S3_LOG_BUCKET', 'blackhat-pope-dev-logs')
-S3_LOG_PREFIX = os.environ.get('S3_LOG_PREFIX', 'bh-asia-26/corelight')
-S3_PARQUET_BUCKET = os.environ.get('S3_PARQUET_BUCKET', 'blackhat-pope-parquet')
+# All config is env-driven so one code artifact serves any tenant/dataset without
+# hardcoded account or show names.
+#
+# These are REQUIRED, not defaulted. The previous version fell back to the retired
+# account's bucket/database/workgroup, which meant a Lambda deployed with a missing
+# env var would quietly point at infrastructure that no longer exists, create
+# nothing, and report success. Failing at import is louder and cheaper to diagnose.
+def _required(name: str) -> str:
+    val = os.environ.get(name, '').strip()
+    if not val:
+        raise RuntimeError(
+            f"{name} is not set. This Lambda has no safe default: guessing a bucket "
+            f"or database silently targets the wrong dataset."
+        )
+    return val
+
+
+REGION = _required('REGION')
+S3_LOG_BUCKET = _required('S3_LOG_BUCKET')
+S3_LOG_PREFIX = _required('S3_LOG_PREFIX').strip('/')
+S3_PARQUET_BUCKET = _required('S3_PARQUET_BUCKET')
+GLUE_DATABASE = _required('GLUE_DATABASE')
+ATHENA_WORKGROUP = _required('ATHENA_WORKGROUP')
+# Optional: empty means the parquet tables sit at the bucket root.
 S3_PARQUET_PREFIX = os.environ.get('S3_PARQUET_PREFIX', '').strip('/')
 WATERMARK_PREFIX = os.environ.get('WATERMARK_PREFIX', '_watermarks/v6')
-GLUE_DATABASE = os.environ.get('GLUE_DATABASE', 'blackhat_pope_logs')
-ATHENA_WORKGROUP = os.environ.get('ATHENA_WORKGROUP', 'blackhat-pope-dev')
 SELF_FUNCTION_NAME = os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'blackhatnoc-athena-refresh')
 
 _PARQUET_BASE = (f"s3://{S3_PARQUET_BUCKET}/{S3_PARQUET_PREFIX}/"
