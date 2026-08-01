@@ -1,0 +1,1976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shadow the Hunter · V2 · Spike DNS TP</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #070b10;
+      --panel: #0c1219;
+      --text: #c8e6c0;
+      --dim: #5a7a58;
+      --bright: #e8ffe0;
+      --amber: #ffd27a;
+      --amber-dim: #a67c2e;
+      --cyan: #7fd4ff;
+      --red: #ff8a80;
+      --line: #1e3320;
+      --choice: #0f1a12;
+      --choice-hover: #152418;
+      --choice-border: #2d4a30;
+      --tip-bg: #1a2410;
+      --tip-border: #6b8f3a;
+      --skill: #9b8cff;
+      --font: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg, transparent, transparent 3px,
+        rgba(0, 0, 0, 0.06) 3px, rgba(0, 0, 0, 0.06) 4px
+      );
+      z-index: 100;
+    }
+    .shell {
+      max-width: 1080px;
+      margin: 0 auto;
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 16px 18px 24px;
+      position: relative;
+      z-index: 1;
+    }
+    .main-row {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 250px 1fr;
+      gap: 14px;
+      min-height: 0;
+    }
+    @media (max-width: 820px) {
+      .main-row { grid-template-columns: 1fr; }
+      .crumbs { max-height: 180px; order: 2; }
+      .mud { order: 1; }
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: var(--dim);
+    }
+    header strong { color: var(--amber); font-weight: 600; }
+    header a, header button.linkish {
+      color: var(--cyan);
+      background: none;
+      border: none;
+      font-family: var(--font);
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      font-size: 12px;
+      color: var(--dim);
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .status b { color: var(--text); font-weight: 500; }
+    .timer.urgent { color: var(--amber); }
+    .timer.over { color: var(--red); }
+    .learn-bar {
+      border: 1px solid var(--line);
+      background: rgba(155, 140, 255, 0.06);
+      padding: 8px 12px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .learn-bar .k {
+      color: var(--skill);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 10px;
+      margin-right: 8px;
+    }
+    .skills-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .skills-strip span {
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      color: var(--dim);
+    }
+    .skills-strip span.on {
+      border-color: rgba(155, 140, 255, 0.55);
+      color: var(--skill);
+      background: rgba(155, 140, 255, 0.1);
+    }
+    .skills-strip span.done {
+      border-color: rgba(157, 255, 176, 0.45);
+      color: #9dffb0;
+    }
+    .track {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+    .track span {
+      flex: 1;
+      height: 3px;
+      background: var(--line);
+      border-radius: 1px;
+    }
+    .track span.done { background: var(--dim); }
+    .track span.now { background: var(--amber); box-shadow: 0 0 8px rgba(255, 210, 122, 0.4); }
+
+    .crumbs {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      max-height: calc(100vh - 200px);
+    }
+    .crumbs-hd {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--amber-dim);
+    }
+    .crumbs-hd strong { color: var(--amber); }
+    .crumbs-score {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      color: var(--dim);
+      line-height: 1.4;
+    }
+    .crumbs-score .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 3px;
+    }
+    .n-data { color: #9dffb0; }
+    .n-guess { color: var(--amber); }
+    .n-act { color: var(--red); }
+    .crumbs-list { flex: 1; overflow-y: auto; padding: 8px; }
+    .crumb {
+      border: 1px solid var(--line);
+      background: #0a100c;
+      padding: 8px 9px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      position: relative;
+    }
+    .crumb::before {
+      content: "";
+      position: absolute;
+      left: -1px; top: 0; bottom: 0;
+      width: 3px;
+    }
+    .crumb.stance-data::before { background: #9dffb0; }
+    .crumb.stance-guess::before { background: var(--amber); }
+    .crumb.stance-act::before { background: var(--red); }
+    .crumb.stance-meta::before { background: var(--cyan); }
+    .crumb.current {
+      border-color: var(--amber-dim);
+      box-shadow: inset 0 0 0 1px rgba(255, 210, 122, 0.15);
+    }
+    .crumb .stop {
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      color: var(--dim);
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+    .crumb .title { color: var(--bright); font-size: 11.5px; line-height: 1.35; margin-bottom: 6px; }
+    .crumb .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+    .crumb .stance {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .crumb .stance.data { color: #9dffb0; }
+    .crumb .stance.guess { color: var(--amber); }
+    .crumb .stance.act { color: var(--red); }
+    .crumb .stance.meta { color: var(--cyan); }
+    .crumb .skill-tag {
+      font-size: 9px;
+      color: var(--skill);
+      margin-top: 4px;
+      letter-spacing: 0.04em;
+    }
+    .crumb .rewind-btn {
+      display: inline-block;
+      margin-top: 6px;
+      font-family: var(--font);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--cyan);
+      background: rgba(127, 212, 255, 0.08);
+      border: 1px solid rgba(127, 212, 255, 0.35);
+      padding: 3px 7px;
+      cursor: pointer;
+    }
+    .crumb .rewind-btn:hover { background: rgba(127, 212, 255, 0.16); }
+    .crumb-empty {
+      padding: 14px 10px;
+      color: var(--dim);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .crumbs-legend {
+      padding: 8px 12px 10px;
+      border-top: 1px solid var(--line);
+      font-size: 10px;
+      color: var(--dim);
+      line-height: 1.4;
+    }
+
+    .mud {
+      flex: 1;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 16px 18px 18px;
+      min-height: 280px;
+      display: flex;
+      flex-direction: column;
+    }
+    .room-tag {
+      font-size: 11px;
+      color: var(--amber-dim);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .log { flex: 1; overflow-y: auto; margin-bottom: 16px; }
+    .log p { margin-bottom: 10px; max-width: 64ch; }
+    .log p.sys { color: var(--dim); font-size: 12px; }
+    .log p.narr { color: var(--bright); }
+    .log p.amber { color: var(--amber); }
+    .log p.you { color: var(--cyan); }
+    .log p.ok { color: #9dffb0; }
+    .log p.miss { color: var(--amber); }
+    .log p.learn {
+      color: #c4b8ff;
+      font-size: 12.5px;
+      border-left: 2px solid rgba(155, 140, 255, 0.5);
+      padding-left: 8px;
+    }
+
+    .jargon {
+      color: var(--cyan);
+      border-bottom: 1px dashed rgba(127, 212, 255, 0.7);
+      cursor: help;
+    }
+    #tip {
+      position: fixed;
+      z-index: 200;
+      max-width: min(320px, calc(100vw - 24px));
+      background: var(--tip-bg);
+      border: 1px solid var(--tip-border);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+      padding: 10px 12px 12px;
+      font-family: var(--sans);
+      font-size: 13px;
+      line-height: 1.45;
+      color: #e8f5d8;
+      display: none;
+    }
+    #tip.show { display: block; }
+    #tip .tip-term {
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--amber);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    #tip .tip-eli5 {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: #8fbc6a;
+      margin-bottom: 4px;
+    }
+    #tip .tip-close {
+      position: absolute;
+      top: 6px; right: 8px;
+      background: none;
+      border: none;
+      color: var(--dim);
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .choices { display: flex; flex-direction: column; gap: 8px; }
+    .choice {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      text-align: left;
+      width: 100%;
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text);
+      background: var(--choice);
+      border: 1px solid var(--choice-border);
+      padding: 12px 14px;
+      cursor: pointer;
+    }
+    .choice:hover:not(:disabled) {
+      background: var(--choice-hover);
+      border-color: var(--amber-dim);
+    }
+    .choice:disabled { opacity: 0.45; cursor: default; }
+    .choice .key {
+      color: var(--amber);
+      font-weight: 600;
+      flex-shrink: 0;
+      min-width: 1.2em;
+    }
+    .choice .label { flex: 1; min-width: 0; }
+    .choice .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .tag {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 2px;
+      border: 1px solid transparent;
+    }
+    .tag-move {
+      background: rgba(127, 212, 255, 0.1);
+      border-color: rgba(127, 212, 255, 0.35);
+      color: var(--cyan);
+    }
+    .tag-non-destructive {
+      background: rgba(157, 255, 176, 0.1);
+      border-color: rgba(157, 255, 176, 0.4);
+      color: #9dffb0;
+    }
+    .tag-destructive {
+      background: rgba(255, 138, 128, 0.12);
+      border-color: rgba(255, 138, 128, 0.5);
+      color: var(--red);
+    }
+    .tag-state-changing {
+      background: rgba(255, 210, 122, 0.12);
+      border-color: rgba(255, 210, 122, 0.45);
+      color: var(--amber);
+    }
+    .choice.integrity-destructive { border-color: rgba(255, 138, 128, 0.35); }
+    .choice.integrity-state-changing { border-color: rgba(255, 210, 122, 0.3); }
+    .choice .label-main {
+      display: block;
+      color: var(--bright);
+      margin-bottom: 6px;
+    }
+    .choice .eli5 {
+      display: block;
+      font-family: var(--sans);
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: #8fad88;
+      border-left: 2px solid rgba(127, 212, 255, 0.35);
+      padding-left: 8px;
+    }
+    .choice .eli5::before {
+      content: "ELI5 · ";
+      color: var(--cyan);
+      font-family: var(--font);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+
+    .tally {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 12px 0;
+      font-size: 12px;
+    }
+    .tally .cell {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      background: rgba(0,0,0,0.25);
+    }
+    .tally .cell b { display: block; font-size: 18px; color: var(--bright); margin-bottom: 2px; }
+    .tally .cell.nd b { color: #9dffb0; }
+    .tally .cell.d b { color: var(--red); }
+    .tally .cell.sc b { color: var(--amber); }
+    .tally .cell.sk b { color: var(--skill); }
+    .tally .cell span { color: var(--dim); font-size: 11px; }
+
+    .end-box {
+      border-left: 3px solid var(--amber);
+      padding: 12px 14px;
+      background: rgba(255, 210, 122, 0.06);
+      margin: 12px 0;
+    }
+    .end-box h2 {
+      font-size: 14px;
+      color: var(--amber);
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-family: var(--sans);
+    }
+    .end-box ul { margin-left: 18px; font-size: 13px; }
+    .end-box li { margin-bottom: 4px; }
+    .badge-pill {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border: 1px solid var(--amber-dim);
+      color: var(--amber);
+      background: rgba(255, 210, 122, 0.1);
+      margin: 4px 0 10px;
+    }
+    .reflect {
+      border: 1px solid rgba(155, 140, 255, 0.35);
+      background: rgba(155, 140, 255, 0.06);
+      padding: 10px 12px;
+      margin: 10px 0;
+      font-family: var(--sans);
+      font-size: 13px;
+      color: #ddd6ff;
+    }
+    .reflect strong {
+      display: block;
+      font-family: var(--font);
+      font-size: 11px;
+      color: var(--skill);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .footer {
+      margin-top: 12px;
+      font-size: 11px;
+      color: var(--dim);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 180;
+      display: none;
+    }
+    .modal-backdrop.open { display: block; }
+    .modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(400px, calc(100vw - 32px));
+      background: var(--panel);
+      border: 1px solid var(--amber-dim);
+      z-index: 190;
+      display: none;
+      flex-direction: column;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+      padding: 16px 18px 14px;
+    }
+    .modal.open { display: flex; }
+    .modal h2 {
+      font-size: 13px;
+      color: var(--amber);
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .modal p {
+      font-family: var(--sans);
+      font-size: 13px;
+      line-height: 1.45;
+      margin-bottom: 14px;
+    }
+    .modal .actions { display: flex; flex-direction: column; gap: 8px; }
+    .modal .actions button {
+      font-family: var(--font);
+      font-size: 12px;
+      padding: 10px 12px;
+      cursor: pointer;
+      border: 1px solid var(--choice-border);
+      background: var(--choice);
+      color: var(--text);
+      text-align: left;
+    }
+    .modal .actions button.primary {
+      border-color: var(--amber-dim);
+      color: var(--amber);
+      background: rgba(255, 210, 122, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div><strong>SHADOW THE HUNTER V2</strong> · Spike DNS TP · learn → grow</div>
+      <div>
+        <a href="http://localhost:3106/">v1 FP tour</a>
+        · <a href="http://localhost:3100/">hub</a>
+      </div>
+    </header>
+
+    <div class="status">
+      <span>STOP <b id="stopName">—</b></span>
+      <span>BEAT <b id="beatNum">0 / 7</b></span>
+      <span class="timer" id="timer">4:00</span>
+      <span>MODE <b>LEARNING MUD</b> · ↩ rewrite</span>
+    </div>
+
+    <div class="learn-bar" id="learnBar">
+      <span class="k">Learn</span>
+      <span id="learnText">Board the true-positive hunt. Goal: leave with a method you can reuse tomorrow.</span>
+    </div>
+
+    <div class="skills-strip" id="skillsStrip" aria-label="Skills"></div>
+    <div class="track" id="track" aria-hidden="true"></div>
+
+    <div class="main-row">
+      <aside class="crumbs" aria-label="Your path">
+        <div class="crumbs-hd"><strong>Your path</strong> · timeline</div>
+        <div class="crumbs-score">
+          <div class="row"><span>Following data</span><span class="n-data" id="scData">0</span></div>
+          <div class="row"><span>Guessing</span><span class="n-guess" id="scGuess">0</span></div>
+          <div class="row"><span>Acting (destructive)</span><span class="n-act" id="scAct">0</span></div>
+          <div class="row"><span>Skills proven</span><span class="n-data" id="scSkills">0/6</span></div>
+        </div>
+        <div class="crumbs-list" id="crumbsList">
+          <div class="crumb-empty">
+            Choices become breadcrumbs.<br/><br/>
+            Watch <span style="color:#9dffb0">data</span>,
+            <span style="color:var(--amber)">guess</span>,
+            <span style="color:var(--red)">act</span> —
+            and which <span style="color:var(--skill)">skill</span> each stop trains.
+          </div>
+        </div>
+        <div class="crumbs-legend">
+          Past stops: <strong style="color:var(--cyan)">↩ Change decision</strong> · Keys 1/2/3 · R rewind
+        </div>
+      </aside>
+
+      <div class="mud">
+        <div class="room-tag" id="roomTag">// loading…</div>
+        <div class="log" id="log"></div>
+        <div class="choices" id="choices"></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>Package: sth-20260801-spike-dns-tp · contrast FP tour on :3106</span>
+      <span>Productive failure + rewind = growth, not shame</span>
+    </div>
+  </div>
+
+  <div id="tip" role="tooltip">
+    <button type="button" class="tip-close" id="tipClose" aria-label="Close">×</button>
+    <div class="tip-term" id="tipTerm"></div>
+    <div class="tip-eli5">ELI5</div>
+    <div class="tip-body" id="tipBody"></div>
+  </div>
+
+  <div class="modal-backdrop" id="rewindBg"></div>
+  <div class="modal" id="rewindModal" role="dialog" aria-label="Rewind">
+    <h2>Flux capacitor</h2>
+    <p id="rewindMsg">Rewrite the future from this station?</p>
+    <div class="actions">
+      <button type="button" class="primary" id="rewindConfirm">↩ Rewrite future from here</button>
+      <button type="button" id="rewindCancel">Cancel</button>
+    </div>
+  </div>
+
+  <script>
+    const TOUR = {
+      title: "Spike DNS that was real",
+      durationSec: 240,
+      startNode: "G0",
+      goldenOrder: ["G0", "G1", "G2", "G3", "G4", "G5", "G6"],
+      skills: ["FILTER", "READ", "SCOPE", "ID", "CORROBORATE", "DECIDE"],
+    };
+
+    const EMPTY_FLAGS = () => ({
+      noise_chase: false,
+      volume_bias: false,
+      rash_act: false,
+      under_react: false,
+      named_without_confirm: false,
+      process_skip: false,
+      history_only: false,
+      stall: false,
+    });
+
+    const JARGON = {
+      "true positive": {
+        term: "True positive",
+        eli5: "The alarm was right — there really is a problem worth acting on. Toast was fine; the kitchen was on fire.",
+      },
+      "false positive": {
+        term: "False positive",
+        eli5: "Alarm without a real bad guy. Smoke detector hated toast. Still check — then write down why.",
+      },
+      triage: {
+        term: "Triage",
+        eli5: "ER sorting: don’t treat paper cuts before broken bones. Rank the pile before you swing.",
+      },
+      "under_investigation": {
+        term: "Under investigation",
+        eli5: "Someone already opened this case and hasn’t closed it. Not always in the loud “new” pile.",
+      },
+      "Spike DNS": {
+        term: "Spike DNS Malware Traffic",
+        eli5: "Lots of DNS questions about a bad domain in a short time — like knocking the same weird doorbell hundreds of times.",
+      },
+      DNS: {
+        term: "DNS",
+        eli5: "Internet phone book. You ask “where is example.com?” A spike of questions about a known-bad name is a clue.",
+      },
+      Umbrella: {
+        term: "OpenDNS / Umbrella VA",
+        eli5: "Venue’s DNS babysitter. Hosts ask *it* for names. Traffic to the babysitter isn’t the same as talking to the bad server.",
+      },
+      "DNS VA": {
+        term: "DNS virtual appliance",
+        eli5: "The local phone-book machine. Remote IP on port 53 is often this — look at the *name* being asked, not just the IP.",
+      },
+      IoC: {
+        term: "IoC (indicator of compromise)",
+        eli5: "A clue fingerprint: bad domain, bad IP, bad file hash. Here the star clue is a domain name.",
+      },
+      "sole-source": {
+        term: "Sole-source",
+        eli5: "Only one internal computer is asking for that bad name. That’s scarier than a whole room sharing a SaaS domain.",
+      },
+      agentless: {
+        term: "Agentless",
+        eli5: "No security app living on the laptop. We only see hallway cameras (network). Harder to isolate remotely.",
+      },
+      isolate: {
+        term: "Isolate",
+        eli5: "Put the computer in time-out. Useful when sick and you can actually do it. On agentless Wi‑Fi hosts, ownership first.",
+      },
+      exfil: {
+        term: "Exfiltration",
+        eli5: "Sneaking data out. Alerts use this category for malware DNS too — category is a hint, not a verdict alone.",
+      },
+      TI: {
+        term: "Threat intelligence (TI)",
+        eli5: "Other grown-ups already labeled this domain “bad.” Unit 42 / VT / Google-style feeds. Combine with *your* logs.",
+      },
+      beacon: {
+        term: "Beacon",
+        eli5: "Calling home again and again. High DNS volume for one bad name can look like that even if answers are blocked.",
+      },
+      ZGrab: {
+        term: "ZGrab",
+        eli5: "Internet door-knock scanner. Makes critical-looking Exchange alerts that are often just noise at big events.",
+      },
+      "Large Upload": {
+        term: "Large Upload",
+        eli5: "Big file left the building. Sometimes theft; often Zoom/backup noise. Common false-positive class here.",
+      },
+      disposition: {
+        term: "Disposition",
+        eli5: "Final sticker on the ticket: true positive, false positive, or more homework — plus the why.",
+      },
+      "NOC WiFi": {
+        term: "NOC WiFi",
+        eli5: "Network Operations Center wireless — staff/ops laptops, not random classroom Wi‑Fi. Higher blast radius if infected.",
+      },
+      C2: {
+        term: "C2",
+        eli5: "Command and control — evil remote control. DNS questions for a bad domain may be trying to find C2 even if sinkholed.",
+      },
+    };
+    const JARGON_KEYS = Object.keys(JARGON).sort((a, b) => b.length - a.length);
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function withJargon(text) {
+      const s = String(text);
+      let out = "";
+      let i = 0;
+      while (i < s.length) {
+        let hit = null;
+        let hitKey = null;
+        for (const key of JARGON_KEYS) {
+          if (s.length - i < key.length) continue;
+          const slice = s.substr(i, key.length);
+          if (slice.toLowerCase() !== key.toLowerCase()) continue;
+          const before = i === 0 ? " " : s[i - 1];
+          const after = i + key.length >= s.length ? " " : s[i + key.length];
+          const boundL = /[\s"'([{/\\|]/.test(before) || i === 0;
+          const boundR = /[\s"'.,:;!?/)\]}|]/.test(after) || i + key.length >= s.length;
+          if (key.length <= 3 && (!boundL || !boundR)) continue;
+          if (key.length > 3 && !boundL && !/[\s"'(]/.test(before) && i !== 0) continue;
+          hit = slice;
+          hitKey = key;
+          break;
+        }
+        if (hit) {
+          out +=
+            `<span class="jargon" tabindex="0" role="button" data-jargon="${escapeHtml(hitKey)}">` +
+            escapeHtml(hit) +
+            `</span>`;
+          i += hit.length;
+        } else {
+          out += escapeHtml(s[i]);
+          i += 1;
+        }
+      }
+      return out;
+    }
+
+    /* ========== Graph: golden G* + productive-failure B* ========== */
+    const NODES = {
+      G0: {
+        id: "G0",
+        stop: "STATION",
+        room: "boarding platform · learning MUD",
+        skill: null,
+        goldenStep: 0,
+        learn: "You will practice a reusable hunt method — not memorize one case ID.",
+        lines: [
+          { t: "sys", x: "> shadow --tour 4m --mode learning-mud --package spike-dns-tp" },
+          { t: "narr", x: "Different train from the Host Sweep FP tour. Same craft. Opposite moral: this one is a live true positive." },
+          { t: "amber", x: "MISSION: Find the credible live TP under noise. Multi-source it. Decide without reckless isolate." },
+          { t: "sys", x: "Conductor: Off-path rooms teach (productive failure). ↩ rewrites time. Skills light up when you prove them." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "All aboard — hunt the Spike DNS TP",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Start the guided true-positive ride. Looking only at first.",
+            golden: true,
+            next: "G1",
+            reply: "Doors close. First skill: FILTER the loud queue.",
+          },
+          {
+            key: "2",
+            label: "Remind me how this differs from the FP Host Sweep tour",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Contrast learning — same method, different answer.",
+            golden: false,
+            next: "G0",
+            reply: "FP tour: public DNS remotes + SaaS profile. This tour: malware domain IoC + sole-source spike + NOC WiFi host.",
+          },
+          {
+            key: "3",
+            label: "Skip to disposition (I already know)",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Skipping skips the skills. Conductor refuses.",
+            golden: false,
+            next: "G0",
+            reply: "No free terminus. Skills are the point. Board properly.",
+          },
+        ],
+      },
+      G1: {
+        id: "G1",
+        stop: "TRIAGE",
+        room: "queue car · sirens and toast",
+        skill: "FILTER",
+        goldenStep: 1,
+        learn: "FILTER — critical + loud ≠ live internal TP. Look under_investigation.",
+        lines: [
+          { t: "sys", x: "> cortex triage --top 8" },
+          { t: "narr", x: "Top cards: critical Exchange RCE (ZGrab smell), Large Upload piles, hunting noise. The teaching TP is not the loudest new card." },
+          { t: "amber", x: "Case 8612 · Spike DNS Malware · under_investigation · score ~126 · domain epicunitscan.info" },
+          { t: "sys", x: "What do you open?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Open under_investigation Spike DNS (case 8612) — malware domain shape",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Skip the sirens. Open the case that multi-sources to a bad domain from one host.",
+            golden: true,
+            skillProve: "FILTER",
+            next: "G2",
+            reply: "Good filter. You ignored critical theater. Spike DNS car next.",
+          },
+          {
+            key: "2",
+            label: "Open #1 critical Exchange RCE — severity wins",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Severity bias. Often inbound scanners at events.",
+            golden: false,
+            next: "B1",
+            flagsDelta: { noise_chase: true },
+            reply: "Scanner warren — productive failure.",
+          },
+          {
+            key: "3",
+            label: "Chase Large Upload volume — exfil category",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Volume bias. Venue uploads are a known FP class.",
+            golden: false,
+            next: "B2",
+            flagsDelta: { volume_bias: true },
+            timePenaltySec: 15,
+            reply: "Upload fog. Clock bleeds.",
+          },
+        ],
+      },
+      B1: {
+        id: "B1",
+        stop: "SCANNER WARREN",
+        room: "side car · ZGrab fog",
+        branch: true,
+        learn: "Critical vuln names on public OWA are often scanners — not your NOC host.",
+        lines: [
+          { t: "sys", x: "> open exchange-rce case" },
+          { t: "narr", x: "Inbound probe shape. decrypted_tap / ZGrab class. No sole-source malware domain on NOC WiFi." },
+          { t: "miss", x: "You chased severity theater." },
+          { t: "sys", x: "Exit back toward the malware DNS case." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Stand down — open Spike DNS under_investigation",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Rejoin the teaching TP.",
+            next: "G2",
+            reply: "Lesson banked. Case 8612 opens.",
+          },
+          {
+            key: "2",
+            label: "↩ Rewind to TRIAGE",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Erase the noise chase from your timeline.",
+            rewindTo: "G1",
+            reply: "Flux capacitor…",
+          },
+        ],
+      },
+      B2: {
+        id: "B2",
+        stop: "UPLOAD FOG",
+        room: "side car · big files",
+        branch: true,
+        learn: "Exfil category + volume without multi-source is often venue noise.",
+        lines: [
+          { t: "sys", x: "> open large-upload cluster" },
+          { t: "narr", x: "Cloudflare, sensors, meeting uploads. Not the sole-source malware domain story." },
+          { t: "miss", x: "Volume bias costs focus." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Back to Spike DNS case 8612",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Return to the TP shape.",
+            next: "G2",
+            reply: "Fog clears. Malware DNS ahead.",
+          },
+        ],
+      },
+      G2: {
+        id: "G2",
+        stop: "CASE",
+        room: "alert car · four medium tickets",
+        skill: "READ",
+        goldenStep: 2,
+        learn: "READ — remote IP is DNS VA :53; the IoC is the query/hostname epicunitscan.info.",
+        lines: [
+          { t: "sys", x: "> investigate incident 8612 --hours 72" },
+          { t: "narr", x: "Spike DNS Malware Traffic. Source 10.220.251.89 (NOC WiFi) → remote 172.16.16.16:53 (venue DNS VA). External hostname: epicunitscan.info. Category: Exfiltration. Starred. Status: under_investigation." },
+          { t: "amber", x: "Hundreds of attempts / 24h windows. Multi-vendor TI calls the domain malicious." },
+          { t: "sys", x: "What did you just read?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Host asking DNS VA for a malicious name — IoC is the domain, not the VA IP",
+            move: "Hypothesize",
+            integrity: "non-destructive",
+            eli5: "Correct parse. Next: how many hosts ask for that name?",
+            golden: true,
+            skillProve: "READ",
+            next: "G3",
+            reply: "Exact. Don’t block the babysitter; scope the bad name.",
+          },
+          {
+            key: "2",
+            label: "172.16.16.16 is C2 — isolate and block that IP now",
+            move: "Act",
+            integrity: "destructive",
+            eli5: "Wrong parse. That’s the venue DNS appliance.",
+            golden: false,
+            next: "B3",
+            flagsDelta: { rash_act: true },
+            reply: "Blast door — you aimed at the phone book.",
+          },
+          {
+            key: "3",
+            label: "Umbrella probably sinkholed it — close as noise",
+            move: "Hypothesize",
+            integrity: "non-destructive",
+            eli5: "Under-reaction. Infected hosts still query sinkholed names.",
+            golden: false,
+            next: "B4",
+            flagsDelta: { under_react: true },
+            reply: "Sinkhole shrug car.",
+          },
+        ],
+      },
+      B3: {
+        id: "B3",
+        stop: "BLAST DOOR",
+        room: "side car · wrong target",
+        branch: true,
+        learn: "Never isolate the DNS VA. Parse local vs remote roles.",
+        lines: [
+          { t: "sys", x: "> isolate 172.16.16.16" },
+          { t: "narr", x: "Mutation denied / catastrophic idea. That IP is OpenDNS/Umbrella for the venue." },
+          { t: "miss", x: "You reached for the blast door on the phone book." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Stand down — re-read case; enrich the domain",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Fix the parse. Scope the IoC name.",
+            next: "G3",
+            reply: "Hands off VA. Domain enrich next.",
+          },
+          {
+            key: "2",
+            label: "↩ Rewind to CASE",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Clear the rash stain.",
+            rewindTo: "G2",
+            reply: "Flux capacitor: back to CASE.",
+          },
+        ],
+      },
+      B4: {
+        id: "B4",
+        stop: "SINKHOLE SHRUG",
+        room: "side car · false calm",
+        branch: true,
+        learn: "Blocked/sinkholed DNS can still mean a compromised host trying to beacon.",
+        lines: [
+          { t: "sys", x: "> resolve epicunitscan.info --assume-blocked" },
+          { t: "narr", x: "Even if answers never land, hundreds of queries from one NOC host are a story." },
+          { t: "miss", x: "You under-reacted to malware DNS volume." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Re-engage — enrich domain for sole-source proof",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Volume + TI still matter.",
+            next: "G3",
+            reply: "Back on the evidence trail.",
+          },
+        ],
+      },
+      G3: {
+        id: "G3",
+        stop: "ENRICH",
+        room: "ioc car · one light on the map",
+        skill: "SCOPE",
+        goldenStep: 3,
+        learn: "SCOPE — sole-source domain: one host, ~697 hits / 72h.",
+        lines: [
+          { t: "sys", x: "> enrich domain epicunitscan.info --hours 72" },
+          { t: "narr", x: "domain-scope: 1 row. action_local_ip 10.220.251.89 · hits 697. Sole source." },
+          { t: "amber", x: "domain-events: repeated host → DNS VA :53 for that query name (beacon-shaped)." },
+          { t: "sys", x: "How do you score this scope?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Sole-source malware DNS + high volume — elevate priority",
+            move: "Correlate",
+            integrity: "non-destructive",
+            eli5: "One host owning all hits is a page-me shape on NOC WiFi.",
+            golden: true,
+            skillProve: "SCOPE",
+            next: "G4",
+            reply: "Scoped. Now: who is the host?",
+          },
+          {
+            key: "2",
+            label: "Only one host — probably a lab scanner, deprioritize",
+            move: "Hypothesize",
+            integrity: "non-destructive",
+            eli5: "Guess against TI + NOC segment. Weak.",
+            golden: false,
+            next: "B4",
+            flagsDelta: { under_react: true },
+            reply: "That’s under-reacting with extra steps. Revisit.",
+          },
+          {
+            key: "3",
+            label: "Pivot only to closed gold dual-RAT 8016 instead",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Historical gold is useful later — live queue still needs live TPs.",
+            golden: false,
+            next: "B7",
+            flagsDelta: { history_only: true },
+            reply: "Gold museum side car.",
+          },
+        ],
+      },
+      B7: {
+        id: "B7",
+        stop: "GOLD MUSEUM",
+        room: "side car · dual RAT history",
+        branch: true,
+        learn: "8016 is excellent gold — SecTopRAT + NetSupport — but C2 is gone now. Live skill is 8612.",
+        lines: [
+          { t: "sys", x: "> investigate incident 8016 --hours 168" },
+          { t: "narr", x: "Resolved true positive. Journalist dual RAT. Live C2 hosts: 0." },
+          { t: "miss", x: "You left the live fire for the museum." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Return to live sole-source DNS TP (8612 path)",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Bank the gold for later packages; finish today’s live hunt.",
+            next: "G4",
+            reply: "Museum gift shop closed. Identity car for 10.220.251.89.",
+          },
+        ],
+      },
+      G4: {
+        id: "G4",
+        stop: "IDENTITY",
+        room: "identity car · empty agent seat",
+        skill: "ID",
+        goldenStep: 4,
+        learn: "ID — agentless NOC Mac, operator SaaS profile; confirm owner privately.",
+        lines: [
+          { t: "sys", x: "> host identify 10.220.251.89 --deep --with-related" },
+          { t: "narr", x: "Agentless. Medium confidence. Apple/macOS client. Privacy MAC as user. mDNS: operator-macbook.local (tokenized). Network: NOC WiFi VLAN 2251." },
+          { t: "narr", x: "DNS profile: NOC Slack, Anthropic, Keybase, VS Code, Apple — and 697 hits to epicunitscan.info." },
+          { t: "amber", x: "related: 0 incidents / 0 alerts on host inventory. Correlation case can still be real." },
+          { t: "sys", x: "How do you treat this host?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "NOC operator-shaped Mac — confirm owner in private channel; don’t public-name",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Identity + humility. Agentless means human path for containment.",
+            golden: true,
+            skillProve: "ID",
+            next: "G5",
+            reply: "Correct posture. Corroborate TI + volume next.",
+          },
+          {
+            key: "2",
+            label: "No agent + malware DNS — isolate immediately",
+            move: "Act",
+            integrity: "destructive",
+            eli5: "Rash on agentless event Wi‑Fi. Ownership + capability first.",
+            golden: false,
+            next: "B3",
+            flagsDelta: { rash_act: true },
+            reply: "Containment without ownership path — stain.",
+          },
+          {
+            key: "3",
+            label: "mDNS shows a person — open public channel call-out / HR",
+            move: "Act",
+            integrity: "state-changing",
+            eli5: "Name-and-shame from telemetry. Confirm privately first.",
+            golden: false,
+            next: "B5",
+            flagsDelta: { named_without_confirm: true },
+            reply: "People process trap.",
+          },
+        ],
+      },
+      B5: {
+        id: "B5",
+        stop: "NAME-AND-SHAME",
+        room: "side car · wrong channel",
+        branch: true,
+        learn: "mDNS ≠ verified identity for public blame. Private confirm with NOC lead.",
+        lines: [
+          { t: "sys", x: "> ticket --public-blame" },
+          { t: "narr", x: "Telemetry has a privacy MAC and a device name pattern — not a courtroom." },
+          { t: "miss", x: "You almost named a human without confirmation." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Retract — private owner confirm only; continue corroboration",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Humility restores the path.",
+            next: "G5",
+            reply: "Private channel. Traffic car next.",
+          },
+        ],
+      },
+      G5: {
+        id: "G5",
+        stop: "TRAFFIC",
+        room: "dns car · TI vs IPS gap",
+        skill: "CORROBORATE",
+        goldenStep: 5,
+        learn: "CORROBORATE — multi-source: case + sole-source + identity + TI; accept no malware IPS sig.",
+        lines: [
+          { t: "sys", x: "> xql domain-events · host-threats" },
+          { t: "narr", x: "Events: repeated STORY rows — host → DNS VA :53 · query epicunitscan.info." },
+          { t: "narr", x: "Threats on host: mostly informational TLS/ECH/post-quantum notes. No malware signature hit on the domain itself." },
+          { t: "amber", x: "Detection story = DNS volume + multi-vendor TI — not IPS malware hash on that name." },
+          { t: "sys", x: "Do you still have a case?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Yes — TI + sole-source spike is enough to call TP with residual C2 uncertainty",
+            move: "Correlate",
+            integrity: "non-destructive",
+            eli5: "Professionals decide with incomplete telemetry and write the residual risk.",
+            golden: true,
+            skillProve: "CORROBORATE",
+            next: "G6",
+            reply: "Multi-source holds. Terminus: decide + human actions.",
+          },
+          {
+            key: "2",
+            label: "No IPS malware hit — must be false positive",
+            move: "Hypothesize",
+            integrity: "non-destructive",
+            eli5: "IPS silence does not cancel TI + volume.",
+            golden: false,
+            next: "B4",
+            flagsDelta: { under_react: true },
+            reply: "That’s the sinkhole shrug in a lab coat.",
+          },
+          {
+            key: "3",
+            label: "I need another hour of XQL before any disposition",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "More logs are safe — but you already multi-sourced enough for a training decide.",
+            golden: false,
+            next: "B8",
+            flagsDelta: { stall: true },
+            timePenaltySec: 20,
+            reply: "Analysis paralysis.",
+          },
+        ],
+      },
+      B8: {
+        id: "B8",
+        stop: "PARALYSIS",
+        room: "side car · endless queries",
+        branch: true,
+        learn: "Enough multi-source exists: case, enrich, identity, TI. Decide with residual uncertainty.",
+        lines: [
+          { t: "sys", x: "> xql --forever" },
+          { t: "miss", x: "Clock penalty. Perfect knowledge is not the job." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Decide with current multi-source evidence",
+            move: "Decide",
+            integrity: "non-destructive",
+            eli5: "Write residual risk; list human actions.",
+            next: "G6",
+            reply: "Terminus ahead.",
+          },
+        ],
+      },
+      G6: {
+        id: "G6",
+        stop: "TERMINUS",
+        room: "disposition platform",
+        skill: "DECIDE",
+        goldenStep: 6,
+        terminal: true,
+        learn: "DECIDE — TP + human actions; no reckless auto-isolate on agentless.",
+        lines: [
+          { t: "sys", x: "> write disposition" },
+          { t: "narr", x: "Hunter call for this package:" },
+          { t: "amber", x: "TRUE POSITIVE · activity confidence ~0.85 · active C2 resolved ~0.55 · high if hostile on NOC" },
+          { t: "narr", x: "Why: sole-source spike to TI-malicious domain epicunitscan.info via DNS VA from NOC WiFi Mac." },
+          { t: "sys", x: "Seal with actions a human can take tonight." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "TP close: confirm owner · block/watch domain · label ground-truth · no auto-isolate",
+            move: "Decide",
+            integrity: "state-changing",
+            eli5: "Ticket/process state changes. Host isolation waits for ownership + capability.",
+            golden: true,
+            skillProve: "DECIDE",
+            next: null,
+            ending: "tp_full",
+            reply: "Disposition stamped. Human actions listed. Method transferable.",
+          },
+          {
+            key: "2",
+            label: "TP but auto-resolve without owner confirmation",
+            move: "Decide",
+            integrity: "state-changing",
+            eli5: "Process skip — closes the loop too early.",
+            golden: false,
+            next: null,
+            ending: "process_skip",
+            flagsDelta: { process_skip: true },
+            reply: "You called TP but skipped the human ownership step.",
+          },
+          {
+            key: "3",
+            label: "Watch only 24h — soft under-call",
+            move: "Watch",
+            integrity: "non-destructive",
+            eli5: "Safer than FP close; weaker than TP on this multi-source.",
+            golden: false,
+            next: null,
+            ending: "watch",
+            reply: "Watch is free — but this package wanted a TP call with residual risk written.",
+          },
+        ],
+      },
+    };
+
+    const state = {
+      timelineId: "t0",
+      nodeId: TOUR.startNode,
+      history: [],
+      flags: EMPTY_FLAGS(),
+      scores: { data: 0, guess: 0, act: 0, goldenSteps: 0 },
+      skillsProven: {},
+      locked: false,
+      finished: false,
+      started: false,
+      deadline: null,
+      timerId: null,
+      timerPausedAt: null,
+      penaltySec: 0,
+      rewindCount: 0,
+      recentLines: [],
+      lastChoice: null,
+      pendingRewindIndex: null,
+      moveCounts: {},
+      integrityCounts: { "non-destructive": 0, destructive: 0, "state-changing": 0 },
+    };
+
+    const logEl = document.getElementById("log");
+    const choicesEl = document.getElementById("choices");
+    const tip = document.getElementById("tip");
+
+    function integrityClass(integrity) {
+      if (integrity === "destructive") return "tag-destructive";
+      if (integrity === "state-changing") return "tag-state-changing";
+      return "tag-non-destructive";
+    }
+    function integrityLabel(integrity) {
+      if (integrity === "destructive") return "Destructive";
+      if (integrity === "state-changing") return "State-changing";
+      return "Non-destructive";
+    }
+
+    function stanceFor(pick) {
+      const move = (pick.move || "").toLowerCase();
+      const integrity = pick.integrity || "non-destructive";
+      const track = !!(pick.track || pick.golden);
+      if (integrity === "destructive" || (move === "act" && integrity === "destructive")) {
+        return { id: "act", label: "Acting first", short: "ACT", hint: "Tried to change host/network early" };
+      }
+      if (move === "act" && integrity === "state-changing") {
+        return { id: "act", label: "Process action", short: "ACT", hint: "People/ticket action without full loop" };
+      }
+      if (move === "hypothesize" && !track) {
+        return { id: "guess", label: "Guessing", short: "GUESS", hint: "Theory off the evidence" };
+      }
+      if (move === "learn") {
+        return { id: "meta", label: "Meta", short: "META", hint: "About the tour" };
+      }
+      if (!track && (move === "triage" || move === "observe")) {
+        return { id: "guess", label: "Off-path focus", short: "GUESS", hint: "Looking, wrong lead" };
+      }
+      return { id: "data", label: "Following data", short: "DATA", hint: "Evidence-first" };
+    }
+
+    function choiceTagsHtml(c) {
+      return (
+        `<div class="tags">` +
+        `<span class="tag tag-move">${escapeHtml(c.move || "Observe")}</span>` +
+        `<span class="tag ${integrityClass(c.integrity)}">${escapeHtml(integrityLabel(c.integrity))}</span>` +
+        `</div>`
+      );
+    }
+
+    function recomputeFromHistory() {
+      const flags = EMPTY_FLAGS();
+      const scores = { data: 0, guess: 0, act: 0, goldenSteps: 0 };
+      const skillsProven = {};
+      const moveCounts = {};
+      const integrityCounts = { "non-destructive": 0, destructive: 0, "state-changing": 0 };
+      let penaltySec = 0;
+      state.history.forEach((h) => {
+        if (h.flagsDelta) {
+          Object.keys(h.flagsDelta).forEach((k) => {
+            if (h.flagsDelta[k]) flags[k] = true;
+          });
+        }
+        const st = stanceFor(h);
+        if (st.id === "data") scores.data++;
+        else if (st.id === "guess") scores.guess++;
+        else if (st.id === "act") scores.act++;
+        if (h.golden) scores.goldenSteps++;
+        if (h.skillProve) skillsProven[h.skillProve] = true;
+        moveCounts[h.move] = (moveCounts[h.move] || 0) + 1;
+        integrityCounts[h.integrity] = (integrityCounts[h.integrity] || 0) + 1;
+        if (h.timePenaltySec) penaltySec += h.timePenaltySec;
+      });
+      state.flags = flags;
+      state.scores = scores;
+      state.skillsProven = skillsProven;
+      state.moveCounts = moveCounts;
+      state.integrityCounts = integrityCounts;
+      state.penaltySec = penaltySec;
+    }
+
+    function skillsCount() {
+      return TOUR.skills.filter((s) => state.skillsProven[s]).length;
+    }
+
+    function hasStains() {
+      const f = state.flags;
+      return Object.keys(f).some((k) => f[k]);
+    }
+
+    function flagLines() {
+      const f = state.flags;
+      const lines = [];
+      if (f.noise_chase) lines.push("You chased severity theater (scanner warren).");
+      if (f.volume_bias) lines.push("You preferred upload volume over malware DNS shape.");
+      if (f.rash_act) lines.push("You reached for containment on the wrong target or too early.");
+      if (f.under_react) lines.push("You under-reacted to TI + sole-source spike.");
+      if (f.named_without_confirm) lines.push("You almost named a person without private confirm.");
+      if (f.process_skip) lines.push("You skipped human ownership on close.");
+      if (f.history_only) lines.push("You preferred museum gold over live fire.");
+      if (f.stall) lines.push("You stalled past enough multi-source evidence.");
+      if (!lines.length) lines.push("Clean skill run — data before act, TP with human actions.");
+      return lines;
+    }
+
+    function computeBadge(endingKey) {
+      const nSk = skillsCount();
+      const stains = hasStains();
+      if (endingKey === "tp_full" && nSk >= 6 && !stains && state.scores.act === 0) {
+        return { label: "Method locked in", stars: 3 };
+      }
+      if (endingKey === "tp_full" && state.rewindCount > 0 && !stains) {
+        return { label: "Time traveler · skills clean", stars: 3 };
+      }
+      if (endingKey === "tp_full" && stains) {
+        return { label: "TP called · messy path", stars: 2 };
+      }
+      if (endingKey === "watch") {
+        return { label: "Cautious watcher", stars: 1 };
+      }
+      if (endingKey === "process_skip") {
+        return { label: "Right call · weak process", stars: 1 };
+      }
+      return { label: "Tour complete", stars: 1 };
+    }
+
+    function renderSkills() {
+      const cur = NODES[state.nodeId];
+      document.getElementById("skillsStrip").innerHTML = TOUR.skills
+        .map((s) => {
+          let cls = "";
+          if (state.skillsProven[s]) cls = "done";
+          else if (cur && cur.skill === s) cls = "on";
+          return `<span class="${cls}">${s}</span>`;
+        })
+        .join("");
+      document.getElementById("scSkills").textContent = skillsCount() + "/6";
+    }
+
+    function goldenProgressIndex() {
+      const cur = NODES[state.nodeId];
+      if (state.finished) return TOUR.goldenOrder.length;
+      if (cur && typeof cur.goldenStep === "number") return cur.goldenStep;
+      let best = 0;
+      state.history.forEach((h) => {
+        const n = NODES[h.nodeId];
+        if (n && typeof n.goldenStep === "number") best = Math.max(best, n.goldenStep);
+      });
+      return best;
+    }
+
+    function renderTrack() {
+      const idx = goldenProgressIndex();
+      document.getElementById("track").innerHTML = TOUR.goldenOrder
+        .map((_, i) => {
+          let cls = "";
+          if (state.finished || i < idx) cls = "done";
+          if (i === idx && !state.finished) cls = "now";
+          return `<span class="${cls}"></span>`;
+        })
+        .join("");
+    }
+
+    function updateStatus() {
+      const b = NODES[state.nodeId];
+      document.getElementById("stopName").textContent = b ? b.stop : "—";
+      const step = Math.min(goldenProgressIndex() + 1, TOUR.goldenOrder.length);
+      document.getElementById("beatNum").textContent = `${step} / ${TOUR.goldenOrder.length}`;
+      document.getElementById("roomTag").textContent = b ? `// ${b.room}` : "";
+      document.getElementById("learnText").textContent =
+        (b && b.learn) || "Follow evidence. Prove skills. Rewind freely.";
+      renderTrack();
+      renderSkills();
+    }
+
+    function paintTimer() {
+      const el = document.getElementById("timer");
+      if (!state.deadline) {
+        el.textContent = "4:00";
+        return;
+      }
+      const left = Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
+      const m = Math.floor(left / 60);
+      const s = String(left % 60).padStart(2, "0");
+      el.textContent = `${m}:${s}`;
+      el.classList.toggle("urgent", left <= 60 && left > 0);
+      el.classList.toggle("over", left === 0);
+    }
+
+    function startTimer() {
+      state.deadline = Date.now() + TOUR.durationSec * 1000 - state.penaltySec * 1000;
+      if (state.timerId) clearInterval(state.timerId);
+      state.timerId = setInterval(paintTimer, 250);
+      paintTimer();
+    }
+    function pauseTimer() {
+      if (!state.deadline || state.timerPausedAt) return;
+      state.timerPausedAt = Date.now();
+      if (state.timerId) {
+        clearInterval(state.timerId);
+        state.timerId = null;
+      }
+    }
+    function resumeTimer() {
+      if (!state.timerPausedAt || !state.deadline) {
+        state.timerPausedAt = null;
+        return;
+      }
+      state.deadline += Date.now() - state.timerPausedAt;
+      state.timerPausedAt = null;
+      if (state.started && !state.finished) {
+        state.timerId = setInterval(paintTimer, 250);
+        paintTimer();
+      }
+    }
+    function applyTimePenalty(sec) {
+      if (!sec) return;
+      state.penaltySec += sec;
+      if (state.deadline) {
+        state.deadline -= sec * 1000;
+        paintTimer();
+      }
+    }
+
+    function clearLog() {
+      logEl.innerHTML = "";
+    }
+    function line(text, cls) {
+      const p = document.createElement("p");
+      if (cls) p.className = cls;
+      p.innerHTML = withJargon(text);
+      logEl.appendChild(p);
+      logEl.scrollTop = logEl.scrollHeight;
+      bindJargon(p);
+      state.recentLines.push({ t: cls || "narr", x: String(text) });
+      if (state.recentLines.length > 40) state.recentLines.shift();
+    }
+
+    function bindJargon(root) {
+      root.querySelectorAll(".jargon").forEach((el) => {
+        el.addEventListener("mouseenter", () => showTip(el));
+        el.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          showTip(el);
+        });
+      });
+    }
+    function showTip(el) {
+      const key = el.getAttribute("data-jargon");
+      const j = JARGON[key];
+      if (!j) return;
+      document.getElementById("tipTerm").textContent = j.term;
+      document.getElementById("tipBody").textContent = j.eli5;
+      tip.classList.add("show");
+      const rect = el.getBoundingClientRect();
+      const tipW = Math.min(320, window.innerWidth - 24);
+      let left = Math.max(12, Math.min(rect.left, window.innerWidth - tipW - 12));
+      let top = rect.bottom + 8;
+      tip.style.width = tipW + "px";
+      tip.style.left = left + "px";
+      tip.style.top = top + "px";
+      requestAnimationFrame(() => {
+        if (top + tip.offsetHeight > window.innerHeight - 12) {
+          tip.style.top = Math.max(12, rect.top - tip.offsetHeight - 8) + "px";
+        }
+      });
+    }
+    function hideTip() {
+      tip.classList.remove("show");
+    }
+    document.getElementById("tipClose").onclick = (e) => {
+      e.stopPropagation();
+      hideTip();
+    };
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".jargon") && !e.target.closest("#tip")) hideTip();
+    });
+
+    function openRewindModal(historyIndex) {
+      if (historyIndex < 0 || historyIndex >= state.history.length) return;
+      if (state.locked && !state.finished) return;
+      const h = state.history[historyIndex];
+      state.pendingRewindIndex = historyIndex;
+      pauseTimer();
+      document.getElementById("rewindMsg").textContent =
+        `Rewrite from ${h.stop || h.nodeId}? “${h.label.slice(0, 80)}” and after will be unremembered. Skills/flags after that point clear.`;
+      document.getElementById("rewindBg").classList.add("open");
+      document.getElementById("rewindModal").classList.add("open");
+    }
+    function closeRewindModal() {
+      document.getElementById("rewindBg").classList.remove("open");
+      document.getElementById("rewindModal").classList.remove("open");
+      state.pendingRewindIndex = null;
+      resumeTimer();
+    }
+    function applyRewind(historyIndex) {
+      const target = state.history[historyIndex];
+      if (!target) return;
+      state.history = state.history.slice(0, historyIndex);
+      recomputeFromHistory();
+      state.nodeId = target.nodeId;
+      state.finished = false;
+      state.locked = false;
+      state.lastChoice = null;
+      state.rewindCount++;
+      state.timelineId = "t" + state.rewindCount;
+      state.recentLines = [];
+      closeRewindModal();
+      if (state.started && !state.timerId && state.deadline) {
+        state.timerId = setInterval(paintTimer, 250);
+      }
+      showNode({ rewindFlash: target.stop || target.nodeId });
+    }
+
+    function renderCrumbs() {
+      const list = document.getElementById("crumbsList");
+      document.getElementById("scData").textContent = String(state.scores.data);
+      document.getElementById("scGuess").textContent = String(state.scores.guess);
+      document.getElementById("scAct").textContent = String(state.scores.act);
+      document.getElementById("scSkills").textContent = skillsCount() + "/6";
+
+      if (!state.history.length) {
+        list.innerHTML =
+          `<div class="crumb-empty">Choices become breadcrumbs.<br/><br/>` +
+          `Watch <span style="color:#9dffb0">data</span>, ` +
+          `<span style="color:var(--amber)">guess</span>, ` +
+          `<span style="color:var(--red)">act</span> — ` +
+          `and which <span style="color:var(--skill)">skill</span> each stop trains.</div>`;
+        return;
+      }
+      const cur = NODES[state.nodeId];
+      let html = state.history
+        .map((p, idx) => {
+          const st = stanceFor(p);
+          const shortLabel = p.label.length > 60 ? p.label.slice(0, 58) + "…" : p.label;
+          const canRewind = !state.locked || state.finished;
+          return (
+            `<div class="crumb stance-${st.id}" title="${escapeHtml(st.hint)}">` +
+            `<div class="stop">${escapeHtml(p.stop || p.nodeId)} · step ${idx + 1}</div>` +
+            `<div class="title">${escapeHtml(shortLabel)}</div>` +
+            `<div class="tags">` +
+            `<span class="tag tag-move">${escapeHtml(p.move || "?")}</span>` +
+            `<span class="tag ${integrityClass(p.integrity)}">${escapeHtml(integrityLabel(p.integrity))}</span>` +
+            `</div>` +
+            `<div class="stance ${st.id}">${escapeHtml(st.short)} · ${escapeHtml(st.label)}</div>` +
+            (p.skillProve ? `<div class="skill-tag">SKILL · ${escapeHtml(p.skillProve)}</div>` : "") +
+            (canRewind
+              ? `<button type="button" class="rewind-btn" data-rewind="${idx}">↩ Change decision</button>`
+              : "") +
+            `</div>`
+          );
+        })
+        .join("");
+      if (cur && !state.finished && !state.locked) {
+        html +=
+          `<div class="crumb current stance-meta">` +
+          `<div class="stop">Now · ${escapeHtml(cur.stop)}</div>` +
+          `<div class="title">${escapeHtml(cur.room)}</div>` +
+          `<div class="stance meta">YOU ARE HERE · ${escapeHtml(state.timelineId)}</div>` +
+          `</div>`;
+      }
+      list.innerHTML = html;
+      list.querySelectorAll("[data-rewind]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openRewindModal(Number(btn.getAttribute("data-rewind")));
+        });
+      });
+      list.scrollTop = list.scrollHeight;
+    }
+
+    function showNode(opts) {
+      opts = opts || {};
+      state.locked = false;
+      state.finished = false;
+      hideTip();
+      clearLog();
+      choicesEl.innerHTML = "";
+      updateStatus();
+      renderCrumbs();
+      const b = NODES[state.nodeId];
+      if (!b) {
+        line("Unknown node " + state.nodeId, "miss");
+        return;
+      }
+      if (opts.rewindFlash) {
+        line(`Flux capacitor: back to ${opts.rewindFlash}. Future unremembered. Skills after that point reset.`, "amber");
+      }
+      if (b.learn) line("Learn: " + b.learn, "learn");
+      b.lines.forEach((L) => line(L.x, L.t));
+      line("What do you do?", "sys");
+
+      b.choices.forEach((c) => {
+        const integrity = c.integrity || "non-destructive";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className =
+          "choice" +
+          (integrity === "destructive"
+            ? " integrity-destructive"
+            : integrity === "state-changing"
+              ? " integrity-state-changing"
+              : "");
+        const eli5 = c.eli5 ? `<span class="eli5">${withJargon(c.eli5)}</span>` : "";
+        btn.innerHTML =
+          `<span class="key">${c.key}</span>` +
+          `<span class="label">` +
+          choiceTagsHtml(c) +
+          `<span class="label-main">${withJargon(c.label)}</span>` +
+          eli5 +
+          `</span>`;
+        btn.onclick = () => pick(c);
+        choicesEl.appendChild(btn);
+        bindJargon(btn);
+      });
+    }
+
+    function pick(c) {
+      if (state.locked || state.finished) return;
+      state.locked = true;
+      if (!state.started) {
+        state.started = true;
+        startTimer();
+      }
+
+      if (c.rewindTo) {
+        const idx = state.history.map((h) => h.nodeId).lastIndexOf(c.rewindTo);
+        line(`> ${c.label}`, "you");
+        line(c.reply || "Flux capacitor…", "amber");
+        setTimeout(() => {
+          if (idx >= 0) applyRewind(idx);
+          else {
+            state.nodeId = c.rewindTo;
+            state.locked = false;
+            state.rewindCount++;
+            showNode({ rewindFlash: (NODES[c.rewindTo] || {}).stop });
+          }
+        }, 450);
+        return;
+      }
+
+      const node = NODES[state.nodeId];
+      const entry = {
+        nodeId: state.nodeId,
+        stop: node ? node.stop : state.nodeId,
+        choiceKey: c.key,
+        label: c.label,
+        move: c.move || "Observe",
+        integrity: c.integrity || "non-destructive",
+        golden: !!c.golden,
+        skillProve: c.skillProve || null,
+        flagsDelta: c.flagsDelta || null,
+        timePenaltySec: c.timePenaltySec || 0,
+        ending: c.ending || null,
+      };
+      state.history.push(entry);
+      recomputeFromHistory();
+      if (c.timePenaltySec) applyTimePenalty(c.timePenaltySec);
+      renderCrumbs();
+      renderSkills();
+
+      [...choicesEl.querySelectorAll("button")].forEach((b) => {
+        b.disabled = true;
+      });
+
+      state.lastChoice = { ...c };
+      const st = stanceFor(entry);
+      line(`> ${c.label}`, "you");
+      line(
+        `[${st.short}] ${st.label} · ${entry.move} · ${integrityLabel(entry.integrity)}` +
+          (c.skillProve ? ` · skill ${c.skillProve}` : ""),
+        "sys"
+      );
+      line(c.reply, c.golden ? "ok" : "miss");
+
+      if (c.ending || c.next === null || (node && node.terminal && !c.next)) {
+        setTimeout(() => finish(c), 700);
+        return;
+      }
+      setTimeout(() => {
+        state.nodeId = c.next;
+        showNode();
+      }, 1050);
+    }
+
+    function resetRun() {
+      if (state.timerId) clearInterval(state.timerId);
+      Object.assign(state, {
+        timelineId: "t0",
+        nodeId: TOUR.startNode,
+        history: [],
+        flags: EMPTY_FLAGS(),
+        scores: { data: 0, guess: 0, act: 0, goldenSteps: 0 },
+        skillsProven: {},
+        locked: false,
+        finished: false,
+        started: false,
+        deadline: null,
+        timerId: null,
+        timerPausedAt: null,
+        penaltySec: 0,
+        rewindCount: 0,
+        recentLines: [],
+        lastChoice: null,
+        pendingRewindIndex: null,
+        moveCounts: {},
+        integrityCounts: { "non-destructive": 0, destructive: 0, "state-changing": 0 },
+      });
+      document.getElementById("timer").textContent = "4:00";
+      document.getElementById("timer").className = "timer";
+      showNode();
+    }
+
+    function finish(lastChoice) {
+      hideTip();
+      clearLog();
+      choicesEl.innerHTML = "";
+      state.finished = true;
+      state.locked = false;
+      if (state.timerId) {
+        clearInterval(state.timerId);
+        state.timerId = null;
+      }
+      document.getElementById("stopName").textContent = "TERMINUS";
+      document.getElementById("roomTag").textContent = "// skills debrief";
+      document.getElementById("learnText").textContent =
+        "Reflect: which skill will you reuse on the next live queue?";
+      renderTrack();
+      renderSkills();
+
+      const endingKey = (lastChoice && lastChoice.ending) || "tp_full";
+      const badge = computeBadge(endingKey);
+      const stars = "★".repeat(badge.stars) + "☆".repeat(Math.max(0, 3 - badge.stars));
+
+      line("> tour --complete --debrief", "sys");
+      line("Investigation: " + TOUR.title, "narr");
+      line(lastChoice.reply || "Done.", "ok");
+
+      const badgeEl = document.createElement("div");
+      badgeEl.className = "badge-pill";
+      badgeEl.textContent = `${stars}  ${badge.label}`;
+      logEl.appendChild(badgeEl);
+
+      flagLines().forEach((t) => line(t, hasStains() ? "miss" : "ok"));
+
+      if (endingKey === "tp_full") {
+        line("disposition = malicious_true_positive · isolate = human-path only · domain = block/watch", "amber");
+      } else if (endingKey === "watch") {
+        line("disposition = watch_24h · weaker call for this multi-source stack", "amber");
+      } else {
+        line("disposition = tp-ish · process incomplete (ownership)", "amber");
+      }
+
+      const reflect = document.createElement("div");
+      reflect.className = "reflect";
+      reflect.innerHTML =
+        "<strong>Reflection (say it out loud)</strong>" +
+        "1) How is this different from Host Sweep → public DNS FP?<br/>" +
+        "2) Why is the remote IP not the C2?<br/>" +
+        "3) Name two human actions before any isolate.";
+      logEl.appendChild(reflect);
+
+      renderCrumbs();
+
+      const tally = document.createElement("div");
+      tally.className = "tally";
+      tally.innerHTML =
+        `<div class="cell nd"><b>${state.scores.data}</b><span>Following data</span></div>` +
+        `<div class="cell sc"><b>${state.scores.guess}</b><span>Guessing</span></div>` +
+        `<div class="cell d"><b>${state.scores.act}</b><span>Acting</span></div>` +
+        `<div class="cell sk"><b>${skillsCount()}/6</b><span>Skills proven<br/>rewinds: ${state.rewindCount}</span></div>`;
+      logEl.appendChild(tally);
+
+      const box = document.createElement("div");
+      box.className = "end-box";
+      box.innerHTML =
+        "<h2>Method you should keep</h2><ul>" +
+        "<li>" + withJargon("FILTER: under_investigation TPs hide under ZGrab and Large Upload noise") + "</li>" +
+        "<li>" + withJargon("READ: DNS VA is not C2 — IoC is the query name") + "</li>" +
+        "<li>" + withJargon("SCOPE: sole-source malware DNS elevates priority") + "</li>" +
+        "<li>" + withJargon("ID: agentless NOC Mac — private owner confirm") + "</li>" +
+        "<li>" + withJargon("CORROBORATE: TI + volume can beat IPS silence") + "</li>" +
+        "<li>" + withJargon("DECIDE: true positive with residual uncertainty + human actions") + "</li>" +
+        "</ul>";
+      logEl.appendChild(box);
+      bindJargon(box);
+
+      const again = document.createElement("button");
+      again.className = "choice";
+      again.innerHTML = `<span class="key">1</span><span class="label">Ride again (try a messy path + rewind)</span>`;
+      again.onclick = () => resetRun();
+      choicesEl.appendChild(again);
+
+      const fp = document.createElement("button");
+      fp.className = "choice";
+      fp.innerHTML = `<span class="key">2</span><span class="label">Contrast: open Host Sweep FP tour (:3106)</span>`;
+      fp.onclick = () => {
+        window.location.href = "http://localhost:3106/";
+      };
+      choicesEl.appendChild(fp);
+
+      const hub = document.createElement("button");
+      hub.className = "choice";
+      hub.innerHTML = `<span class="key">3</span><span class="label">Back to mock hub</span>`;
+      hub.onclick = () => {
+        window.location.href = "http://localhost:3100/";
+      };
+      choicesEl.appendChild(hub);
+    }
+
+    document.getElementById("rewindConfirm").onclick = () => {
+      if (state.pendingRewindIndex == null) return;
+      applyRewind(state.pendingRewindIndex);
+    };
+    document.getElementById("rewindCancel").onclick = () => closeRewindModal();
+    document.getElementById("rewindBg").onclick = () => closeRewindModal();
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        hideTip();
+        closeRewindModal();
+        return;
+      }
+      if (document.getElementById("rewindModal").classList.contains("open")) {
+        if (e.key === "Enter") document.getElementById("rewindConfirm").click();
+        return;
+      }
+      if ((e.key === "r" || e.key === "R") && state.history.length) {
+        e.preventDefault();
+        openRewindModal(state.history.length - 1);
+        return;
+      }
+      if (state.locked && !state.finished) return;
+      if (e.key === "1" || e.key === "2" || e.key === "3") {
+        const btn = [...choicesEl.querySelectorAll("button")].find(
+          (b) => b.querySelector(".key")?.textContent === e.key
+        );
+        if (btn && !btn.disabled) btn.click();
+      }
+    });
+
+    showNode();
+  </script>
+</body>
+</html>

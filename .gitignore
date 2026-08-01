@@ -49,3 +49,6 @@ tests/python/.venv/
 bench/results/*.json
 
 bench/prompt_eval/results/*.json
+
+# Shadow the Hunter operator vault (never commit originals)
+docs/mocks/shadow-packages/**/redaction-map.json

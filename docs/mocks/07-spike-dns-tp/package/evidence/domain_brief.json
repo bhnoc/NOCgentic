@@ -1,0 +1,21 @@
+{
+  "domain": "{{DOMAIN_IOC}}",
+  "hours": 72,
+  "domain_scope": {
+    "rows": 1,
+    "sole_source": true,
+    "preview": [
+      {
+        "action_local_ip": "{{HOST_A}}",
+        "dns_query_name": "{{DOMAIN_IOC}}",
+        "hits": 697
+      }
+    ]
+  },
+  "domain_events_sample": {
+    "rows_returned": 50,
+    "shape": "Repeated STORY events: {{HOST_A}} → {{DNS_VA}}:53 query_name={{DOMAIN_IOC}}",
+    "beacon_note": "High volume to single IoC name via resolver — beacon-shaped even if answers sinkholed"
+  },
+  "teaching_point": "Sole-source malware domain with hundreds of hits elevates priority over shared SaaS domains."
+}

@@ -1,0 +1,585 @@
+{
+  "slice": "2026-07-31",
+  "source": "data/local-sample/csv",
+  "sampleRows": {
+    "notice": 500,
+    "suricata": 2000,
+    "conn": 2000,
+    "dns": 2000,
+    "ssl": 1000
+  },
+  "noticeTop": [
+    {
+      "note": "SSL::Invalid_Server_Cert",
+      "n": 476
+    },
+    {
+      "note": "SSH::Interactive_Keystrokes",
+      "n": 8
+    },
+    {
+      "note": "Viz::CustomCrypto",
+      "n": 8
+    },
+    {
+      "note": "AWSStorageExfil::Possible_Exfiltration_To_AWS_S3",
+      "n": 3
+    },
+    {
+      "note": "PacketFilter::Dropped_Packets",
+      "n": 1
+    },
+    {
+      "note": "AWSServiceEnum::AWS_Web_Console_Usage",
+      "n": 1
+    },
+    {
+      "note": "SSL::Certificate_Expired",
+      "n": 1
+    },
+    {
+      "note": "Scan::Address_Scan",
+      "n": 1
+    },
+    {
+      "note": "AWSServiceEnum::Possible_AWS_Service_Enumeration",
+      "n": 1
+    }
+  ],
+  "sampleNotices": [
+    {
+      "ts": "2026-07-31 15:55:50",
+      "note": "SSH::Interactive_Keystrokes",
+      "msg": "The client has sent keystrokes to the server.",
+      "orig": "10.220.250.31",
+      "resp": "10.220.199.131",
+      "sev": "notification"
+    },
+    {
+      "ts": "2026-07-31 01:27:38",
+      "note": "Viz::CustomCrypto",
+      "msg": "Service appears to employ custom/prenegotiated crypto",
+      "orig": "172.16.16.16",
+      "resp": "208.67.220.220",
+      "sev": "error"
+    },
+    {
+      "ts": "2026-07-31 14:36:54",
+      "note": "AWSStorageExfil::Possible_Exfiltration_To_AWS_S3",
+      "msg": "Host 10.220.251.115 sent more than the alert threshold of 100MB to AWS S3 bucket us-std-00001 in < 1.0 min",
+      "orig": "",
+      "resp": "",
+      "sev": "informational (default)"
+    },
+    {
+      "ts": "2026-07-31 18:11:33",
+      "note": "PacketFilter::Dropped_Packets",
+      "msg": "55936 packets dropped after filtering, 2719809 received, 2663865 on link",
+      "orig": "",
+      "resp": "",
+      "sev": "informational"
+    },
+    {
+      "ts": "2026-07-31 17:34:10",
+      "note": "AWSServiceEnum::AWS_Web_Console_Usage",
+      "msg": "Host is being used to interact with the AWS web console.",
+      "orig": "",
+      "resp": "",
+      "sev": "informational (default)"
+    },
+    {
+      "ts": "2026-07-31 17:02:59",
+      "note": "SSL::Certificate_Expired",
+      "msg": "Certificate CN=piece expired at 2025-07-15-15:13:05.000000000",
+      "orig": "10.220.250.66",
+      "resp": "10.220.199.123",
+      "sev": "error"
+    },
+    {
+      "ts": "2026-07-31 19:54:46",
+      "note": "Scan::Address_Scan",
+      "msg": "10.220.251.28 scanned at least 249 unique hosts on ports 443/tcp, 8900/tcp in 6m0s",
+      "orig": "",
+      "resp": "",
+      "sev": "error"
+    },
+    {
+      "ts": "2026-07-31 17:49:30",
+      "note": "AWSStorageExfil::Possible_Exfiltration_To_AWS_S3",
+      "msg": "Host 10.220.198.37 sent more than the alert threshold of 100MB to AWS S3 bucket us-std-00001 in < 1.0 min",
+      "orig": "",
+      "resp": "",
+      "sev": "informational (default)"
+    },
+    {
+      "ts": "2026-07-31 17:12:36",
+      "note": "AWSServiceEnum::Possible_AWS_Service_Enumeration",
+      "msg": "Host appears to be enumerating AWS API service endpoints (5 services across 3 region(s) within the last 1.0 min).",
+      "orig": "",
+      "resp": "",
+      "sev": "critical"
+    }
+  ],
+  "invalidCertHosts": [
+    [
+      "10.220.251.76",
+      33
+    ],
+    [
+      "192.168.132.42",
+      31
+    ],
+    [
+      "10.220.198.41",
+      23
+    ],
+    [
+      "10.220.250.203",
+      22
+    ],
+    [
+      "10.220.198.11",
+      19
+    ],
+    [
+      "10.220.250.35",
+      17
+    ],
+    [
+      "10.220.250.67",
+      16
+    ],
+    [
+      "10.220.198.10",
+      15
+    ]
+  ],
+  "invalidCertDests": [
+    [
+      "44.231.2.184",
+      76
+    ],
+    [
+      "146.112.61.115",
+      41
+    ],
+    [
+      "165.225.216.47",
+      10
+    ],
+    [
+      "165.225.216.45",
+      7
+    ],
+    [
+      "52.35.186.20",
+      7
+    ],
+    [
+      "165.225.216.44",
+      6
+    ]
+  ],
+  "invalidCertCount": 476,
+  "suricataBySev": {
+    "2": 690,
+    "1": 476,
+    "3": 834
+  },
+  "suricataTopSigs": [
+    [
+      "ETPRO INFO OpenDNS DNSCrypt",
+      475
+    ],
+    [
+      "ET INFO HTTP traffic on port 443 (CONNECT)",
+      386
+    ],
+    [
+      "ET INFO TLS Handshake Failure",
+      292
+    ],
+    [
+      "ET FILE_SHARING File Hosting Service Domain Domain in DNS Lookup (files .pythonhosted .org)",
+      262
+    ],
+    [
+      "ET INFO Observed DNS Query to VSCode Hosting Domain (vscode .download .prss .microsoft .com)",
+      219
+    ],
+    [
+      "ET INFO Go-http-client User-Agent Observed Outbound",
+      104
+    ],
+    [
+      "ET INFO Observed DNS Over HTTPS Domain (dns .quad9 .net in TLS SNI)",
+      90
+    ],
+    [
+      "ET INFO Remote Monitoring and Management (RMM) Tool in TLS SNI (namequery .com)",
+      41
+    ]
+  ],
+  "suricataSamples": [
+    {
+      "ts": "2026-07-31 19:19:59",
+      "sig": "ET INFO HTTP traffic on port 443 (CONNECT)",
+      "cat": "Potentially Bad Traffic",
+      "sev": "2",
+      "orig": "10.220.250.4",
+      "resp": "165.225.216.15"
+    },
+    {
+      "ts": "2026-07-31 19:20:11",
+      "sig": "ET INFO TLS Handshake Failure",
+      "cat": "Potentially Bad Traffic",
+      "sev": "2",
+      "orig": "10.220.13.181",
+      "resp": "146.112.61.115"
+    },
+    {
+      "ts": "2026-07-31 19:20:23",
+      "sig": "ET FILE_SHARING File Hosting Service Domain Domain in DNS Lookup (files .pythonhosted .org)",
+      "cat": "Misc activity",
+      "sev": "3",
+      "orig": "10.220.199.121",
+      "resp": "172.16.16.16"
+    },
+    {
+      "ts": "2026-07-31 19:21:27",
+      "sig": "ET INFO Go-http-client User-Agent Observed Outbound",
+      "cat": "Misc activity",
+      "sev": "3",
+      "orig": "10.220.199.121",
+      "resp": "35.244.195.164"
+    },
+    {
+      "ts": "2026-07-31 19:20:26",
+      "sig": "ET INFO Observed DNS Over HTTPS Domain (dns .quad9 .net in TLS SNI)",
+      "cat": "Misc activity",
+      "sev": "3",
+      "orig": "10.220.251.50",
+      "resp": "9.9.9.9"
+    }
+  ],
+  "topOrig": [
+    [
+      "172.16.16.16",
+      560
+    ],
+    [
+      "10.220.198.26",
+      146
+    ],
+    [
+      "10.220.199.122",
+      108
+    ],
+    [
+      "10.220.199.121",
+      107
+    ],
+    [
+      "10.220.123.99",
+      84
+    ],
+    [
+      "10.220.250.56",
+      55
+    ],
+    [
+      "10.220.199.123",
+      51
+    ],
+    [
+      "10.220.250.75",
+      49
+    ]
+  ],
+  "topResp": [
+    [
+      "172.16.16.16",
+      540
+    ],
+    [
+      "208.67.222.222",
+      309
+    ],
+    [
+      "208.67.220.220",
+      296
+    ],
+    [
+      "52.104.2.25",
+      54
+    ],
+    [
+      "54.185.245.223",
+      49
+    ],
+    [
+      "172.16.16.17",
+      45
+    ]
+  ],
+  "topByBytes": [
+    {
+      "host": "10.220.198.48",
+      "conns": 10,
+      "orig": 55662,
+      "resp": 11090250
+    },
+    {
+      "host": "10.220.198.11",
+      "conns": 7,
+      "orig": 532252,
+      "resp": 1311550
+    },
+    {
+      "host": "10.220.199.191",
+      "conns": 1,
+      "orig": 1046223,
+      "resp": 13788
+    },
+    {
+      "host": "10.220.251.76",
+      "conns": 14,
+      "orig": 21572,
+      "resp": 972617
+    },
+    {
+      "host": "10.220.250.35",
+      "conns": 31,
+      "orig": 30053,
+      "resp": 626041
+    },
+    {
+      "host": "10.220.250.66",
+      "conns": 37,
+      "orig": 117962,
+      "resp": 532774
+    },
+    {
+      "host": "10.220.251.68",
+      "conns": 4,
+      "orig": 379380,
+      "resp": 24509
+    },
+    {
+      "host": "172.16.16.16",
+      "conns": 560,
+      "orig": 176872,
+      "resp": 181393
+    }
+  ],
+  "topDns": [
+    [
+      "trycorelight.com",
+      62
+    ],
+    [
+      "proxmox.lab.reversethrottle.com",
+      41
+    ],
+    [
+      "api.sendgrid.com",
+      19
+    ],
+    [
+      "mask.icloud.com",
+      18
+    ],
+    [
+      "doh.opendns.com",
+      17
+    ],
+    [
+      "ec2-52-206-101-64.compute-1.amazonaws.com",
+      17
+    ],
+    [
+      "debug.opendns.com",
+      16
+    ],
+    [
+      "dfw18.hosted-us.bcld.webex.com",
+      13
+    ],
+    [
+      "teams.events.data.microsoft.com",
+      10
+    ],
+    [
+      "eu-v20.events.data.microsoft.com",
+      9
+    ],
+    [
+      "s0200.urlcloud.paloaltonetworks.com",
+      9
+    ],
+    [
+      "ntp.ubuntu.com",
+      8
+    ]
+  ],
+  "dnsRcodes": {
+    "NOERROR": 1331,
+    "NXDOMAIN": 244,
+    "SERVFAIL": 4,
+    "FORMERR": 28
+  },
+  "topSni": [
+    [
+      "gateway.icloud.com",
+      50
+    ],
+    [
+      "static.ui.com",
+      49
+    ],
+    [
+      "mask.icloud.com",
+      38
+    ],
+    [
+      "bhnoc.jamfcloud.com",
+      34
+    ],
+    [
+      "bag.itunes.apple.com",
+      33
+    ],
+    [
+      "ch-bh.traps.paloaltonetworks.com",
+      29
+    ],
+    [
+      "calendar.google.com",
+      20
+    ],
+    [
+      "gdmf.apple.com",
+      15
+    ],
+    [
+      "app-site-association.cdn-apple.com",
+      15
+    ],
+    [
+      "unleash.codeium.com",
+      14
+    ]
+  ],
+  "quests": [
+    {
+      "ts": "2026-07-31 17:00:00",
+      "title": "SSL::Invalid_Server_Cert (cluster)",
+      "msg": "Cluster of 476 invalid-cert notices; top origin 10.220.251.76; top dest 44.231.2.184",
+      "orig": "10.220.251.76",
+      "resp": "44.231.2.184",
+      "sev": "error",
+      "source": "notice"
+    },
+    {
+      "ts": "2026-07-31 15:55:50",
+      "title": "SSH::Interactive_Keystrokes",
+      "msg": "The client has sent keystrokes to the server.",
+      "orig": "10.220.250.31",
+      "resp": "10.220.199.131",
+      "sev": "notification",
+      "source": "notice"
+    },
+    {
+      "ts": "2026-07-31 14:36:54",
+      "title": "AWSStorageExfil::Possible_Exfiltration_To_AWS_S3",
+      "msg": "Host 10.220.251.115 sent more than the alert threshold of 100MB to AWS S3 bucket us-std-00001 in < 1.0 min",
+      "orig": "",
+      "resp": "",
+      "sev": "informational (default)",
+      "source": "notice"
+    },
+    {
+      "ts": "2026-07-31 17:34:10",
+      "title": "AWSServiceEnum::AWS_Web_Console_Usage",
+      "msg": "Host is being used to interact with the AWS web console.",
+      "orig": "",
+      "resp": "",
+      "sev": "informational (default)",
+      "source": "notice"
+    },
+    {
+      "ts": "2026-07-31 17:02:59",
+      "title": "SSL::Certificate_Expired",
+      "msg": "Certificate CN=piece expired at 2025-07-15-15:13:05.000000000",
+      "orig": "10.220.250.66",
+      "resp": "10.220.199.123",
+      "sev": "error",
+      "source": "notice"
+    },
+    {
+      "ts": "2026-07-31 16:05:55",
+      "title": "SSH::Interactive_Keystrokes",
+      "msg": "The client has sent keystrokes to the server.",
+      "orig": "10.220.250.4",
+      "resp": "10.220.154.12",
+      "sev": "notification",
+      "source": "notice"
+    },
+    {
+      "ts": "2026-07-31 16:00:25",
+      "title": "SSH::Interactive_Keystrokes",
+      "msg": "The client has sent keystrokes to the server.",
+      "orig": "10.220.250.4",
+      "resp": "10.220.154.11",
+      "sev": "notification",
+      "source": "notice"
+    },
+    {
+      "ts": "2026-07-31 19:19:59",
+      "title": "ET INFO HTTP traffic on port 443 (CONNECT)",
+      "msg": "Potentially Bad Traffic",
+      "orig": "10.220.250.4",
+      "resp": "165.225.216.15",
+      "sev": "sev2",
+      "source": "suricata"
+    },
+    {
+      "ts": "2026-07-31 19:20:11",
+      "title": "ET INFO TLS Handshake Failure",
+      "msg": "Potentially Bad Traffic",
+      "orig": "10.220.13.181",
+      "resp": "146.112.61.115",
+      "sev": "sev2",
+      "source": "suricata"
+    },
+    {
+      "ts": "2026-07-31 19:20:23",
+      "title": "ET FILE_SHARING File Hosting Service Domain Domain in DNS Lookup (files .pythonhosted .org)",
+      "msg": "Misc activity",
+      "orig": "10.220.199.121",
+      "resp": "172.16.16.16",
+      "sev": "sev3",
+      "source": "suricata"
+    }
+  ],
+  "missions": [
+    {
+      "id": "silent-beacon",
+      "name": "SILENT BEACON",
+      "blurb": "High SSL cert failures + odd outbound patterns",
+      "seed": "SSL::Invalid_Server_Cert"
+    },
+    {
+      "id": "cloud-abuse",
+      "name": "CLOUD ABUSE",
+      "blurb": "S3 volume threshold + AWS console usage notices",
+      "seed": "AWSStorageExfil"
+    },
+    {
+      "id": "recon-sweep",
+      "name": "RECON SWEEP",
+      "blurb": "Address scan across 443/8900 in a tight window",
+      "seed": "Scan::Address_Scan"
+    }
+  ]
+}

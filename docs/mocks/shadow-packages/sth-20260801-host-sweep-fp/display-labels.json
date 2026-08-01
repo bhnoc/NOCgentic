@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "sth-20260801-host-sweep-fp",
+  "note": "Learner-safe labels only — no originals. Safe to load in UI mocks.",
+  "labels": {
+    "{{CASE_PRIMARY}}": "case-host-sweep",
+    "{{HOST_A}}": "host-primary-wifi",
+    "{{MAC_A}}": "mac-privacy-wifi",
+    "{{HOSTNAME_A}}": "hostname-generic-apple",
+    "{{DNS_GOOGLE}}": "public-dns-google",
+    "{{DNS_QUAD9}}": "public-dns-quad9",
+    "{{DNS_QUAD9_ALT}}": "public-dns-quad9-anycast",
+    "{{INV_ID}}": "investigation-workspace",
+    "{{FW_NAME}}": "ngfw-device",
+    "{{ZONE_FROM}}": "zone-wifi",
+    "{{ZONE_TO}}": "zone-dns",
+    "{{CASE_RELATED_1}}": "case-related-noise-1",
+    "{{CASE_RELATED_2}}": "case-related-noise-2",
+    "{{CASE_RELATED_3}}": "case-related-noise-3",
+    "{{CASE_RELATED_4}}": "case-related-noise-4",
+    "{{CASE_RELATED_5}}": "case-related-noise-5"
+  }
+}

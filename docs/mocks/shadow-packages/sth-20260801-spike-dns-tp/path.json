@@ -1,0 +1,172 @@
+{
+  "schema_version": "1.0.0",
+  "primary_question": "What is the most credible live true positive right now, and what multi-source evidence supports acting on it without reckless isolation?",
+  "learning_outcomes": [
+    "Filter noisy new-queue tops (ZGrab, Large Upload) and still find under_investigation TPs",
+    "Read Spike DNS cases: host→DNS VA is not the same as host→C2 IP",
+    "Scope domain IoCs: sole-source + volume",
+    "Identify agentless NOC clients without name-and-shame",
+    "Corroborate TI + DNS volume when IPS has no malware signature on the domain",
+    "Decide TP with human next steps and residual uncertainty"
+  ],
+  "steps": [
+    {
+      "id": "step-01-triage",
+      "order": 1,
+      "skill": "FILTER",
+      "title": "Triage under noise — find the live TP",
+      "learner_objective": "Explain why the default new top (Exchange ZGrab / Large Upload) is usually noise, and open {{CASE_PRIMARY}} under investigation.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex triage --top 15",
+          "template": "Noise-dominated new queue"
+        },
+        {
+          "type": "cli",
+          "command": "cortex investigate incident {{CASE_PRIMARY}} --hours 72 --with-host-identify",
+          "template": "Open the malware DNS case"
+        }
+      ],
+      "evidence_types": ["incident", "triage"],
+      "soft_success": { "min_pins": 1 },
+      "hints_learner_safe": [
+        "Critical severity on Exchange RCE at public OWA is often inbound scanners (ZGrab).",
+        "Large Upload is a known venue FP class.",
+        "Real TPs often sit in under_investigation, not the loudest new card."
+      ],
+      "source_artifacts": [
+        "raw/triage_ranked.json",
+        "notes.md"
+      ]
+    },
+    {
+      "id": "step-02-case",
+      "order": 2,
+      "skill": "READ",
+      "title": "Read Spike DNS Malware Traffic",
+      "learner_objective": "Extract source host, domain IoC, remote DNS VA, category, and why the alert is Exfiltration-shaped.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex investigate incident {{CASE_PRIMARY}} --hours 72",
+          "template": "Incident + findings"
+        }
+      ],
+      "evidence_types": ["incident", "alert", "findings"],
+      "soft_success": { "min_pins": 2 },
+      "hints_learner_safe": [
+        "action_remote_ip is the venue DNS VA on port 53 — not the malware C2 A-record.",
+        "action_external_hostname carries the malicious domain."
+      ],
+      "source_artifacts": [
+        "cases/{{CASE_PRIMARY}}/findings.json",
+        "cases/{{CASE_PRIMARY}}/incident.json",
+        "shadow_export/evidence/findings_brief.json"
+      ]
+    },
+    {
+      "id": "step-03-enrich-domain",
+      "order": 3,
+      "skill": "SCOPE",
+      "title": "Enrich the domain IoC",
+      "learner_objective": "Show sole-source: one internal host, high hit count for {{DOMAIN_IOC}}.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex enrich domain {{DOMAIN_IOC}} --hours 72",
+          "template": "domain-scope + domain-events"
+        }
+      ],
+      "evidence_types": ["enrich", "dns", "xql"],
+      "soft_success": { "min_pins": 1 },
+      "hints_learner_safe": [
+        "Sole-source malware DNS is higher priority than shared SaaS domains.",
+        "Hundreds of hits in 72h is beacon-shaped even if answers are NXDOMAIN/sinkholed."
+      ],
+      "source_artifacts": [
+        "issues/ioc-domain-{{DOMAIN_IOC}}/enrichment.json",
+        "shadow_export/evidence/domain_brief.json"
+      ]
+    },
+    {
+      "id": "step-04-identity",
+      "order": 4,
+      "skill": "ID",
+      "title": "Identify the sole-source host",
+      "learner_objective": "Build agentless identity: NOC WiFi, Mac, operator SaaS profile, privacy MAC — confirm owner offline.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex host identify {{HOST_A}} --deep --with-related --hours 72",
+          "template": "Deep identify + related"
+        }
+      ],
+      "evidence_types": ["host_identity", "dns"],
+      "soft_success": { "min_pins": 2 },
+      "hints_learner_safe": [
+        "NOC WiFi + Mac + Slack/Anthropic/VS Code = operator-shaped device.",
+        "mDNS hostnames are not HR tickets — confirm ownership privately."
+      ],
+      "source_artifacts": [
+        "issues/host-{{HOST_A}}/identity.json",
+        "issues/host-{{HOST_A}}/related.json",
+        "shadow_export/evidence/identity_brief.json"
+      ]
+    },
+    {
+      "id": "step-05-corroborate",
+      "order": 5,
+      "skill": "CORROBORATE",
+      "title": "Corroborate volume + TI (accept IPS gap)",
+      "learner_objective": "Explain that detection is DNS volume + multi-vendor TI; NGFW threats may be informational only.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex xql recipe host-threats --ip {{HOST_A}} --hours 72",
+          "template": "Threat hits (expect TLS/ECH noise)"
+        },
+        {
+          "type": "read",
+          "command": "domain-events sample",
+          "template": "Repeated queries host → DNS VA :53 for IoC name"
+        }
+      ],
+      "evidence_types": ["xql", "ti", "dns"],
+      "soft_success": { "min_pins": 2 },
+      "hints_learner_safe": [
+        "No malware IPS signature on the domain does not cancel Unit42/VT/Google TI + spike volume.",
+        "Related inventory may be empty — correlation case is still valid."
+      ],
+      "source_artifacts": [
+        "xql/*domain-scope*_inv.json",
+        "xql/*domain-events*_inv.json",
+        "shadow_export/evidence/domain_brief.json"
+      ]
+    },
+    {
+      "id": "step-06-disposition",
+      "order": 6,
+      "skill": "DECIDE",
+      "title": "Disposition: true positive + human actions",
+      "learner_objective": "Write TP disposition with confidence split (activity real vs active C2 confirmed) and human next steps.",
+      "suggested_actions": [
+        {
+          "type": "write",
+          "command": "notes.md disposition",
+          "template": "TP narrative + severity + confidence + actions"
+        }
+      ],
+      "evidence_types": ["notes", "findings"],
+      "soft_success": { "min_pins": 1 },
+      "hints_learner_safe": [
+        "Recommend: confirm owner, block/watch domain, label ground-truth TP.",
+        "Do not auto-isolate agentless without human ownership path."
+      ],
+      "source_artifacts": [
+        "notes.md",
+        "shadow_export/HUNTER_NARRATIVE.md"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "ranked": [
+    {
+      "incident_id": "{{CASE_PRIMARY}}",
+      "name": "'SCAN: Host Sweep' along with 1 other issue",
+      "rank": 1,
+      "reasons": [
+        "sev=medium(+15)",
+        "new(+8)",
+        "security-source(+10)"
+      ],
+      "score": 33,
+      "severity": "medium"
+    },
+    {
+      "incident_id": "8634",
+      "name": "'Large Upload (HTTPS)' along with 9 other issues",
+      "rank": 2,
+      "reasons": [
+        "sev=low(+5)",
+        "exfil(+12)",
+        "alerts=10(+5)",
+        "new(+8)",
+        "security-source(+10)",
+        "threat-category(+12)",
+        "fp:large upload(-25)"
+      ],
+      "score": 27,
+      "severity": "low"
+    },
+    {
+      "incident_id": "8659",
+      "name": "'Apache HTTP Server Path Traversal Vulnerability' along with 2 other issues",
+      "rank": 3,
+      "reasons": [
+        "sev=high(+25)",
+        "starred(+10)",
+        "new(+8)",
+        "security-source(+10)",
+        "vuln-category(-20)",
+        "fp:path traversal(-10)"
+      ],
+      "score": 23,
+      "severity": "high"
+    },
+    {
+      "incident_id": "8657",
+      "name": "ZGrab Application Layer Scanner Detection",
+      "rank": 4,
+      "reasons": [
+        "sev=medium(+15)",
+        "starred(+10)",
+        "new(+8)",
+        "security-source(+10)",
+        "vuln-category(-20)"
+      ],
+      "score": 23,
+      "severity": "medium"
+    },
+    {
+      "incident_id": "8655",
+      "name": "ZGrab Application Layer Scanner Detection",
+      "rank": 5,
+      "reasons": [
+        "sev=medium(+15)",
+        "starred(+10)",
+        "new(+8)",
+        "security-source(+10)",
+        "vuln-category(-20)"
+      ],
+      "score": 23,
+      "severity": "medium"
+    },
+    {
+      "incident_id": "8668",
+      "name": "Large Upload (Generic)",
+      "rank": 6,
+      "reasons": [
+        "sev=low(+5)",
+        "exfil(+12)",
+        "new(+8)",
+        "security-source(+10)",
+        "threat-category(+12)",
+        "fp:large upload(-25)"
+      ],
+      "score": 22,
+      "severity": "low"
+    },
+    {
+      "incident_id": "8647",
+      "name": "'Large Upload (HTTPS) to non-standard port' along with 2 other issues",
+      "rank": 7,
+      "reasons": [
+        "sev=low(+5)",
+        "exfil(+12)",
+        "new(+8)",
+        "security-source(+10)",
+        "threat-category(+12)",
+        "fp:large upload(-25)"
+      ],
+      "score": 22,
+      "severity": "low"
+    },
+    {
+      "incident_id": "8620",
+      "name": "'Large Upload (HTTPS)' along with 1 other issue",
+      "rank": 8,
+      "reasons": [
+        "sev=low(+5)",
+        "exfil(+12)",
+        "new(+8)",
+        "security-source(+10)",
+        "threat-category(+12)",
+        "fp:large upload(-25)"
+      ],
+      "score": 22,
+      "severity": "low"
+    }
+  ]
+}

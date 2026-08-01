@@ -1,0 +1,2620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shadow the Hunter · 3‑minute tour</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #070b10;
+      --panel: #0c1219;
+      --text: #c8e6c0;
+      --dim: #5a7a58;
+      --bright: #e8ffe0;
+      --amber: #ffd27a;
+      --amber-dim: #a67c2e;
+      --cyan: #7fd4ff;
+      --red: #ff8a80;
+      --line: #1e3320;
+      --choice: #0f1a12;
+      --choice-hover: #152418;
+      --choice-border: #2d4a30;
+      --tip-bg: #1a2410;
+      --tip-border: #6b8f3a;
+      --font: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg, transparent, transparent 3px,
+        rgba(0, 0, 0, 0.06) 3px, rgba(0, 0, 0, 0.06) 4px
+      );
+      z-index: 100;
+    }
+    .shell {
+      max-width: 1040px;
+      margin: 0 auto;
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 16px 18px 24px;
+      position: relative;
+      z-index: 1;
+    }
+    .main-row {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 14px;
+      min-height: 0;
+      align-items: stretch;
+    }
+    @media (max-width: 820px) {
+      .main-row {
+        grid-template-columns: 1fr;
+      }
+      .crumbs {
+        max-height: 160px;
+        order: 2;
+      }
+      .mud { order: 1; }
+    }
+
+    /* Path breadcrumbs */
+    .crumbs {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      max-height: calc(100vh - 160px);
+    }
+    .crumbs-hd {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--amber-dim);
+      flex-shrink: 0;
+    }
+    .crumbs-hd strong { color: var(--amber); font-weight: 600; }
+    .crumbs-score {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      color: var(--dim);
+      flex-shrink: 0;
+      line-height: 1.4;
+    }
+    .crumbs-score .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 3px;
+    }
+    .crumbs-score .n-data { color: #9dffb0; }
+    .crumbs-score .n-guess { color: var(--amber); }
+    .crumbs-score .n-act { color: var(--red); }
+    .crumbs-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+    .crumb {
+      border: 1px solid var(--line);
+      background: #0a100c;
+      padding: 8px 9px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      position: relative;
+    }
+    .crumb::before {
+      content: "";
+      position: absolute;
+      left: -1px;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+    }
+    .crumb.stance-data::before { background: #9dffb0; }
+    .crumb.stance-guess::before { background: var(--amber); }
+    .crumb.stance-act::before { background: var(--red); }
+    .crumb.stance-meta::before { background: var(--cyan); }
+    .crumb.current {
+      border-color: var(--amber-dim);
+      box-shadow: inset 0 0 0 1px rgba(255, 210, 122, 0.15);
+    }
+    .crumb .stop {
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      color: var(--dim);
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+    .crumb .title {
+      color: var(--bright);
+      font-size: 11.5px;
+      line-height: 1.35;
+      margin-bottom: 6px;
+    }
+    .crumb .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .crumb .tag {
+      font-size: 9px;
+      padding: 1px 5px;
+    }
+    .crumb .stance {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .crumb .stance.data { color: #9dffb0; }
+    .crumb .stance.guess { color: var(--amber); }
+    .crumb .stance.act { color: var(--red); }
+    .crumb .stance.meta { color: var(--cyan); }
+    .crumb-empty {
+      padding: 16px 10px;
+      color: var(--dim);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .crumbs-legend {
+      padding: 8px 12px 10px;
+      border-top: 1px solid var(--line);
+      font-size: 10px;
+      color: var(--dim);
+      line-height: 1.4;
+      flex-shrink: 0;
+    }
+    .crumbs-legend span { white-space: nowrap; }
+    .crumbs-legend .d { color: #9dffb0; }
+    .crumbs-legend .g { color: var(--amber); }
+    .crumbs-legend .a { color: var(--red); }
+    .crumb .rewind-btn {
+      display: inline-block;
+      margin-top: 6px;
+      font-family: var(--font);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--cyan);
+      background: rgba(127, 212, 255, 0.08);
+      border: 1px solid rgba(127, 212, 255, 0.35);
+      padding: 3px 7px;
+      cursor: pointer;
+    }
+    .crumb .rewind-btn:hover {
+      background: rgba(127, 212, 255, 0.16);
+      border-color: var(--cyan);
+    }
+    .crumbs-score .row.badge-row {
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid var(--line);
+      color: var(--amber);
+      font-size: 10px;
+    }
+    /* Rewind modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 180;
+      display: none;
+    }
+    .modal-backdrop.open { display: block; }
+    .modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(400px, calc(100vw - 32px));
+      background: var(--panel);
+      border: 1px solid var(--amber-dim);
+      z-index: 190;
+      display: none;
+      flex-direction: column;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+      padding: 16px 18px 14px;
+    }
+    .modal.open { display: flex; }
+    .modal h2 {
+      font-size: 13px;
+      color: var(--amber);
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .modal p {
+      font-family: var(--sans);
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text);
+      margin-bottom: 14px;
+    }
+    .modal .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .modal .actions button {
+      font-family: var(--font);
+      font-size: 12px;
+      padding: 10px 12px;
+      cursor: pointer;
+      border: 1px solid var(--choice-border);
+      background: var(--choice);
+      color: var(--text);
+      text-align: left;
+    }
+    .modal .actions button.primary {
+      border-color: var(--amber-dim);
+      color: var(--amber);
+      background: rgba(255, 210, 122, 0.1);
+    }
+    .modal .actions button:hover {
+      border-color: var(--cyan);
+      background: var(--choice-hover);
+    }
+    .badge-pill {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border: 1px solid var(--amber-dim);
+      color: var(--amber);
+      background: rgba(255, 210, 122, 0.1);
+      margin: 4px 0 10px;
+    }
+    .flag-line {
+      font-size: 12px;
+      color: var(--amber);
+      margin-bottom: 6px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+      font-size: 12px;
+      color: var(--dim);
+    }
+    header strong { color: var(--amber); font-weight: 600; }
+    header a { color: var(--cyan); text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+    header button.linkish {
+      background: none;
+      border: none;
+      color: var(--cyan);
+      font-family: var(--font);
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      font-size: 12px;
+      color: var(--dim);
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .status b { color: var(--text); font-weight: 500; }
+    .timer.urgent { color: var(--amber); }
+    .timer.over { color: var(--red); }
+
+    .jargon-hint {
+      font-size: 11px;
+      color: var(--dim);
+      margin-bottom: 12px;
+    }
+    .jargon-hint .sample {
+      border-bottom: 1px dashed var(--cyan);
+      color: var(--cyan);
+      cursor: help;
+    }
+
+    .track {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+    .track span {
+      flex: 1;
+      height: 3px;
+      background: var(--line);
+      border-radius: 1px;
+    }
+    .track span.done { background: var(--dim); }
+    .track span.now { background: var(--amber); box-shadow: 0 0 8px rgba(255, 210, 122, 0.4); }
+
+    .mud {
+      flex: 1;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 16px 18px 18px;
+      min-height: 280px;
+      display: flex;
+      flex-direction: column;
+    }
+    .room-tag {
+      font-size: 11px;
+      color: var(--amber-dim);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .log {
+      flex: 1;
+      overflow-y: auto;
+      margin-bottom: 16px;
+    }
+    .log p {
+      margin-bottom: 10px;
+      color: var(--text);
+      max-width: 62ch;
+    }
+    .log p.sys { color: var(--dim); font-size: 12px; }
+    .log p.narr { color: var(--bright); }
+    .log p.amber { color: var(--amber); }
+    .log p.you { color: var(--cyan); }
+    .log p.ok { color: #9dffb0; }
+    .log p.miss { color: var(--amber); }
+
+    /* Jargon chips */
+    .jargon {
+      color: var(--cyan);
+      border-bottom: 1px dashed rgba(127, 212, 255, 0.7);
+      cursor: help;
+      position: relative;
+    }
+    .jargon:hover, .jargon:focus {
+      color: #b8ecff;
+      background: rgba(127, 212, 255, 0.08);
+      outline: none;
+    }
+    .jargon[data-open="1"] {
+      background: rgba(127, 212, 255, 0.14);
+    }
+
+    #tip {
+      position: fixed;
+      z-index: 200;
+      max-width: min(320px, calc(100vw - 24px));
+      background: var(--tip-bg);
+      border: 1px solid var(--tip-border);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+      padding: 10px 12px 12px;
+      font-family: var(--sans);
+      font-size: 13px;
+      line-height: 1.45;
+      color: #e8f5d8;
+      pointer-events: auto;
+      display: none;
+    }
+    #tip.show { display: block; }
+    #tip .tip-term {
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--amber);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    #tip .tip-eli5 {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: #8fbc6a;
+      margin-bottom: 4px;
+    }
+    #tip .tip-body { color: #dcecc8; }
+    #tip .tip-close {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      background: none;
+      border: none;
+      color: var(--dim);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 4px;
+    }
+
+    .choices {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .choice {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      text-align: left;
+      width: 100%;
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text);
+      background: var(--choice);
+      border: 1px solid var(--choice-border);
+      padding: 12px 14px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .choice:hover:not(:disabled) {
+      background: var(--choice-hover);
+      border-color: var(--amber-dim);
+    }
+    .choice:disabled { opacity: 0.45; cursor: default; }
+    .choice .key {
+      color: var(--amber);
+      font-weight: 600;
+      flex-shrink: 0;
+      min-width: 1.2em;
+      padding-top: 1px;
+    }
+    .choice .label { flex: 1; min-width: 0; }
+    .choice .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .tag {
+      font-family: var(--font);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 2px;
+      border: 1px solid transparent;
+    }
+    .tag-move {
+      background: rgba(127, 212, 255, 0.1);
+      border-color: rgba(127, 212, 255, 0.35);
+      color: var(--cyan);
+    }
+    .tag-non-destructive {
+      background: rgba(157, 255, 176, 0.1);
+      border-color: rgba(157, 255, 176, 0.4);
+      color: #9dffb0;
+    }
+    .tag-destructive {
+      background: rgba(255, 138, 128, 0.12);
+      border-color: rgba(255, 138, 128, 0.5);
+      color: var(--red);
+    }
+    .tag-state-changing {
+      background: rgba(255, 210, 122, 0.12);
+      border-color: rgba(255, 210, 122, 0.45);
+      color: var(--amber);
+    }
+    .choice.integrity-destructive {
+      border-color: rgba(255, 138, 128, 0.35);
+    }
+    .choice.integrity-state-changing {
+      border-color: rgba(255, 210, 122, 0.3);
+    }
+    .choice .label-main {
+      display: block;
+      color: var(--bright);
+      margin-bottom: 6px;
+    }
+    .choice .eli5 {
+      display: block;
+      font-family: var(--sans);
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: #8fad88;
+      border-left: 2px solid rgba(127, 212, 255, 0.35);
+      padding-left: 8px;
+      margin-top: 2px;
+    }
+    .choice .eli5::before {
+      content: "ELI5 · ";
+      color: var(--cyan);
+      font-family: var(--font);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .choice:hover:not(:disabled) .eli5 { color: #a8c4a0; }
+    .tally {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 12px 0;
+      font-size: 12px;
+    }
+    .tally .cell {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      background: rgba(0,0,0,0.25);
+    }
+    .tally .cell b { display: block; font-size: 18px; color: var(--bright); margin-bottom: 2px; }
+    .tally .cell.nd b { color: #9dffb0; }
+    .tally .cell.d b { color: var(--red); }
+    .tally .cell.sc b { color: var(--amber); }
+    .tally .cell span { color: var(--dim); font-size: 11px; }
+
+    .footer {
+      margin-top: 12px;
+      font-size: 11px;
+      color: var(--dim);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .end-box {
+      border-left: 3px solid var(--amber);
+      padding: 12px 14px;
+      background: rgba(255, 210, 122, 0.06);
+      margin: 12px 0;
+    }
+    .end-box h2 {
+      font-size: 14px;
+      color: var(--amber);
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-family: var(--sans);
+    }
+    .end-box ul {
+      margin-left: 18px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .end-box li { margin-bottom: 4px; }
+
+    /* Glossary panel */
+    .glossary-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 150;
+      display: none;
+    }
+    .glossary-backdrop.open { display: block; }
+    .glossary {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(440px, calc(100vw - 32px));
+      max-height: min(70vh, 520px);
+      background: var(--panel);
+      border: 1px solid var(--tip-border);
+      z-index: 160;
+      display: none;
+      flex-direction: column;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    }
+    .glossary.open { display: flex; }
+    .glossary header {
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--amber);
+      font-size: 13px;
+    }
+    .glossary .list {
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+    .glossary .item {
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(30, 51, 32, 0.8);
+      cursor: pointer;
+    }
+    .glossary .item:hover { background: rgba(127, 212, 255, 0.06); }
+    .glossary .item .t {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--cyan);
+      margin-bottom: 4px;
+    }
+    .glossary .item .b {
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    /* Select → ELI5 */
+    #selBar {
+      position: fixed;
+      z-index: 220;
+      display: none;
+      gap: 0;
+      background: #14200c;
+      border: 1px solid var(--amber-dim);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      font-family: var(--font);
+      font-size: 12px;
+    }
+    #selBar.show { display: flex; }
+    #selBar button {
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 600;
+      background: transparent;
+      border: none;
+      color: var(--amber);
+      padding: 8px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #selBar button:hover { background: rgba(255, 210, 122, 0.12); }
+    #selBar button.primary {
+      background: rgba(255, 210, 122, 0.14);
+      color: #fff2cc;
+    }
+
+    #eli5Panel {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      width: min(400px, calc(100vw - 32px));
+      max-height: min(50vh, 360px);
+      background: #10180c;
+      border: 1px solid var(--tip-border);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+      z-index: 230;
+      display: none;
+      flex-direction: column;
+      font-family: var(--sans);
+    }
+    #eli5Panel.show { display: flex; }
+    #eli5Panel .hd {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-family: var(--font);
+      font-size: 11px;
+      color: var(--amber);
+    }
+    #eli5Panel .hd .sel {
+      color: var(--cyan);
+      font-size: 12px;
+      font-weight: 600;
+      margin-top: 4px;
+      word-break: break-word;
+    }
+    #eli5Panel .bd {
+      padding: 12px 14px 14px;
+      overflow-y: auto;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #e4f0d4;
+      white-space: pre-wrap;
+    }
+    #eli5Panel .bd.loading { color: var(--dim); font-family: var(--font); font-size: 12px; }
+    #eli5Panel .bd.error { color: var(--red); font-size: 13px; }
+    #eli5Panel .ft {
+      padding: 6px 12px 8px;
+      font-size: 10px;
+      color: var(--dim);
+      font-family: var(--font);
+      border-top: 1px solid var(--line);
+    }
+    #eli5Panel .x {
+      background: none;
+      border: none;
+      color: var(--dim);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div><strong>SHADOW THE HUNTER</strong> · 3‑minute MUD tour</div>
+      <div>
+        <button type="button" class="linkish" id="btnGlossary">Jargon glossary</button>
+        · <a href="http://localhost:3108/" title="Spike DNS true-positive learning MUD">V2 TP tour :3108</a>
+        · <a href="http://localhost:3100/">hub</a>
+      </div>
+    </header>
+
+    <div class="status">
+      <span>STOP <b id="stopName">PLATFORM</b></span>
+      <span>BEAT <b id="beatNum">0 / 6</b></span>
+      <span class="timer" id="timer">3:00</span>
+      <span>MODE <b>BRANCHING</b> · ↩ rewind on path</span>
+    </div>
+    <div class="jargon-hint">
+      <strong style="color:var(--text);font-weight:500">Select any text</strong> →
+      <strong style="color:var(--amber);font-weight:500">ELI5</strong> (AI, full hunt context).
+      Dotted <span class="sample" data-jargon="SOC" tabindex="0">blue words</span> still have quick tips.
+    </div>
+    <div class="track" id="track" aria-hidden="true"></div>
+
+    <div class="main-row">
+      <aside class="crumbs" id="crumbs" aria-label="Your path">
+        <div class="crumbs-hd"><strong>Your path</strong> · breadcrumbs</div>
+        <div class="crumbs-score" id="crumbsScore">
+          <div class="row"><span>Following data</span><span class="n-data" id="scData">0</span></div>
+          <div class="row"><span>Guessing</span><span class="n-guess" id="scGuess">0</span></div>
+          <div class="row"><span>Acting (destructive)</span><span class="n-act" id="scAct">0</span></div>
+        </div>
+        <div class="crumbs-list" id="crumbsList">
+          <div class="crumb-empty">Your stops appear here as you choose.<br/><br/>Watch whether you <span style="color:#9dffb0">follow data</span>, <span style="color:var(--amber)">guess</span>, or <span style="color:var(--red)">act destructively</span>.</div>
+        </div>
+        <div class="crumbs-legend">
+          <span class="d">● data</span> ·
+          <span class="g">● guess</span> ·
+          <span class="a">● act</span><br/>
+          Past stops: <strong style="color:var(--cyan)">↩ Change decision</strong>
+        </div>
+      </aside>
+
+      <div class="mud">
+        <div class="room-tag" id="roomTag">// loading car…</div>
+        <div class="log" id="log"></div>
+        <div class="choices" id="choices"></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>Path shows move + integrity · data vs guess vs act · rewind rewrites timeline</span>
+      <span>Keys: 1 / 2 / 3 · R = rewind last</span>
+    </div>
+  </div>
+
+  <!-- Marty McFly rewind confirm -->
+  <div class="modal-backdrop" id="rewindBg"></div>
+  <div class="modal" id="rewindModal" role="dialog" aria-label="Rewind timeline">
+    <h2>Flux capacitor</h2>
+    <p id="rewindMsg">Rewrite the future from this station? Later stops will be unremembered.</p>
+    <div class="actions">
+      <button type="button" class="primary" id="rewindConfirm">↩ Rewrite future from here</button>
+      <button type="button" id="rewindCancel">Cancel</button>
+    </div>
+  </div>
+
+  <div id="tip" role="tooltip">
+    <button type="button" class="tip-close" id="tipClose" aria-label="Close">×</button>
+    <div class="tip-term" id="tipTerm"></div>
+    <div class="tip-eli5">ELI5 · Reddit style</div>
+    <div class="tip-body" id="tipBody"></div>
+  </div>
+
+  <div class="glossary-backdrop" id="glossBg"></div>
+  <div class="glossary" id="glossary" role="dialog" aria-label="Jargon glossary">
+    <header>
+      <span>Jargon · explain like I'm five</span>
+      <button type="button" class="linkish" id="glossClose">close</button>
+    </header>
+    <div class="list" id="glossList"></div>
+  </div>
+
+  <!-- Selection → ELI5 -->
+  <div id="selBar" role="toolbar" aria-label="Selection actions">
+    <button type="button" class="primary" id="btnEli5Sel">ELI5 this</button>
+    <button type="button" id="btnEli5Cancel">✕</button>
+  </div>
+  <div id="eli5Panel" role="dialog" aria-label="ELI5 explanation">
+    <div class="hd">
+      <div>
+        <div>ELI5 · full investigation context</div>
+        <div class="sel" id="eli5SelText"></div>
+      </div>
+      <button type="button" class="x" id="eli5Close" aria-label="Close">×</button>
+    </div>
+    <div class="bd loading" id="eli5Body">Thinking with hunt context…</div>
+    <div class="ft" id="eli5Ft">Uses package path, shadow notes, evidence + your tour position</div>
+  </div>
+
+  <script>
+    const ELI5_API = (window.ELI5_API_URL || "http://localhost:3107") + "/eli5";
+
+    /* ========== ELI5 jargon dictionary ==========
+       Keep terms longest-first when matching.
+       Tone: Reddit "explain like I'm five" — simple, a little fun, not condescending. */
+    const JARGON = {
+      "false positive": {
+        term: "False positive",
+        eli5: "The alarm went off, but nobody broke in. The smoke detector hated your toast. In security we still check — then we say “oops, not real” and write down why.",
+      },
+      "Host Sweep": {
+        term: "Host Sweep",
+        eli5: "Imagine someone knocking on every door on the street to see who answers. Firewalls sometimes yell “SWEEP!” when a computer just talks to a bunch of places — even if it’s only looking up website names (DNS), not being sneaky.",
+      },
+      "zone protection": {
+        term: "Zone protection",
+        eli5: "The firewall has neighborhood rules: “this side of the network shouldn’t look like a door-to-door salesperson.” When traffic looks like that pattern, it raises a card. Patterns can be wrong.",
+      },
+      "zone-protection": {
+        term: "Zone protection",
+        eli5: "The firewall has neighborhood rules: “this side of the network shouldn’t look like a door-to-door salesperson.” When traffic looks like that pattern, it raises a card. Patterns can be wrong.",
+      },
+      triage: {
+        term: "Triage",
+        eli5: "Like the ER: you don’t treat paper cuts before broken bones. Triage = sorting the pile so you work the most important (or most teachable) thing first.",
+      },
+      "Large Upload": {
+        term: "Large Upload",
+        eli5: "Someone sent a big file out of the building. Sometimes that’s stealing data. Sometimes that’s Zoom, backups, or a giant PowerPoint. The name sounds scary; the story might be boring.",
+      },
+      exfil: {
+        term: "Exfil (exfiltration)",
+        eli5: "Sneaking the cookies out of the cookie jar and taking them home. In cyber: copying data out of a network. Big uploads *might* be that — or just a big email attachment.",
+      },
+      isolate: {
+        term: "Isolate",
+        eli5: "Put the computer in time-out so it can’t talk to friends. Useful when it’s actually sick. Mean (and disruptive) when it was just looking up cat videos wrong on the alarm sheet.",
+      },
+      quarantine: {
+        term: "Quarantine",
+        eli5: "Same vibe as isolate: park the device away from everyone else until a grown-up checks it.",
+      },
+      DNS: {
+        term: "DNS",
+        eli5: "The internet’s phone book. You type “google.com”; DNS turns that into a number the computers actually dial. Port 53 is a common phone-book door.",
+      },
+      "port 53": {
+        term: "Port 53",
+        eli5: "Computers have numbered doors. Door 53 is usually “phone book / DNS.” Talking to Google’s phone book on door 53 is normal — not the same as rattling every door on your hallway.",
+      },
+      remotes: {
+        term: "Remotes (remote IPs)",
+        eli5: "Who’s on the other end of the call. If the other end is “public phone book,” that’s different from “random computer in the office next door.”",
+      },
+      "lateral movement": {
+        term: "Lateral movement",
+        eli5: "The burglar already got in the kitchen and is now trying every bedroom door. Jumping from one work computer to another inside the building.",
+      },
+      C2: {
+        term: "C2 (command and control)",
+        eli5: "The evil remote control. Bad software calls home to a bad guy’s server to get orders. We look for weird “homes,” not normal places like Apple or Slack.",
+      },
+      "DNS tunneling": {
+        term: "DNS tunneling",
+        eli5: "Hiding secret notes inside phone-book questions so the guard thinks you’re only asking for directions. Clever and rare — don’t assume it every time you see DNS.",
+      },
+      "endpoint agent": {
+        term: "Endpoint agent",
+        eli5: "A little security app that lives on the laptop and reports “I’m healthy / I’m weird.” No agent = we only see the laptop from the hallway cameras (network), not from inside the room.",
+      },
+      agentless: {
+        term: "Agentless",
+        eli5: "We’re watching the computer from outside (network logs), not from software installed on it. We know less — that doesn’t automatically mean “hiding malware.”",
+      },
+      "privacy MAC": {
+        term: "Privacy MAC",
+        eli5: "Phones and Macs often use a fake name-tag on Wi‑Fi so stores can’t track you store-to-store. It looks like a random code, not “Bob’s laptop.”",
+      },
+      MAC: {
+        term: "MAC address",
+        eli5: "A hardware name-tag for a network card. Useful for “which device,” terrible as a person’s real name.",
+      },
+      MDM: {
+        term: "MDM",
+        eli5: "Mom/Dad for company laptops (Mobile Device Management). Tools like Kandji make sure the Mac has updates and rules. Seeing MDM traffic usually means “managed laptop,” not “hacker.”",
+      },
+      Kandji: {
+        term: "Kandji",
+        eli5: "A popular “babysitter app” for work Macs. Lots of DNS to Kandji = “this Mac is managed by grown-ups at work.”",
+      },
+      SaaS: {
+        term: "SaaS",
+        eli5: "Software that lives in the cloud: Slack, Spotify, Gmail in the browser. Normal humans use these all day.",
+      },
+      XQL: {
+        term: "XQL",
+        eli5: "A search language for a big security log pile (like a super-powered Ctrl+F for “what did this computer do?”).",
+      },
+      XSIAM: {
+        term: "XSIAM",
+        eli5: "Palo Alto’s big security desk-in-a-box: alerts, cases, and searches in one place. Where this real hunt was run.",
+      },
+      SOC: {
+        term: "SOC",
+        eli5: "Security Operations Center — the room (or team) that watches alarms and figures out if the building is on fire or someone burned toast.",
+      },
+      disposition: {
+        term: "Disposition",
+        eli5: "The final sticker on the ticket: real bad thing, false alarm, or “needs more homework.” Plus a short why.",
+      },
+      confidence: {
+        term: "Confidence",
+        eli5: "How sure we are. 0.85 means “pretty sure, not magic.” We still leave a trail of evidence.",
+      },
+      telemetry: {
+        term: "Telemetry",
+        eli5: "The breadcrumbs computers leave: connections, DNS lookups, alerts. We detective from crumbs, not mind-reading.",
+      },
+      "true positive": {
+        term: "True positive",
+        eli5: "The alarm was right. There really was a problem. Toast was fine; the house was actually on fire.",
+      },
+      FP: {
+        term: "FP (false positive)",
+        eli5: "Short for false positive — alarm without a real bad guy. See also: smoke detector vs toast.",
+      },
+      TP: {
+        term: "TP (true positive)",
+        eli5: "Short for true positive — the alert was a real problem worth acting on.",
+      },
+      APT: {
+        term: "APT",
+        eli5: "Fancy movie villain hackers (Advanced Persistent Threat). Don’t yell APT every time a Mac has no agent on hotel Wi‑Fi.",
+      },
+      ZGrab: {
+        term: "ZGrab",
+        eli5: "A tool scanners use to poke internet doors and see what answers. Shows up a lot at big events; often background noise.",
+      },
+      NGFW: {
+        term: "NGFW",
+        eli5: "Next-gen firewall — the smart gate guard that reads more than just “allowed/blocked,” including app-ish clues and threat names.",
+      },
+      TLS: {
+        term: "TLS",
+        eli5: "The little padlock on websites. Encrypted tunnel so others can’t read the chat. “Informational TLS” notes are usually nerdy crypto trivia, not “you’re hacked.”",
+      },
+      CDN: {
+        term: "CDN",
+        eli5: "Content Delivery Network — copies of files kept around the world so VS Code updates download fast. Normal.",
+      },
+      IMAP: {
+        term: "IMAP",
+        eli5: "How some email apps fetch mail from Gmail-type servers. Seeing it usually means “someone checked email,” not “data heist.”",
+      },
+      recon: {
+        term: "Recon",
+        eli5: "Looking around before you do the thing — peeking in windows. In cyber: scanning and listing what’s there.",
+      },
+      "multi-source": {
+        term: "Multi-source",
+        eli5: "Don’t trust one tattletale. Check the alert, then the host story, then DNS. Two or three friends agreeing is better than one loud friend.",
+      },
+      "known-good": {
+        term: "Known-good path",
+        eli5: "The route a careful hunter already took that worked. You’re touring their map — not inventing the city from scratch.",
+      },
+      rails: {
+        term: "Rails (on rails)",
+        eli5: "The tour train. You pick forks, but you still arrive at the station. You can’t drive into the forest.",
+      },
+      mutation: {
+        term: "Mutation (in this CLI)",
+        eli5: "A button that *changes* the real world: close a case, isolate a laptop. This tour doesn’t press those without a human okay.",
+      },
+      "training-room": {
+        term: "Training room / venue map",
+        eli5: "At Black Hat, classrooms often sit on special Wi‑Fi neighborhoods. If a host isn’t on that map, it might just be general conference Wi‑Fi.",
+      },
+      "10.220": {
+        term: "10.220… addresses",
+        eli5: "Private classroom-ish network numbers used at the venue. Sweeping those would look more like “knocking on training doors” than “calling Google’s phone book.”",
+      },
+    };
+
+    // Build sorted term list (longest first) for matching
+    const JARGON_KEYS = Object.keys(JARGON)
+      .filter((k) => JARGON[k])
+      .sort((a, b) => b.length - a.length);
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    /** Linkify jargon in plain text → HTML with .jargon spans */
+    function withJargon(text) {
+      const s = String(text);
+      // Split into parts: we walk left to right finding earliest longest match
+      let out = "";
+      let i = 0;
+      while (i < s.length) {
+        let hit = null;
+        let hitKey = null;
+        for (const key of JARGON_KEYS) {
+          if (s.length - i < key.length) continue;
+          const slice = s.substr(i, key.length);
+          if (slice.toLowerCase() === key.toLowerCase()) {
+            // word boundary-ish: don't match inside longer words for short keys
+            const before = i === 0 ? " " : s[i - 1];
+            const after = i + key.length >= s.length ? " " : s[i + key.length];
+            const boundL = /[\s"'([{/\\|]/.test(before) || i === 0;
+            const boundR = /[\s"'.,:;!?/)\]}|]/.test(after) || i + key.length >= s.length;
+            // allow match after start or punctuation; short ALLCAPS always ok
+            if (key.length <= 3) {
+              if (!boundL || !boundR) continue;
+            } else if (!boundL && !/[\s]/.test(before) && i !== 0) {
+              // allow after quotes
+              if (!/["'(]/.test(before)) continue;
+            }
+            hit = slice;
+            hitKey = key;
+            break;
+          }
+        }
+        if (hit) {
+          const id = escapeHtml(hitKey);
+          out +=
+            `<span class="jargon" tabindex="0" role="button" data-jargon="${id}" aria-label="Explain ${escapeHtml(hit)}">` +
+            escapeHtml(hit) +
+            `</span>`;
+          i += hit.length;
+        } else {
+          out += escapeHtml(s[i]);
+          i += 1;
+        }
+      }
+      return out;
+    }
+
+    /* ========== Branching MUD graph (G* golden + B* consequence rooms) ========== */
+    const TOUR = {
+      title: "Host Sweep that wasn't",
+      durationSec: 180,
+      startNode: "G0",
+      goldenOrder: ["G0", "G1", "G2", "G3", "G4", "G5"],
+    };
+
+    const EMPTY_FLAGS = () => ({
+      rash_act: false,
+      assumed_breach: false,
+      hostile_bias: false,
+      named_human_error: false,
+      wild_theory: false,
+      distracted: false,
+      isolate_locked: false,
+    });
+
+    /**
+     * Each choice: next node, golden?, flagsDelta, timePenaltySec, ending (terminus only).
+     * Side rooms B* mostly single-exit; optional rewind choice.
+     */
+    const NODES = {
+      G0: {
+        id: "G0",
+        stop: "STATION",
+        room: "you board the SOC car",
+        goldenStep: 0,
+        lines: [
+          { t: "sys", x: "> shadow --tour 3m --branching on" },
+          { t: "narr", x: "The doors close. This is a short ride through a real investigation — a golden path, with real forks if you step off it. You can always go back in time." },
+          { t: "amber", x: "MISSION: Is the top-ranked Host Sweep a real attack… or a story the firewall invented?" },
+          { t: "sys", x: "Conductor: Three choices. Off-path rooms leave stains. ↩ on your path rewrites the future (Marty McFly)." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "All aboard — start the tour",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Begin the guided ride. Looking only — nothing breaks. Best first step for a clean golden run.",
+            golden: true,
+            next: "G1",
+            reply: "Wheels roll. Next stop: the triage board.",
+          },
+          {
+            key: "2",
+            label: "Ask what's in the package first",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "You want the “what’s in the box?” explanation before playing. Still just reading — non-destructive. Same station; try again.",
+            golden: false,
+            next: "G0",
+            reply: "Conductor: Live XSIAM hunt, curated for training. FP lesson. Hold the rail — pick “All aboard” when ready.",
+          },
+          {
+            key: "3",
+            label: "Skip the briefing and jump mid-hunt",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Skip to the middle of the movie. Still not changing systems — but the conductor won’t let you skip cars.",
+            golden: false,
+            next: "G0",
+            reply: "Nice try. Stations stay in order. You'll thank us at terminus.",
+          },
+        ],
+      },
+      G1: {
+        id: "G1",
+        stop: "TRIAGE",
+        room: "queue car — lights and noise",
+        goldenStep: 1,
+        lines: [
+          { t: "sys", x: "> cortex triage --top 8" },
+          { t: "narr", x: "The board is loud: Large Upload noise, ZGrab scanners, and one medium Host Sweep sitting at rank #1 (score 33)." },
+          { t: "amber", x: "Tags: green = look only. Red = change the machine/network. Sort before you swing." },
+          { t: "sys", x: "What do you open?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Open the #1 Host Sweep — it can teach either way",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Pick which alarm to study. You’re only choosing what to read next — no machines get unplugged.",
+            golden: true,
+            next: "G2",
+            reply: "Good call. Host Sweep is a binary bet: real recon, or clean false positive. We take it.",
+          },
+          {
+            key: "2",
+            label: "Chase the Large Upload pile — volume means exfil",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Still just sorting the pile (wrong pile). Non-destructive — but volume isn’t the teaching case today.",
+            golden: false,
+            next: "B1",
+            flagsDelta: { distracted: true },
+            timePenaltySec: 15,
+            reply: "Volume often means noise here. Side track: the noise warren.",
+          },
+          {
+            key: "3",
+            label: "Ignore triage and isolate a random host",
+            move: "Act",
+            integrity: "destructive",
+            eli5: "Unplug a computer without looking. Changes the crime scene and the user’s day. Forensics: don’t destroy first.",
+            golden: false,
+            next: "B2",
+            flagsDelta: { rash_act: true },
+            reply: "You reach for the blast door…",
+          },
+        ],
+      },
+      B1: {
+        id: "B1",
+        stop: "NOISE WARREN",
+        room: "side car — upload FOG",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> open large-upload cluster" },
+          { t: "narr", x: "Upload demotions, scorer noise, Zoom-sized files. Nothing here is the teaching case." },
+          { t: "miss", x: "Conductor: Theory without crumbs. The Host Sweep still sits at #1." },
+          { t: "sys", x: "One door back to the main line." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Back to the #1 Host Sweep",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Return to the lead this tour is teaching. Non-destructive rejoin.",
+            golden: false,
+            next: "G2",
+            reply: "Back on the main line — a little distracted, but Host Sweep is open.",
+          },
+        ],
+      },
+      B2: {
+        id: "B2",
+        stop: "BLAST DOOR",
+        room: "side car — mutation desk",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> isolate --random" },
+          { t: "narr", x: "Mutation denied. No evidence, no authority, no isolate. The blast door stays shut." },
+          { t: "miss", x: "You reached for the blast door. Isolate is blocked for this timeline unless you rewind past the stain." },
+          { t: "sys", x: "Stand down — or rewrite time." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Stand down and open Host Sweep",
+            move: "Triage",
+            integrity: "non-destructive",
+            eli5: "Stop trying to unplug. Open the teaching alert instead. Stain remains unless you rewind later.",
+            golden: false,
+            next: "G2",
+            reply: "You stand down. Host Sweep opens — with a rash-act stain on your path.",
+          },
+          {
+            key: "2",
+            label: "↩ Rewind to triage (Marty)",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Jump back before the isolate attempt. Future unremembered; stain cleared if you pick cleaner next time.",
+            golden: false,
+            rewindTo: "G1",
+            reply: "Flux capacitor warming…",
+          },
+        ],
+      },
+      G2: {
+        id: "G2",
+        stop: "CASE",
+        room: "alert car — two tickets on the wall",
+        goldenStep: 2,
+        lines: [
+          { t: "sys", x: "> investigate Host Sweep case" },
+          { t: "narr", x: "Two zone-protection alerts. Local client on event Wi‑Fi → public DNS resolvers on port 53 (Google DNS, Quad9)." },
+          { t: "amber", x: "Read the remotes. Hypothesize before you Act. Destructive options light up red." },
+          { t: "sys", x: "What does that shape sound like?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Laptop doing DNS — weakens \"scanning the LAN\"",
+            move: "Hypothesize",
+            integrity: "non-destructive",
+            eli5: "You’re saying out loud what you think you see. Words only — wrong without breaking anything.",
+            golden: true,
+            next: "G3",
+            reply: "Exactly. Not recon of 10.220 training hosts. It's the public internet's phone book.",
+          },
+          {
+            key: "2",
+            label: "Classic lateral movement — isolate now",
+            move: "Act",
+            integrity: "destructive",
+            eli5: "Skip straight to unplugging. Containment before the story is solid — bad forensics.",
+            golden: false,
+            next: "B3",
+            flagsDelta: { assumed_breach: true, isolate_locked: true, rash_act: true },
+            reply: "Containment panic — too fast.",
+          },
+          {
+            key: "3",
+            label: "C2 beacon using DNS tunneling — escalate",
+            move: "Hypothesize",
+            integrity: "non-destructive",
+            eli5: "A scarier theory, still just words. Escalating later would change tickets — here you’re only naming a guess.",
+            golden: false,
+            next: "B4",
+            flagsDelta: { wild_theory: true },
+            reply: "Side track: the theory car.",
+          },
+        ],
+      },
+      B3: {
+        id: "B3",
+        stop: "CONTAINMENT PANIC",
+        room: "side car — red lights",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> isolate --host" },
+          { t: "narr", x: "Port 53 to public resolvers isn’t lateral movement. Isolate is locked for the rest of this timeline." },
+          { t: "miss", x: "You reached for the blast door. Stand down to continue — or rewind clean." },
+          { t: "sys", x: "One way forward without unplugging." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Stand down — gather identity next",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Abort isolate. Keep looking. Stain stays unless you rewind past CASE.",
+            golden: false,
+            next: "G3",
+            reply: "Tools cool. Next: who is this host?",
+          },
+          {
+            key: "2",
+            label: "↩ Rewind to CASE (Marty)",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Undo the isolate attempt. Rewrite from the alert car.",
+            golden: false,
+            rewindTo: "G2",
+            reply: "Flux capacitor: back to CASE.",
+          },
+        ],
+      },
+      B4: {
+        id: "B4",
+        stop: "THEORY CAR",
+        room: "side car — movie plots",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> escalate --theory dns-tunnel" },
+          { t: "narr", x: "Possible in other worlds. Here the remotes are well-known public DNS — Google, Quad9." },
+          { t: "miss", x: "Theory without crumbs. Test against remotes again." },
+          { t: "sys", x: "Exit the theory car." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Test against remotes again — rejoin the case",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Leave the movie plot. Look at what the packet said.",
+            golden: false,
+            next: "G3",
+            reply: "Back to evidence. Identity car next — wild theory still noted.",
+          },
+        ],
+      },
+      G3: {
+        id: "G3",
+        stop: "IDENTITY",
+        room: "identity car — empty agent seat",
+        goldenStep: 3,
+        lines: [
+          { t: "sys", x: "> host identify --deep" },
+          { t: "narr", x: "No endpoint agent — agentless. Confidence medium. Type: Apple / macOS client. Hostname generic. \"User\" is a privacy MAC — not a person's name. Venue map: no training-room hit." },
+          { t: "amber", x: "Observe = look at identity. Act = change the host. Prefer observe until the story holds." },
+          { t: "sys", x: "How do you read this host?" },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Normal attendee/staff Mac on Wi‑Fi — thin telemetry, not \"unknown APT\"",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "You’re reading the photo of the host. No quarantine, no wipe — preserve what you see.",
+            golden: true,
+            next: "G4",
+            reply: "Correct posture. Say what you know. Don't invent a villain.",
+          },
+          {
+            key: "2",
+            label: "No agent = compromised and hiding — quarantine",
+            move: "Act",
+            integrity: "destructive",
+            eli5: "Time-out the laptop now. Alters live state and can nuke volatile evidence / user work. Too early.",
+            golden: false,
+            next: "B5",
+            flagsDelta: { hostile_bias: true, rash_act: true },
+            reply: "Time-out trap — common bias.",
+          },
+          {
+            key: "3",
+            label: "Blame the person behind the MAC and open an HR ticket",
+            move: "Act",
+            integrity: "state-changing",
+            eli5: "Not touching the laptop — starting a people process. Changes someone’s day without proof.",
+            golden: false,
+            next: "B6",
+            flagsDelta: { named_human_error: true },
+            reply: "People process car — no name in telemetry.",
+          },
+        ],
+      },
+      B5: {
+        id: "B5",
+        stop: "TIME-OUT TRAP",
+        room: "side car — quarantine desk",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> quarantine --host" },
+          { t: "narr", x: "No endpoint agent is common on event Wi‑Fi. Missing agent ≠ guilt." },
+          { t: "miss", x: "You treated missing agent as guilt." },
+          { t: "sys", x: "Release the thought — continue to traffic." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Stand down — read traffic profile next",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Leave quarantine. Look at DNS and apps instead.",
+            golden: false,
+            next: "G4",
+            reply: "Common trap noted. Next stop: traffic profile.",
+          },
+          {
+            key: "2",
+            label: "↩ Rewind to IDENTITY (Marty)",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Undo the quarantine impulse. Rewrite from identity.",
+            golden: false,
+            rewindTo: "G3",
+            reply: "Flux capacitor: back to IDENTITY.",
+          },
+        ],
+      },
+      B6: {
+        id: "B6",
+        stop: "PEOPLE PROCESS",
+        room: "side car — HR form",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> ticket --hr" },
+          { t: "narr", x: "There is no person name in telemetry. Privacy MAC ≠ Bob from Accounting." },
+          { t: "miss", x: "You almost blamed a person without a name." },
+          { t: "sys", x: "Close the form. Forward." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Humility: unknown person on Wi‑Fi — continue",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "Drop the people process. Keep detective work on the host story.",
+            golden: false,
+            next: "G4",
+            reply: "Humility restored. Traffic car next.",
+          },
+        ],
+      },
+      G4: {
+        id: "G4",
+        stop: "TRAFFIC",
+        room: "dns car — names fly past the windows",
+        goldenStep: 4,
+        lines: [
+          { t: "sys", x: "> xql host-dns-top · host-threats" },
+          { t: "narr", x: "DNS: Kandji MDM, Apple services, work Slack, Gmail IMAP, Spotify, VS Code CDN. Outbound mostly 443. Threats: informational TLS notes only." },
+          { t: "amber", x: "Corroborate with a second source. Still non-destructive log reading." },
+          { t: "sys", x: "Call the traffic." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "SaaS / MDM laptop profile — supports false positive",
+            move: "Correlate",
+            integrity: "non-destructive",
+            eli5: "Second source (DNS) agrees with “normal laptop.” Stacking evidence, not swinging a hammer.",
+            golden: true,
+            next: "G5",
+            reply: "Multi-source agreement building. One more stop: disposition.",
+          },
+          {
+            key: "2",
+            label: "Slack and Apple are cover for C2 — still malicious",
+            move: "Hypothesize",
+            integrity: "non-destructive",
+            eli5: "Another theory — still just words. No isolate button. Testable with rare domains (we don’t have them).",
+            golden: false,
+            next: "B7",
+            flagsDelta: { wild_theory: true },
+            reply: "Tunnel vision car.",
+          },
+          {
+            key: "3",
+            label: "I need another hour of XQL before deciding",
+            move: "Observe",
+            integrity: "non-destructive",
+            eli5: "More log reading is safe forensics — but this tour is short. You already have enough crumbs.",
+            golden: false,
+            next: "B8",
+            timePenaltySec: 20,
+            reply: "Analysis paralysis — clock bleeds.",
+          },
+        ],
+      },
+      B7: {
+        id: "B7",
+        stop: "TUNNEL VISION",
+        room: "side car — rare domains missing",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> hunt c2-cover" },
+          { t: "narr", x: "Without rare domains or internal recon fan-out, “Slack is C2 cover” is a stretch." },
+          { t: "miss", x: "You preferred a movie plot over public DNS." },
+          { t: "sys", x: "Look at the DNS list again." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Look at the DNS list again — rejoin",
+            move: "Correlate",
+            integrity: "non-destructive",
+            eli5: "Return to SaaS/MDM evidence. Still non-destructive.",
+            golden: false,
+            next: "G5",
+            reply: "DNS still looks like a managed Mac. Disposition next — confidence may be soft.",
+          },
+        ],
+      },
+      B8: {
+        id: "B8",
+        stop: "ANALYSIS PARALYSIS",
+        room: "side car — endless XQL",
+        branch: true,
+        lines: [
+          { t: "sys", x: "> xql --forever" },
+          { t: "narr", x: "You already have alert remotes + identity + DNS. Another hour won’t change the teaching answer." },
+          { t: "miss", x: "This is a 3‑minute tour. Clock penalty applied." },
+          { t: "sys", x: "Decide with what you have." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Continue to disposition with current evidence",
+            move: "Decide",
+            integrity: "non-destructive",
+            eli5: "Stop stalling. Use the crumbs you have.",
+            golden: false,
+            next: "G5",
+            reply: "Fair. Terminus ahead.",
+          },
+        ],
+      },
+      G5: {
+        id: "G5",
+        stop: "TERMINUS",
+        room: "disposition platform",
+        goldenStep: 5,
+        terminal: true,
+        lines: [
+          { t: "sys", x: "> write disposition" },
+          { t: "narr", x: "The train eases in. Original hunter's recommended call:" },
+          { t: "amber", x: "FALSE POSITIVE · confidence ~0.85 · do not isolate" },
+          { t: "narr", x: "Why: Host Sweep toward public DNS on port 53 + agentless Mac + normal SaaS/MDM DNS. Scary name, soft evidence." },
+          { t: "sys", x: "Seal the tour. Decide ≠ destroy. Isolate would still be destructive — we don’t need it." },
+        ],
+        choices: [
+          {
+            key: "1",
+            label: "Agree: FP close with written disproof",
+            move: "Decide",
+            integrity: "state-changing",
+            eli5: "You change the *ticket* (closed as false alarm), not the laptop. Process state changes; endpoint stays free.",
+            golden: true,
+            next: null,
+            ending: "agree",
+            reply: "Ticket stamped. Disposition: false positive · isolate = false.",
+          },
+          {
+            key: "2",
+            label: "I'd still watch the host 24h — soft agree",
+            move: "Watch",
+            integrity: "non-destructive",
+            eli5: "Keep looking tomorrow. No unplug, no wipe — pure observe with a longer clock.",
+            golden: false,
+            next: null,
+            ending: "watch",
+            reply: "Reasonable. Hunt said FP now; watching is free. Soft success.",
+          },
+          {
+            key: "3",
+            label: "Show me what would change the hunter's mind",
+            move: "Learn",
+            integrity: "non-destructive",
+            eli5: "Ask what new evidence would justify a destructive Act later. Learning flip conditions — still safe.",
+            golden: false,
+            next: null,
+            ending: "whatif",
+            reply: "Internal 10.220 recon, rare C2 domains, agent + bad process chain. None seen. Soft success.",
+          },
+        ],
+      },
+    };
+
+    const state = {
+      timelineId: "t0",
+      nodeId: TOUR.startNode,
+      history: [],
+      flags: EMPTY_FLAGS(),
+      scores: { data: 0, guess: 0, act: 0, goldenSteps: 0 },
+      locked: false,
+      finished: false,
+      started: false,
+      deadline: null,
+      timerId: null,
+      timerPausedAt: null,
+      penaltySec: 0,
+      rewindCount: 0,
+      recentLines: [],
+      lastChoice: null,
+      pendingSelection: "",
+      moveCounts: {},
+      integrityCounts: { "non-destructive": 0, destructive: 0, "state-changing": 0 },
+      pendingRewindIndex: null,
+    };
+
+    /** pickLog alias for ELI5 / stance — derived from history */
+    function pickLog() {
+      return state.history.map((h) => ({
+        beat: h.nodeId,
+        nodeId: h.nodeId,
+        key: h.choiceKey,
+        label: h.label,
+        move: h.move,
+        integrity: h.integrity,
+        track: !!h.golden,
+        golden: !!h.golden,
+        stop: h.stop,
+      }));
+    }
+
+    function integrityClass(integrity) {
+      if (integrity === "destructive") return "tag-destructive";
+      if (integrity === "state-changing") return "tag-state-changing";
+      return "tag-non-destructive";
+    }
+
+    function integrityLabel(integrity) {
+      if (integrity === "destructive") return "Destructive";
+      if (integrity === "state-changing") return "State-changing";
+      return "Non-destructive";
+    }
+
+    /**
+     * Stance: data / guess / act / meta
+     */
+    function stanceFor(pick) {
+      const move = (pick.move || "").toLowerCase();
+      const integrity = pick.integrity || "non-destructive";
+      const track = !!(pick.track || pick.golden);
+
+      if (integrity === "destructive" || (move === "act" && integrity === "destructive")) {
+        return {
+          id: "act",
+          label: "Acting first",
+          short: "ACT",
+          hint: "Changed (or tried to change) the host/network before the story was solid",
+        };
+      }
+      if (move === "act" && integrity === "state-changing") {
+        return {
+          id: "act",
+          label: "Process action",
+          short: "ACT",
+          hint: "People/ticket action without finishing the evidence loop",
+        };
+      }
+      if (move === "hypothesize" && !track) {
+        return {
+          id: "guess",
+          label: "Guessing",
+          short: "GUESS",
+          hint: "Named a theory that doesn’t match the evidence on this path",
+        };
+      }
+      if (move === "hypothesize" && track) {
+        return {
+          id: "data",
+          label: "Reasoned call",
+          short: "DATA",
+          hint: "Hypothesis grounded in what you just saw (remotes / DNS / identity)",
+        };
+      }
+      if (move === "learn") {
+        return {
+          id: "meta",
+          label: "Meta",
+          short: "META",
+          hint: "About the tour / learning — not a forensic call yet",
+        };
+      }
+      if (!track && (move === "triage" || move === "observe")) {
+        return {
+          id: "guess",
+          label: "Off-path focus",
+          short: "GUESS",
+          hint: "Still looking, but not at the lead this tour is teaching",
+        };
+      }
+      return {
+        id: "data",
+        label: "Following data",
+        short: "DATA",
+        hint: "Read / sort / stack evidence without breaking the scene",
+      };
+    }
+
+    function choiceTagsHtml(c) {
+      const move = c.move || "Observe";
+      const integrity = c.integrity || "non-destructive";
+      return (
+        `<div class="tags">` +
+        `<span class="tag tag-move">${escapeHtml(move)}</span>` +
+        `<span class="tag ${integrityClass(integrity)}">${escapeHtml(integrityLabel(integrity))}</span>` +
+        `</div>`
+      );
+    }
+
+    function recomputeFromHistory() {
+      const flags = EMPTY_FLAGS();
+      const scores = { data: 0, guess: 0, act: 0, goldenSteps: 0 };
+      const moveCounts = {};
+      const integrityCounts = { "non-destructive": 0, destructive: 0, "state-changing": 0 };
+      let penaltySec = 0;
+
+      state.history.forEach((h) => {
+        if (h.flagsDelta) {
+          Object.keys(h.flagsDelta).forEach((k) => {
+            if (h.flagsDelta[k]) flags[k] = true;
+          });
+        }
+        const st = stanceFor(h);
+        if (st.id === "data") scores.data++;
+        else if (st.id === "guess") scores.guess++;
+        else if (st.id === "act") scores.act++;
+        if (h.golden) scores.goldenSteps++;
+        const move = h.move || "Observe";
+        const integrity = h.integrity || "non-destructive";
+        moveCounts[move] = (moveCounts[move] || 0) + 1;
+        integrityCounts[integrity] = (integrityCounts[integrity] || 0) + 1;
+        if (h.timePenaltySec) penaltySec += h.timePenaltySec;
+      });
+
+      state.flags = flags;
+      state.scores = scores;
+      state.moveCounts = moveCounts;
+      state.integrityCounts = integrityCounts;
+      state.penaltySec = penaltySec;
+    }
+
+    function hasStains() {
+      const f = state.flags;
+      return !!(f.rash_act || f.assumed_breach || f.hostile_bias || f.named_human_error || f.wild_theory);
+    }
+
+    function computeBadge(endingKey) {
+      const stains = hasStains();
+      const cleanGolden =
+        endingKey === "agree" &&
+        !stains &&
+        state.scores.act === 0 &&
+        state.history.every((h) => {
+          if (h.nodeId && String(h.nodeId).startsWith("B")) return false;
+          return true;
+        });
+      // Allow B-rooms only if rewound away — history should not include them for clean
+      const onlyGoldenG =
+        endingKey === "agree" &&
+        !stains &&
+        state.scores.act === 0 &&
+        state.history.filter((h) => h.golden).length >= 6;
+
+      if (onlyGoldenG || cleanGolden) {
+        return { id: "clean", label: "Clean first pass", stars: 3 };
+      }
+      if (state.rewindCount > 0 && endingKey === "agree" && !stains) {
+        return { id: "traveler", label: "Time traveler", stars: 3 };
+      }
+      if (endingKey === "agree" && stains) {
+        return { id: "messy", label: "Messy but finished", stars: 1 };
+      }
+      if (endingKey === "watch") {
+        return { id: "cautious", label: "Cautious closer", stars: 2 };
+      }
+      if (endingKey === "whatif") {
+        return { id: "flip", label: "Knows flip conditions", stars: 2 };
+      }
+      return { id: "done", label: "Tour complete", stars: 1 };
+    }
+
+    function flagEndLines() {
+      const lines = [];
+      const f = state.flags;
+      if (f.rash_act || f.assumed_breach) {
+        lines.push("You reached for containment early.");
+      }
+      if (f.hostile_bias) lines.push("You treated missing agent as guilt.");
+      if (f.named_human_error) lines.push("You almost blamed a person without a name.");
+      if (f.wild_theory) lines.push("You preferred a movie plot over public DNS.");
+      if (f.distracted) lines.push("You wandered the noise warren before the teaching case.");
+      if (!lines.length) {
+        lines.push("Clean first pass — non-destructive until decide.");
+      }
+      return lines;
+    }
+
+    function openRewindModal(historyIndex) {
+      if (historyIndex < 0 || historyIndex >= state.history.length) return;
+      if (state.locked && !state.finished) return;
+      const h = state.history[historyIndex];
+      state.pendingRewindIndex = historyIndex;
+      pauseTimer();
+      document.getElementById("rewindMsg").textContent =
+        `Rewrite the future from ${h.stop || h.nodeId}? Decision “${h.label.slice(0, 80)}” and everything after will be unremembered.`;
+      document.getElementById("rewindBg").classList.add("open");
+      document.getElementById("rewindModal").classList.add("open");
+    }
+
+    function closeRewindModal() {
+      document.getElementById("rewindBg").classList.remove("open");
+      document.getElementById("rewindModal").classList.remove("open");
+      state.pendingRewindIndex = null;
+      resumeTimer();
+    }
+
+    function applyRewind(historyIndex) {
+      // Keep entries before the decision being redone; re-open that node without the choice
+      const target = state.history[historyIndex];
+      if (!target) return;
+      state.history = state.history.slice(0, historyIndex);
+      recomputeFromHistory();
+      state.nodeId = target.nodeId;
+      state.finished = false;
+      state.locked = false;
+      state.lastChoice = null;
+      state.rewindCount++;
+      state.timelineId = "t" + state.rewindCount;
+      state.recentLines = [];
+      // closeRewindModal resumes pause; ensure timer runs again after terminus rewind
+      const wasPaused = !!state.timerPausedAt;
+      closeRewindModal();
+      if (state.started) {
+        if (!state.deadline) {
+          startTimer();
+        } else if (!state.timerId) {
+          if (wasPaused && state.timerPausedAt) {
+            /* closeRewindModal already resumed */
+          }
+          if (!state.timerId) {
+            state.timerId = setInterval(paintTimer, 250);
+            paintTimer();
+          }
+        }
+      }
+      showNode({ rewindFlash: target.stop || target.nodeId });
+    }
+
+    function renderCrumbs() {
+      const list = document.getElementById("crumbsList");
+      const picks = pickLog();
+      document.getElementById("scData").textContent = String(state.scores.data);
+      document.getElementById("scGuess").textContent = String(state.scores.guess);
+      document.getElementById("scAct").textContent = String(state.scores.act);
+
+      if (!picks.length) {
+        list.innerHTML =
+          `<div class="crumb-empty">Your stops appear here as you choose.<br/><br/>` +
+          `Watch whether you <span style="color:#9dffb0">follow data</span>, ` +
+          `<span style="color:var(--amber)">guess</span>, or ` +
+          `<span style="color:var(--red)">act destructively</span>.<br/><br/>` +
+          `Past stops get <span style="color:var(--cyan)">↩ Change decision</span> (Marty McFly).</div>`;
+        return;
+      }
+
+      const cur = NODES[state.nodeId];
+      let html = state.history
+        .map((p, idx) => {
+          const st = stanceFor(p);
+          const shortLabel =
+            p.label.length > 64 ? p.label.slice(0, 62) + "…" : p.label;
+          const canRewind = !state.locked || state.finished;
+          return (
+            `<div class="crumb stance-${st.id}" title="${escapeHtml(st.hint)}">` +
+            `<div class="stop">${escapeHtml(p.stop || p.nodeId)} · step ${idx + 1}</div>` +
+            `<div class="title">${escapeHtml(shortLabel)}</div>` +
+            `<div class="tags">` +
+            `<span class="tag tag-move">${escapeHtml(p.move || "?")}</span>` +
+            `<span class="tag ${integrityClass(p.integrity)}">${escapeHtml(integrityLabel(p.integrity))}</span>` +
+            `</div>` +
+            `<div class="stance ${st.id}">${escapeHtml(st.short)} · ${escapeHtml(st.label)}</div>` +
+            (canRewind
+              ? `<button type="button" class="rewind-btn" data-rewind="${idx}">↩ Change decision</button>`
+              : "") +
+            `</div>`
+          );
+        })
+        .join("");
+
+      if (cur && !state.finished && !state.locked) {
+        html +=
+          `<div class="crumb current stance-meta">` +
+          `<div class="stop">Now · ${escapeHtml(cur.stop)}</div>` +
+          `<div class="title">${escapeHtml(cur.room)}</div>` +
+          `<div class="stance meta">YOU ARE HERE · ${escapeHtml(state.timelineId)}</div>` +
+          `</div>`;
+      }
+      list.innerHTML = html;
+      list.querySelectorAll("[data-rewind]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openRewindModal(Number(btn.getAttribute("data-rewind")));
+        });
+      });
+      list.scrollTop = list.scrollHeight;
+    }
+
+    const logEl = document.getElementById("log");
+    const choicesEl = document.getElementById("choices");
+    const tip = document.getElementById("tip");
+    const tipTerm = document.getElementById("tipTerm");
+    const tipBody = document.getElementById("tipBody");
+    const selBar = document.getElementById("selBar");
+    const eli5Panel = document.getElementById("eli5Panel");
+    const eli5Body = document.getElementById("eli5Body");
+    const eli5SelText = document.getElementById("eli5SelText");
+    const eli5Ft = document.getElementById("eli5Ft");
+
+    function clearLog() {
+      logEl.innerHTML = "";
+    }
+
+    function line(text, cls) {
+      const p = document.createElement("p");
+      if (cls) p.className = cls;
+      p.innerHTML = withJargon(text);
+      logEl.appendChild(p);
+      logEl.scrollTop = logEl.scrollHeight;
+      bindJargon(p);
+      state.recentLines.push({ t: cls || "narr", x: String(text) });
+      if (state.recentLines.length > 40) state.recentLines.shift();
+    }
+
+    function getSelectionInMud() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+      const text = String(sel.toString() || "").trim();
+      if (!text || text.length < 2) return null;
+      const range = sel.getRangeAt(0);
+      const mud = document.querySelector(".mud");
+      if (!mud) return null;
+      // selection must intersect the mud panel
+      const common = range.commonAncestorContainer;
+      const node = common.nodeType === 1 ? common : common.parentElement;
+      if (!node || !mud.contains(node)) return null;
+      return { text: text.slice(0, 2000), range };
+    }
+
+    function placeSelBar(range) {
+      const rect = range.getBoundingClientRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) {
+        selBar.classList.remove("show");
+        return;
+      }
+      selBar.classList.add("show");
+      const barW = selBar.offsetWidth || 140;
+      let left = rect.left + rect.width / 2 - barW / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - barW - 8));
+      let top = rect.top - 40;
+      if (top < 8) top = rect.bottom + 8;
+      selBar.style.left = left + "px";
+      selBar.style.top = top + "px";
+    }
+
+    function hideSelBar() {
+      selBar.classList.remove("show");
+    }
+
+    function onSelectionMaybe() {
+      // delay so mouseup selection settles
+      setTimeout(() => {
+        const got = getSelectionInMud();
+        if (!got) {
+          hideSelBar();
+          state.pendingSelection = "";
+          return;
+        }
+        state.pendingSelection = got.text;
+        placeSelBar(got.range);
+      }, 10);
+    }
+
+    document.addEventListener("mouseup", onSelectionMaybe);
+    document.addEventListener("keyup", (e) => {
+      if (e.key === "Shift" || e.key.startsWith("Arrow")) onSelectionMaybe();
+    });
+    document.addEventListener("selectionchange", () => {
+      // only hide if truly empty
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) hideSelBar();
+    });
+
+    function buildClientContext() {
+      const b = NODES[state.nodeId] || {};
+      let timerLeft = null;
+      if (state.deadline) {
+        timerLeft = Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
+      }
+      return {
+        current_stop: b.stop || null,
+        current_beat_id: b.id || state.nodeId || null,
+        node_id: state.nodeId,
+        beat_index: state.history.length,
+        room: b.room || null,
+        recent_narration: state.recentLines.slice(-24),
+        last_choice: state.lastChoice,
+        timer_seconds_left: timerLeft,
+        tour_title: TOUR.title,
+        on_track_hits: state.scores.goldenSteps,
+        timeline_id: state.timelineId,
+        flags: { ...state.flags },
+        history: state.history.map((h) => ({
+          nodeId: h.nodeId,
+          choiceKey: h.choiceKey,
+          label: h.label,
+          move: h.move,
+          integrity: h.integrity,
+          golden: !!h.golden,
+          stop: h.stop,
+        })),
+        scores: { ...state.scores },
+      };
+    }
+
+    async function runEli5(selection) {
+      hideSelBar();
+      hideTip();
+      eli5Panel.classList.add("show");
+      eli5SelText.textContent = "“" + selection + "”";
+      eli5Body.className = "bd loading";
+      eli5Body.textContent = "Sending selection + full hunt package to the model…";
+      eli5Ft.textContent = "Context: path steps, shadow reasoning, evidence briefs, current tour stop";
+
+      try {
+        const res = await fetch(ELI5_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            selection,
+            client_context: buildClientContext(),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.detail || data.error || "HTTP " + res.status);
+        }
+        eli5Body.className = "bd";
+        eli5Body.textContent = data.explanation || "(empty response)";
+        eli5Ft.textContent =
+          "model: " + (data.model || "?") + " · package: " + (data.package_id || "sth-20260801-host-sweep-fp");
+      } catch (err) {
+        // Fallback: local jargon if single term matches
+        const key = JARGON_KEYS.find((k) => k.toLowerCase() === selection.toLowerCase());
+        if (key && JARGON[key]) {
+          eli5Body.className = "bd";
+          eli5Body.textContent =
+            JARGON[key].eli5 +
+            "\n\n(Offline fallback tip — AI service unreachable: " +
+            String(err.message || err) +
+            ")";
+          eli5Ft.textContent = "fallback: local jargon dictionary";
+          return;
+        }
+        eli5Body.className = "bd error";
+        eli5Body.textContent =
+          "Couldn’t reach the ELI5 service.\n\n" +
+          String(err.message || err) +
+          "\n\nStart it with:\n  python docs/mocks/06-shadow-hunter/eli5_server.py\n(or docker compose service mock-06-eli5)\nNeeds GEMINI_API_KEY.";
+        eli5Ft.textContent = "API: " + ELI5_API;
+      }
+    }
+
+    document.getElementById("btnEli5Sel").onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = state.pendingSelection || (getSelectionInMud() || {}).text;
+      if (text) runEli5(text);
+    };
+    document.getElementById("btnEli5Cancel").onclick = (e) => {
+      e.preventDefault();
+      hideSelBar();
+      window.getSelection()?.removeAllRanges();
+    };
+    document.getElementById("eli5Close").onclick = () => {
+      eli5Panel.classList.remove("show");
+    };
+
+    function bindJargon(root) {
+      root.querySelectorAll(".jargon").forEach((el) => {
+        el.addEventListener("mouseenter", (e) => showTip(el, e));
+        el.addEventListener("focus", (e) => showTip(el, e));
+        el.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          showTip(el, e, true);
+        });
+      });
+    }
+
+    function showTip(el, evt, pin) {
+      const key = el.getAttribute("data-jargon");
+      const j = JARGON[key];
+      if (!j) return;
+      document.querySelectorAll(".jargon[data-open='1']").forEach((n) => n.removeAttribute("data-open"));
+      el.setAttribute("data-open", "1");
+      tipTerm.textContent = j.term;
+      tipBody.textContent = j.eli5;
+      tip.classList.add("show");
+
+      const rect = el.getBoundingClientRect();
+      const tipW = Math.min(320, window.innerWidth - 24);
+      let left = rect.left + rect.width / 2 - tipW / 2;
+      left = Math.max(12, Math.min(left, window.innerWidth - tipW - 12));
+      let top = rect.bottom + 8;
+      tip.style.width = tipW + "px";
+      tip.style.left = left + "px";
+      tip.style.top = top + "px";
+      // flip up if near bottom
+      requestAnimationFrame(() => {
+        const h = tip.offsetHeight;
+        if (top + h > window.innerHeight - 12) {
+          tip.style.top = Math.max(12, rect.top - h - 8) + "px";
+        }
+      });
+    }
+
+    function hideTip() {
+      tip.classList.remove("show");
+      document.querySelectorAll(".jargon[data-open='1']").forEach((n) => n.removeAttribute("data-open"));
+    }
+
+    document.getElementById("tipClose").onclick = (e) => {
+      e.stopPropagation();
+      hideTip();
+    };
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".jargon") && !e.target.closest("#tip")) hideTip();
+    });
+    // sample in hint bar
+    document.querySelectorAll(".jargon-hint .sample").forEach((el) => {
+      el.addEventListener("click", (e) => showTip(el, e, true));
+      el.addEventListener("mouseenter", (e) => showTip(el, e));
+    });
+
+    function goldenProgressIndex() {
+      const cur = NODES[state.nodeId];
+      if (state.finished) return TOUR.goldenOrder.length;
+      if (cur && typeof cur.goldenStep === "number") return cur.goldenStep;
+      // on a branch room, show last golden from history
+      let best = 0;
+      state.history.forEach((h) => {
+        const n = NODES[h.nodeId];
+        if (n && typeof n.goldenStep === "number") best = Math.max(best, n.goldenStep);
+      });
+      return best;
+    }
+
+    function renderTrack() {
+      const idx = goldenProgressIndex();
+      document.getElementById("track").innerHTML = TOUR.goldenOrder
+        .map((_, i) => {
+          let cls = "";
+          if (i < idx) cls = "done";
+          if (i === idx && !state.finished) cls = "now";
+          if (state.finished) cls = "done";
+          return `<span class="${cls}"></span>`;
+        })
+        .join("");
+    }
+
+    function updateStatus() {
+      const b = NODES[state.nodeId];
+      document.getElementById("stopName").textContent = b ? b.stop : "—";
+      const step = Math.min(goldenProgressIndex() + 1, TOUR.goldenOrder.length);
+      document.getElementById("beatNum").textContent = `${step} / ${TOUR.goldenOrder.length}`;
+      document.getElementById("roomTag").textContent = b ? `// ${b.room}` : "";
+      renderTrack();
+    }
+
+    function timerLeftSec() {
+      if (!state.deadline) return TOUR.durationSec;
+      return Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
+    }
+
+    function paintTimer() {
+      const el = document.getElementById("timer");
+      const left = timerLeftSec();
+      const m = Math.floor(left / 60);
+      const s = String(left % 60).padStart(2, "0");
+      el.textContent = `${m}:${s}`;
+      el.classList.toggle("urgent", left <= 60 && left > 0);
+      el.classList.toggle("over", left === 0);
+    }
+
+    function startTimer() {
+      state.deadline = Date.now() + TOUR.durationSec * 1000 - state.penaltySec * 1000;
+      paintTimer();
+      if (state.timerId) clearInterval(state.timerId);
+      state.timerId = setInterval(paintTimer, 250);
+    }
+
+    function pauseTimer() {
+      if (!state.deadline || state.timerPausedAt) return;
+      state.timerPausedAt = Date.now();
+      if (state.timerId) {
+        clearInterval(state.timerId);
+        state.timerId = null;
+      }
+    }
+
+    function resumeTimer() {
+      if (!state.timerPausedAt || !state.deadline) {
+        state.timerPausedAt = null;
+        return;
+      }
+      const pausedFor = Date.now() - state.timerPausedAt;
+      state.deadline += pausedFor;
+      state.timerPausedAt = null;
+      if (state.started && !state.finished) {
+        if (state.timerId) clearInterval(state.timerId);
+        state.timerId = setInterval(paintTimer, 250);
+        paintTimer();
+      }
+    }
+
+    function applyTimePenalty(sec) {
+      if (!sec || sec <= 0) return;
+      state.penaltySec += sec;
+      if (state.deadline) {
+        state.deadline -= sec * 1000;
+        paintTimer();
+      }
+    }
+
+    function showNode(opts) {
+      opts = opts || {};
+      state.locked = false;
+      state.finished = false;
+      hideTip();
+      clearLog();
+      choicesEl.innerHTML = "";
+      updateStatus();
+      renderCrumbs();
+      const b = NODES[state.nodeId];
+      if (!b) {
+        line("Unknown car: " + state.nodeId, "miss");
+        return;
+      }
+
+      if (opts.rewindFlash) {
+        line(`Flux capacitor: back to ${opts.rewindFlash}. Future stations unremembered.`, "amber");
+      }
+
+      // Dynamic flag-aware lines for branch rooms
+      let lines = b.lines.slice();
+      if (state.nodeId === "B5" && state.flags.rash_act) {
+        lines = lines.concat([
+          { t: "miss", x: "Harder lecture: you already reached for the blast door once this timeline." },
+        ]);
+      }
+      if (state.nodeId === "B7" && (state.flags.wild_theory || state.flags.hostile_bias)) {
+        lines = lines.concat([
+          { t: "miss", x: "Compounding error: earlier bias/theory makes this stretch look familiar." },
+        ]);
+      }
+      if (state.flags.isolate_locked && (state.nodeId === "G2" || state.nodeId === "G3" || state.nodeId === "G4")) {
+        lines = lines.concat([
+          { t: "sys", x: "NOTE: isolate tool locked this timeline (containment stain)." },
+        ]);
+      }
+
+      lines.forEach((L) => line(L.x, L.t));
+      line("What do you do?", "sys");
+
+      b.choices.forEach((c) => {
+        // Hide destructive isolate if locked mid-path (G* only aesthetic; B rooms still teach)
+        const integrity = c.integrity || "non-destructive";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className =
+          "choice" +
+          (integrity === "destructive"
+            ? " integrity-destructive"
+            : integrity === "state-changing"
+              ? " integrity-state-changing"
+              : "");
+        const eli5 = c.eli5
+          ? `<span class="eli5">${withJargon(c.eli5)}</span>`
+          : "";
+        btn.innerHTML =
+          `<span class="key">${c.key}</span>` +
+          `<span class="label">` +
+          choiceTagsHtml(c) +
+          `<span class="label-main">${withJargon(c.label)}</span>` +
+          eli5 +
+          `</span>`;
+        btn.onclick = () => pick(c);
+        choicesEl.appendChild(btn);
+        bindJargon(btn);
+      });
+    }
+
+    function pick(c) {
+      if (state.locked || state.finished) return;
+      state.locked = true;
+      if (!state.started) {
+        state.started = true;
+        startTimer();
+      }
+
+      // Immediate rewind choice from branch room
+      if (c.rewindTo) {
+        const idx = state.history.map((h) => h.nodeId).lastIndexOf(c.rewindTo);
+        if (idx >= 0) {
+          line(`> ${c.label}`, "you");
+          line(c.reply || "Flux capacitor…", "amber");
+          setTimeout(() => applyRewind(idx), 500);
+          return;
+        }
+        // No history entry yet for that node (edge) — jump clean
+        line(`> ${c.label}`, "you");
+        line("Flux capacitor: timeline rewrite.", "amber");
+        setTimeout(() => {
+          state.nodeId = c.rewindTo;
+          state.locked = false;
+          state.rewindCount++;
+          state.timelineId = "t" + state.rewindCount;
+          showNode({ rewindFlash: (NODES[c.rewindTo] || {}).stop || c.rewindTo });
+        }, 500);
+        return;
+      }
+
+      const node = NODES[state.nodeId];
+      const move = c.move || "Observe";
+      const integrity = c.integrity || "non-destructive";
+      const entry = {
+        nodeId: state.nodeId,
+        stop: node ? node.stop : state.nodeId,
+        choiceKey: c.key,
+        label: c.label,
+        move,
+        integrity,
+        golden: !!c.golden,
+        flagsDelta: c.flagsDelta || null,
+        timePenaltySec: c.timePenaltySec || 0,
+        ending: c.ending || null,
+      };
+      state.history.push(entry);
+      recomputeFromHistory();
+      if (c.timePenaltySec) applyTimePenalty(c.timePenaltySec);
+      renderCrumbs();
+
+      [...choicesEl.querySelectorAll("button")].forEach((b) => {
+        b.disabled = true;
+      });
+
+      state.lastChoice = {
+        key: c.key,
+        label: c.label,
+        track: !!c.golden,
+        golden: !!c.golden,
+        reply: c.reply,
+        move,
+        integrity,
+        ending: c.ending || null,
+      };
+      const st = stanceFor(entry);
+      line(`> ${c.label}`, "you");
+      line(`[${st.short}] ${st.label} · ${move} · ${integrityLabel(integrity)}`, "sys");
+      line(c.reply, c.golden ? "ok" : "miss");
+
+      // Terminal choice → finish
+      if (c.ending || c.next === null || (node && node.terminal && !c.next)) {
+        setTimeout(() => finish(c), 700);
+        return;
+      }
+
+      setTimeout(() => {
+        state.nodeId = c.next;
+        showNode();
+      }, 1100);
+    }
+
+    function resetRun() {
+      if (state.timerId) clearInterval(state.timerId);
+      state.timelineId = "t0";
+      state.nodeId = TOUR.startNode;
+      state.history = [];
+      state.flags = EMPTY_FLAGS();
+      state.scores = { data: 0, guess: 0, act: 0, goldenSteps: 0 };
+      state.locked = false;
+      state.finished = false;
+      state.started = false;
+      state.deadline = null;
+      state.timerId = null;
+      state.timerPausedAt = null;
+      state.penaltySec = 0;
+      state.rewindCount = 0;
+      state.moveCounts = {};
+      state.integrityCounts = { "non-destructive": 0, destructive: 0, "state-changing": 0 };
+      state.recentLines = [];
+      state.lastChoice = null;
+      state.pendingRewindIndex = null;
+      document.getElementById("timer").textContent = "3:00";
+      document.getElementById("timer").className = "timer";
+      showNode();
+    }
+
+    function finish(lastChoice) {
+      hideTip();
+      clearLog();
+      choicesEl.innerHTML = "";
+      state.finished = true;
+      state.locked = false;
+      if (state.timerId) {
+        clearInterval(state.timerId);
+        state.timerId = null;
+      }
+      document.getElementById("stopName").textContent = "TERMINUS";
+      document.getElementById("roomTag").textContent = "// tour complete";
+      document.getElementById("beatNum").textContent = `${TOUR.goldenOrder.length} / ${TOUR.goldenOrder.length}`;
+      renderTrack();
+
+      const endingKey = (lastChoice && lastChoice.ending) || "agree";
+      const badge = computeBadge(endingKey);
+      const stars = "★".repeat(badge.stars) + "☆".repeat(Math.max(0, 3 - badge.stars));
+
+      line("> tour --complete", "sys");
+      line("Investigation: " + TOUR.title, "narr");
+      line(lastChoice.reply || "Tour complete.", "ok");
+
+      const badgeEl = document.createElement("div");
+      badgeEl.className = "badge-pill";
+      badgeEl.textContent = `${stars}  ${badge.label}`;
+      logEl.appendChild(badgeEl);
+
+      flagEndLines().forEach((t) => line(t, hasStains() ? "miss" : "ok"));
+
+      if (endingKey === "agree") {
+        line("disposition = false_positive · confidence ≈ 0.85 · isolate = false", "amber");
+      } else if (endingKey === "watch") {
+        line("disposition = watch_24h · non-destructive · isolate = false", "amber");
+      } else {
+        line("disposition = learning · flip conditions noted · isolate = false", "amber");
+      }
+
+      renderCrumbs();
+      const ic = state.integrityCounts;
+
+      const tally = document.createElement("div");
+      tally.className = "tally";
+      tally.innerHTML =
+        `<div class="cell nd"><b>${state.scores.data}</b><span>Following data<br/>(evidence path)</span></div>` +
+        `<div class="cell sc"><b>${state.scores.guess}</b><span>Guessing<br/>(off-path theory)</span></div>` +
+        `<div class="cell d"><b>${state.scores.act}</b><span>Acting<br/>(destructive / process)</span></div>` +
+        `<div class="cell"><b>${state.scores.goldenSteps}</b><span>Golden choices<br/>rewinds: ${state.rewindCount}</span></div>`;
+      logEl.appendChild(tally);
+
+      const moves = Object.entries(state.moveCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([m, n]) => `${m}×${n}`)
+        .join(" · ");
+      line("Hunter moves: " + (moves || "—"), "sys");
+      line(
+        `Integrity: ND ${ic["non-destructive"] || 0} · Destructive ${ic.destructive || 0} · State-changing ${ic["state-changing"] || 0}`,
+        "sys"
+      );
+
+      if (state.scores.act > 0) {
+        line(
+          "You reached for Act at least once — rewind past stains for Clean first pass, or wear Messy but finished.",
+          "miss"
+        );
+      } else if (state.scores.guess > state.scores.data) {
+        line(
+          "More guesses than data-follows — try remotes, identity, and DNS next ride.",
+          "miss"
+        );
+      } else {
+        line(
+          "Mostly following data — classic first-pass forensics: observe, then decide.",
+          "ok"
+        );
+      }
+
+      const box = document.createElement("div");
+      box.className = "end-box";
+      box.innerHTML =
+        "<h2>What the path taught</h2><ul>" +
+        "<li>" + withJargon("Non-destructive first — query and read without changing the host") + "</li>" +
+        "<li>" + withJargon("Destructive (isolate/quarantine) only after the story holds") + "</li>" +
+        "<li>" + withJargon("Decide/close can be state-changing without destroying the endpoint") + "</li>" +
+        "<li>" + withJargon("Off-path rooms leave stains — ↩ rewrites the timeline") + "</li>" +
+        "<li>" + withJargon("Disposition: false positive · no isolate") + "</li>" +
+        "</ul>";
+      logEl.appendChild(box);
+      bindJargon(box);
+
+      const again = document.createElement("button");
+      again.className = "choice";
+      again.innerHTML = `<span class="key">1</span><span class="label">Ride again from the station</span>`;
+      again.onclick = () => resetRun();
+      choicesEl.appendChild(again);
+
+      const hub = document.createElement("button");
+      hub.className = "choice";
+      hub.innerHTML = `<span class="key">2</span><span class="label">Open jargon glossary</span>`;
+      hub.onclick = () => openGlossary(true);
+      choicesEl.appendChild(hub);
+
+      const third = document.createElement("button");
+      third.className = "choice";
+      third.innerHTML = `<span class="key">3</span><span class="label">Back to mock hub</span>`;
+      third.onclick = () => {
+        window.location.href = "http://localhost:3100/";
+      };
+      choicesEl.appendChild(third);
+    }
+
+    // Rewind modal wiring
+    document.getElementById("rewindConfirm").onclick = () => {
+      const i = state.pendingRewindIndex;
+      if (i == null) return;
+      applyRewind(i);
+    };
+    document.getElementById("rewindCancel").onclick = () => closeRewindModal();
+    document.getElementById("rewindBg").onclick = () => closeRewindModal();
+
+    // Keyboard 1/2/3 + R rewind last
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        hideTip();
+        openGlossary(false);
+        closeRewindModal();
+        return;
+      }
+      const modalOpen = document.getElementById("rewindModal").classList.contains("open");
+      if (modalOpen) {
+        if (e.key === "Enter") document.getElementById("rewindConfirm").click();
+        return;
+      }
+      if ((e.key === "r" || e.key === "R") && state.history.length > 0) {
+        e.preventDefault();
+        openRewindModal(state.history.length - 1);
+        return;
+      }
+      if (state.locked && !state.finished) return;
+      if (e.key === "1" || e.key === "2" || e.key === "3") {
+        const btn = [...choicesEl.querySelectorAll("button")].find(
+          (b) => b.querySelector(".key")?.textContent === e.key
+        );
+        if (btn && !btn.disabled) btn.click();
+      }
+    });
+
+    // Glossary
+    function openGlossary(open) {
+      document.getElementById("glossary").classList.toggle("open", open);
+      document.getElementById("glossBg").classList.toggle("open", open);
+    }
+    document.getElementById("btnGlossary").onclick = () => openGlossary(true);
+    document.getElementById("glossClose").onclick = () => openGlossary(false);
+    document.getElementById("glossBg").onclick = () => openGlossary(false);
+
+    (function buildGlossary() {
+      const list = document.getElementById("glossList");
+      const seen = new Set();
+      const items = [];
+      JARGON_KEYS.forEach((k) => {
+        const j = JARGON[k];
+        if (!j || seen.has(j.term)) return;
+        seen.add(j.term);
+        items.push(j);
+      });
+      items.sort((a, b) => a.term.localeCompare(b.term));
+      list.innerHTML = items
+        .map(
+          (j) =>
+            `<div class="item"><div class="t">${escapeHtml(j.term)}</div>` +
+            `<div class="b">${escapeHtml(j.eli5)}</div></div>`
+        )
+        .join("");
+    })();
+
+    showNode();
+  </script>
+</body>
+</html>

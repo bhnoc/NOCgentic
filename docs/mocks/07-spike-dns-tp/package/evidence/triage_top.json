@@ -1,0 +1,32 @@
+{
+  "note": "Default 'new' top is noise-dominated. Live TP sat in under_investigation.",
+  "noise_examples": [
+    {
+      "rank": 1,
+      "name": "Exchange RCE / ZGrab → public OWA",
+      "disposition_class": "inbound_scanner_fp",
+      "teaching": "Critical severity + vuln name often scanners on decrypted_tap"
+    },
+    {
+      "rank": 2,
+      "name": "Large Upload (HTTPS)",
+      "disposition_class": "venue_upload_fp",
+      "teaching": "Volume and exfil category without multi-source = noise class"
+    }
+  ],
+  "primary": {
+    "case_id": "{{CASE_PRIMARY}}",
+    "status": "under_investigation",
+    "name": "Spike DNS Malware Traffic",
+    "triage_score_investigate": 126,
+    "reasons": ["malware", "dns-malware", "spike-dns", "exfil", "starred", "threat-cat"],
+    "why_open": "Sole-source malicious domain DNS from NOC WiFi host"
+  },
+  "optional_gold": {
+    "case_id": "{{CASE_GOLD}}",
+    "status": "resolved_true_positive",
+    "name": "Dual RAT historical (SecTopRAT + NetSupport)",
+    "live_c2_now": false,
+    "teaching": "Best multi-signal gold story; not the live hunt for today"
+  }
+}

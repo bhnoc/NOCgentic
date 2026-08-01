@@ -1,0 +1,39 @@
+{
+  "counts": {
+    "alerts": 7,
+    "incidents": 14
+  },
+  "incidents_sample": [
+    {
+      "incident_id": "{{CASE_RELATED_1}}",
+      "severity": "medium",
+      "status": "new",
+      "incident_name": "Blackhat Monitored Thread Incident (thread id redacted)"
+    },
+    {
+      "incident_id": "{{CASE_RELATED_2}}",
+      "severity": "medium",
+      "status": "new",
+      "incident_name": "Blackhat Monitored Thread Incident (thread id redacted)"
+    },
+    {
+      "incident_id": "{{CASE_RELATED_3}}",
+      "severity": "medium",
+      "status": "new",
+      "incident_name": "Blackhat Monitored Thread Incident (thread id redacted)"
+    },
+    {
+      "incident_id": "{{CASE_RELATED_4}}",
+      "severity": "medium",
+      "status": "new",
+      "incident_name": "Blackhat Monitored Thread Incident (thread id redacted)"
+    },
+    {
+      "incident_id": "{{CASE_RELATED_5}}",
+      "severity": "medium",
+      "status": "new",
+      "incident_name": "Blackhat Monitored Thread Incident (thread id redacted)"
+    }
+  ],
+  "curator_note": "Slack thread timestamps and raw secondary incident IDs removed from learner package; counts preserved for teaching noise volume."
+}

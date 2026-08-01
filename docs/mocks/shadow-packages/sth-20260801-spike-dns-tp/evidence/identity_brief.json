@@ -1,0 +1,26 @@
+{
+  "target": "{{HOST_A}}",
+  "agent": { "present": false },
+  "confidence": "medium",
+  "likely_type": "apple_or_macos_client",
+  "network": "{{VLAN}}",
+  "mac_user": "{{MAC_A}}",
+  "hostname_token": "{{HOSTNAME_A}}",
+  "owner_policy": "{{OWNER_HINT}}",
+  "blackhat_map": "no training-room session match",
+  "dns_profile_top_sanitized": [
+    { "name": "blackhatnoc.slack.com", "role": "noc_ops" },
+    { "name": "app.slack.com", "role": "saas" },
+    { "name": "api.anthropic.com", "role": "dev" },
+    { "name": "claude.ai", "role": "dev" },
+    { "name": "main.vscode-cdn.net", "role": "dev" },
+    { "name": "api-1.core.keybaseapi.com", "role": "secure_chat" },
+    { "name": "mask-h2.icloud.com", "role": "apple" },
+    { "name": "{{DOMAIN_IOC}}", "hits": 697, "role": "ioc" }
+  ],
+  "identity_notes": [
+    "No Cortex agent — network-only identity",
+    "Operator-shaped SaaS + NOC Slack",
+    "Confirm owner in private channel; do not public-name from mDNS"
+  ]
+}

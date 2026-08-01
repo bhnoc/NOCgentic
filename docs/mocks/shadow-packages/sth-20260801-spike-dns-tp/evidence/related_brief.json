@@ -1,0 +1,9 @@
+{
+  "target": "{{HOST_A}}",
+  "counts": { "alerts": 0, "incidents": 0 },
+  "note": "related inventory empty — case is correlation grouping, not a host-tied multi-alert stack. Empty related does not clear the domain IoC.",
+  "pivots": {
+    "ips": ["{{HOST_A}}"],
+    "users": ["{{MAC_A}}"]
+  }
+}

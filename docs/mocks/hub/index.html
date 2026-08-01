@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shadow the Hunter · MUD Hub</title>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/shared/theme.css" />
+  <style>
+    .hero { padding: 28px 20px 10px; }
+    .hero h1 {
+      font-family: var(--font-display);
+      font-size: 22px;
+      letter-spacing: .1em;
+      color: var(--frost);
+      margin-bottom: 8px;
+    }
+    .hero p { color: var(--text-secondary); max-width: 720px; font-size: 13px; }
+    .ports { padding: 8px 20px 20px; color: var(--text-muted); font-size: 11px; }
+    .ports code { color: var(--ice-300); }
+    .card .port {
+      font-size: 11px;
+      color: var(--accent-green);
+      margin-top: 8px;
+      letter-spacing: .06em;
+    }
+    .card .num {
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: .14em;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">SHADOW THE HUNTER <span>// MUD HUB</span></div>
+      <div class="meta">
+        <span>STACK <strong>docker-compose.mud.yml</strong></span>
+      </div>
+      <div class="badge">2 TOURS · BRANCHING MUD</div>
+    </header>
+    <div class="hero">
+      <h1>FORENSIC MUD TOURS</h1>
+      <p>
+        Real curated hunt packages as branching MUDs: golden path, consequence rooms, Marty rewind.
+        <strong style="color:var(--frost)">06 = false positive</strong> ·
+        <strong style="color:var(--accent-green)">07 = true positive (learning V2)</strong>.
+        Same method, opposite disposition — play both for transfer.
+      </p>
+    </div>
+    <div class="card-grid" id="grid"></div>
+    <div class="ports">
+      Hub <code>:3100</code> ·
+      FP MUD <code>:3106</code> ·
+      ELI5 (optional) <code>:3107</code> ·
+      <strong style="color:var(--accent-green)">TP Learning MUD V2 :3108</strong>
+    </div>
+    <footer>
+      <span>docs/mocks · docker compose -f docs/mocks/docker-compose.mud.yml up -d</span>
+      <span>Keys: 1 / 2 / 3 · R = rewind</span>
+    </footer>
+  </div>
+  <script>
+    const concepts = [
+      {
+        n: "06",
+        title: "HOST SWEEP FP",
+        blurb: "False positive tour: zone-protection Host Sweep on public DNS. Branching + rewind. Clean first pass badge.",
+        port: 3106,
+        path: "http://localhost:3106/",
+      },
+      {
+        n: "07",
+        title: "SPIKE DNS TP (V2)",
+        blurb: "True positive learning MUD: FILTER→DECIDE skills, productive failure rooms, reflection debrief.",
+        port: 3108,
+        path: "http://localhost:3108/",
+      },
+    ];
+    const grid = document.getElementById("grid");
+    concepts.forEach((c) => {
+      const a = document.createElement("a");
+      a.href = c.path;
+      a.target = "_blank";
+      a.className = "card";
+      a.innerHTML =
+        `<div class="num">TOUR ${c.n}</div>` +
+        `<h4>${c.title}</h4>` +
+        `<p>${c.blurb}</p>` +
+        `<div class="port">localhost:${c.port} ↗</div>`;
+      grid.appendChild(a);
+    });
+  </script>
+</body>
+</html>
