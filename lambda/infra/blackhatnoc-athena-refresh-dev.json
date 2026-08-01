@@ -1,0 +1,21 @@
+{
+  "FunctionName": "blackhatnoc-athena-refresh-dev",
+  "Runtime": "python3.12",
+  "Handler": "athena_refresh_lambda_v6.handler",
+  "Timeout": 900,
+  "MemorySize": 512,
+  "Architectures": [
+    "x86_64"
+  ],
+  "Environment": {
+    "ATHENA_WORKGROUP": "blackhatnoc-dev",
+    "GLUE_DATABASE": "blackhatnoc_dev_glue",
+    "S3_LOG_PREFIX": "corelight/dev/raw",
+    "S3_PARQUET_PREFIX": "corelight/dev/parquet",
+    "WATERMARK_PREFIX": "corelight/dev/_watermarks/v6",
+    "S3_LOG_BUCKET": "blackhatnoc",
+    "S3_PARQUET_BUCKET": "blackhatnoc",
+    "REGION": "us-east-2"
+  },
+  "Role": "arn:aws:iam::104738328073:role/blackhatnoc-athena-refresh-role"
+}

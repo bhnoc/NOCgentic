@@ -1,0 +1,5 @@
+{
+    "Name": "blackhatnoc-athena-hourly",
+    "ScheduleExpression": "rate(1 hour)",
+    "State": "ENABLED"
+}
