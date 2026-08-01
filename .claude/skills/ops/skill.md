@@ -6,7 +6,7 @@ description: Operate and maintain the running NOCgentic (bhnocgentic) Black Hat 
 # NOCgentic — Ops Skill
 
 Day-2 operations for the Black Hat NOC platform (**bhnocgentic**, repo `bhnoc/NOCgentic`),
-served at **`https://nocgentic.bhnoc.com/`** (`ssh nocgentic`). For first-time provisioning
+served at **`https://ng.bhnoc.com/`** (`ssh nocgentic`). For first-time provisioning
 see [[../deploy/skill.md]].
 **PostCog** (the Slack bot on the same box) is a separate app — see `blackhat/PostCog/.claude/skills/`.
 
@@ -21,15 +21,16 @@ Living document — append incidents, fixes, and gotchas as they happen.
 | Type | `g4dn.xlarge` (T4 GPU; the app itself doesn't use it) |
 | App dir | `/opt/nocgentic/app` |
 | Compose file | `docker-compose.agents.yml` (env file: `.env.s3`, mode 600, not in git) |
-| DNS | `nocgentic.bhnoc.com` |
+| DNS | `ng.bhnoc.com` |
 | SSH | `ssh nocgentic` (see `~/.ssh/config`; 1Password agent, biometric-gated) |
 | CI runner | `actions.runner.bhnoc-NOCgentic.nocgentic-box.service` at `/opt/nocgentic/actions-runner-nocgentic` |
 | Athena backend | still in the OTHER account: `blackhat_pope_logs`, `blackhat-pope-dev`, `us-west-2` |
 
-> **Host moved 2026-07-31.** aing (`i-0430224b1ac82701e`, `552440750419`, `us-west-2`,
-> `nocgentic.bhnoc.com`) is retired: runner deregistered, and SSH to it times out from the
+> **Host moved 2026-07-31, URL shortened 2026-08-01.** aing
+> (`i-0430224b1ac82701e`, `552440750419`, `us-west-2`, `aing.bhnoc.com`) is retired: runner deregistered, and SSH to it times out from the
 > current workstation. Verified on the live box 2026-08-01. Any `ssh aing` /
-> `ubuntu@nocgentic.bhnoc.com` command still below is stale — use `ssh nocgentic`. The
+> `ubuntu@aing.bhnoc.com` command still below is stale — use `ssh nocgentic`. The
+> old `nocgentic.bhnoc.com` URL is also gone; the app is at `ng.bhnoc.com`. The
 > `sg-022b87911ecf12539` / IAM-role notes are aing's and are unverified for this box.
 
 > **Cost discipline:** it's a GPU box the app doesn't need. **Stop it whenever it's
@@ -90,7 +91,7 @@ the new public IP. (DNS-01 cert renewal doesn't need the record, but users and S
 ## TLS certificate
 
 Let's Encrypt via **certbot `dns-cloudflare`** (DNS-01). Renewal config lives at
-`/etc/letsencrypt/renewal/<fqdn>.conf` (`nocgentic.bhnoc.com.conf` on the current box);
+`/etc/letsencrypt/renewal/<fqdn>.conf` (`ng.bhnoc.com.conf` on the current box);
 Cloudflare token at
 `/etc/letsencrypt/cloudflare.ini`. nginx mounts `/etc/letsencrypt` read-only.
 
@@ -103,9 +104,9 @@ sudo openssl x509 -in /etc/letsencrypt/live/current/fullchain.pem -noout -dates
 ### Renew
 ```bash
 # on the box — DNS-01, waits ~30s for propagation. Runs long; expect a pre-delay.
-sudo certbot renew --cert-name nocgentic.bhnoc.com
+sudo certbot renew --cert-name ng.bhnoc.com
 # force even if not near expiry:
-sudo certbot renew --cert-name nocgentic.bhnoc.com --force-renewal
+sudo certbot renew --cert-name ng.bhnoc.com --force-renewal
 ```
 
 Then **reload nginx** so it stops serving the cached (old) cert:
@@ -241,7 +242,7 @@ Rehearsed end to end 2026-08-01 (flipped to Asia, verified, restored to USA). Go
 Between events the box runs in dev posture (SG locked to a few IPs, demo data re-dated).
 On show day, flip to live in this order:
 
-1. **Instance up + DNS.** Start the instance if stopped, re-point `nocgentic.bhnoc.com` to the new
+1. **Instance up + DNS.** Start the instance if stopped, re-point `ng.bhnoc.com` to the new
    IP (the IP is ephemeral). See "Start / stop" above.
 2. **Cert valid.** Check expiry (`certbot`/openssl below in "TLS certificate"); renew + reload
    nginx if it lapsed while the box was off. Do this BEFORE opening 443 to the audience.
@@ -332,7 +333,7 @@ ssh nocgentic '
   uname -r; [ -f /var/run/reboot-required ] && echo REBOOT-STILL-NEEDED || echo clean
   cd /opt/nocgentic/app && sudo docker compose -f docker-compose.agents.yml ps
   systemctl is-active actions.runner.bhnoc-NOCgentic.aing-nocgentic.service actions.runner.bhnoc-PostCog.aing-postcog.service postcog
-  curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/health -H "Host: nocgentic.bhnoc.com"'
+  curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/health -H "Host: ng.bhnoc.com"'
 ```
 Then run the **query smoke tests** below — a reboot re-reads the frozen `.env.s3` creds, so
 if they'd expired the agents would fail Athena (they were still valid at the 2026-07-23 patch;
@@ -347,10 +348,10 @@ refresh if needed). Delete the backup AMI + its snapshot once you're confident.
 
 ```bash
 # From an allow-listed IP
-curl -s -o /dev/null -w "HTTP %{http_code}\n" https://nocgentic.bhnoc.com/health
+curl -s -o /dev/null -w "HTTP %{http_code}\n" https://ng.bhnoc.com/health
 
 # On the box (bypasses SG/DNS — tests the app directly)
-curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: nocgentic.bhnoc.com'
+curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: ng.bhnoc.com'
 ```
 
 | Symptom | Likely cause | Fix |
@@ -368,7 +369,7 @@ curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: nocg
 ## Routine when bringing it back after downtime
 
 1. Start instance; wait for `running`.
-2. Re-point `nocgentic.bhnoc.com` DNS to the new IP.
+2. Re-point `ng.bhnoc.com` DNS to the new IP.
 3. Check cert expiry; renew + reload nginx if lapsed.
 4. `refresh-env-creds.sh .env.s3` (old creds are certainly expired).
 5. `docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d`.
@@ -464,8 +465,8 @@ The SG blocks you unless you're on the allow-list, but from the box itself you c
 nginx on localhost with a `Host:` header. Use this after seeding data or a redeploy.
 
 ```bash
-ssh ubuntu@<IP>      # or nocgentic.bhnoc.com
-H='-H Host:nocgentic.bhnoc.com -H Content-Type:application/json'
+ssh ubuntu@<IP>      # or ng.bhnoc.com
+H='-H Host:ng.bhnoc.com -H Content-Type:application/json'
 
 # Health + alert feed (what the dashboard polls)
 curl -sk https://127.0.0.1/health $H

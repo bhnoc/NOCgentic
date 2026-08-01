@@ -8,12 +8,14 @@ description: Deploy the NOCgentic (bhnocgentic) Black Hat NOC platform from noth
 Take the Black Hat NOC platform (**bhnocgentic**, repo `bhnoc/NOCgentic`) from
 nothing to fully running.
 
-> **The live host is `https://nocgentic.bhnoc.com/` (SSH: `ssh nocgentic`).** This
-> replaced aing on 2026-07-31 when the CI runner moved; `main` auto-deploys here.
-> An earlier version of this doc claimed `nocgentic.bhnoc.com` did not exist and
-> pointed everything at `nocgentic.bhnoc.com`. It does exist, aing is no longer the
-> deploy target, and aing's SSH is not reachable from here. Ignore any `ssh aing`
-> or `nocgentic.bhnoc.com` instruction below that this note contradicts.
+> **The live host is `https://ng.bhnoc.com/` (SSH: `ssh nocgentic`).**
+>
+> URL history, because both older names appear in commits and docs: `aing.bhnoc.com`
+> was the original host and is retired. `nocgentic.bhnoc.com` replaced it on
+> 2026-07-31 and was itself retired on 2026-08-01 in favour of the shorter
+> `ng.bhnoc.com`. Only `ng.bhnoc.com` resolves now; the other two records are gone.
+> Ignore any `ssh aing` or `aing.bhnoc.com` / `nocgentic.bhnoc.com` instruction
+> below that this note contradicts.
 
 This skill is a living document — append what you learn each deploy. Its sibling is
 [[../ops/skill.md]] (day-2 operations). **PostCog** (the Slack bot) is a separate app with
@@ -50,12 +52,12 @@ This is the live host. Values below came from IMDS on the box itself, not the AP
 | Region / AZ | `us-east-2` / `us-east-2a` |
 | Type | `g4dn.xlarge` |
 | Private IP | `10.20.1.254` (hostname `ip-10-20-1-254`) |
-| DNS | `nocgentic.bhnoc.com` |
+| DNS | `ng.bhnoc.com` |
 | SSH | `ssh nocgentic` (see `~/.ssh/config`; 1Password agent, biometric-gated) |
 | App dir | `/opt/nocgentic/app` |
 | Env file | `/opt/nocgentic/app/.env.s3` (mode 600 ubuntu:ubuntu, **not in git**) |
 | CI runner | `/opt/nocgentic/actions-runner-nocgentic` (label `nocgentic`) |
-| TLS | `/etc/letsencrypt/live/current` -> `/etc/letsencrypt/live/nocgentic.bhnoc.com` |
+| TLS | `/etc/letsencrypt/live/current` -> `/etc/letsencrypt/live/ng.bhnoc.com` |
 
 > The Athena backend still lives in the **other** account (`blackhat_pope_logs`,
 > workgroup `blackhat-pope-dev`, `us-west-2`), so the box's region is not the data's
@@ -63,9 +65,9 @@ This is the live host. Values below came from IMDS on the box itself, not the AP
 
 ### Retired: the aing box (do not use)
 
-`i-0430224b1ac82701e` / account `552440750419` / `us-west-2` / `nocgentic.bhnoc.com` was the
+`i-0430224b1ac82701e` / account `552440750419` / `us-west-2` / `aing.bhnoc.com` was the
 deploy target until 2026-07-31. Its runner is deregistered and **SSH to it times out from
-the current workstation**. Everything below that says `ssh aing` or `nocgentic.bhnoc.com` is
+the current workstation**. Everything below that says `ssh aing` or `aing.bhnoc.com` is
 stale; substitute `nocgentic`. The per-guest 443 allow-list SG notes
 (`sg-0a24a0bef5a92acca`) are aing-specific and have not been re-verified for this box.
 
@@ -284,21 +286,21 @@ sudo mkdir -p /opt/nocgentic/app && sudo chown ubuntu:ubuntu /opt/nocgentic/app
 
 ### 4. DNS
 
-Point `nocgentic.bhnoc.com` (Cloudflare A record) at the instance's public IP. **Re-point it
+Point `ng.bhnoc.com` (Cloudflare A record) at the instance's public IP. **Re-point it
 after every stop/start** — the IP is ephemeral (no Elastic IP attached).
 
 ### 5. TLS certificate (first issuance)
 
 The stack uses certbot with the **`dns-cloudflare`** authenticator (DNS-01 challenge, so
 the box needn't be publicly reachable during issuance). Renewal config already exists at
-`/etc/letsencrypt/renewal/nocgentic.bhnoc.com.conf` once issued.
+`/etc/letsencrypt/renewal/ng.bhnoc.com.conf` once issued.
 
 ```bash
 # on the box — creds at /etc/letsencrypt/cloudflare.ini (dns_cloudflare_api_token=...)
 sudo certbot certonly --dns-cloudflare \
   --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
   --dns-cloudflare-propagation-seconds 30 \
-  -d nocgentic.bhnoc.com --key-type ecdsa \
+  -d ng.bhnoc.com --key-type ecdsa \
   --server https://acme-v02.api.letsencrypt.org/directory
 ```
 
@@ -317,12 +319,12 @@ docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d --build --r
 ```bash
 # on the box
 docker compose -f docker-compose.agents.yml ps
-curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: nocgentic.bhnoc.com'
+curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: ng.bhnoc.com'
 # from an allow-listed IP
-curl -s -o /dev/null -w "HTTP %{http_code}\n" https://nocgentic.bhnoc.com/health
+curl -s -o /dev/null -w "HTTP %{http_code}\n" https://ng.bhnoc.com/health
 ```
 
-Expect HTTP 200 and a valid cert for `nocgentic.bhnoc.com`.
+Expect HTTP 200 and a valid cert for `ng.bhnoc.com`.
 
 ### 8. Seed a demo day (between conferences)
 
@@ -341,7 +343,7 @@ Verified route names (the app does **not** expose a bare `/api/v1/alerts` — th
 
 | URL | Serves |
 |-----|--------|
-| `https://nocgentic.bhnoc.com/` | Chat UI |
+| `https://ng.bhnoc.com/` | Chat UI |
 | `POST /api/v1/chat` | Submit a query → returns `{jobId}` (async) |
 | `GET /api/v1/chat/:id` | Poll job result (`status`, `answer`, `agentUsed`, …) |
 | `GET /api/v1/alerts/recent` | Last-24h alert feed (dashboard) |
@@ -356,10 +358,10 @@ copy-paste smoke-test loop and good default queries.
 ## Deploy checklist
 
 - [ ] Instance running, IP known
-- [ ] `nocgentic.bhnoc.com` DNS points at current IP (Cloudflare)
+- [ ] `ng.bhnoc.com` DNS points at current IP (Cloudflare)
 - [ ] Code synced to `/opt/nocgentic/app` (runner on push, or `--ec2-ip` for manual)
 - [ ] `.env.s3` present + `refresh-env-creds.sh` run (creds not expired)
-- [ ] Valid TLS cert for `nocgentic.bhnoc.com`
+- [ ] Valid TLS cert for `ng.bhnoc.com`
 - [ ] Self-hosted runner `aing-nocgentic` shows `online` (`gh api …/actions/runners`)
 - [ ] `docker compose ... up -d --build` succeeded, all services up
 - [ ] `https://.../health` returns 200 from an allow-listed IP
@@ -447,7 +449,7 @@ CI runner moved off aing onto the Product-Research **nocgentic box**.
   `sudo ln -sfn /etc/letsencrypt/live/<fqdn> /etc/letsencrypt/live/current`. The rsync deploy
   (`--delete`, no nginx exclude) would otherwise clobber a box's server_name/cert path; the
   catch-all + symlink makes one conf safe everywhere. (deploy.sh health-check still sends
-  `Host: nocgentic.bhnoc.com` — harmless, catch-all answers any Host.)
+  `Host: ng.bhnoc.com` — harmless, catch-all answers any Host.)
 - **Per-tenant catalog:** athena-hunter rewrites AQLight's baked-in `blackhat_pope_logs.`
   prefix → `ATHENA_DATABASE` (no-op when equal). Set `ATHENA_DATABASE/WORKGROUP/REGION` in
   `.env.s3`.

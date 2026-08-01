@@ -167,7 +167,7 @@ The session history (`PROGRESS.md` §7 + transcript) frames the S3 archive as a 
 
 ---
 
-## 6. Real-time audit monitor — `https://nocgentic.bhnoc.com/bh/1337/thetraces/`
+## 6. Real-time audit monitor — `https://ng.bhnoc.com/bh/1337/thetraces/`
 
 The most-used artifact of the whole observability stack isn't Manifold itself — it's the in-house **audit monitor**, a single-page swim-lane dashboard that turns the S3 span archive into a live SOC view. It's the screen that gets demoed and the screen that gets watched during a live presentation. Manifold is the long-term system of record; the audit monitor is the cockpit.
 

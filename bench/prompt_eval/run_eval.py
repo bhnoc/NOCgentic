@@ -68,7 +68,7 @@ SHARED_DIR = AGENTS_DIR / "shared"
 RESULTS_DIR = Path(os.getenv("BENCH_RESULTS_DIR") or (EVAL_DIR / "results"))
 
 DEFAULT_SCENARIOS = BENCH_DIR / "scenarios" / "golden.jsonl"
-DEFAULT_BASE_URL = "https://nocgentic.bhnoc.com"
+DEFAULT_BASE_URL = "https://ng.bhnoc.com"
 
 # Put the real agents/shared on sys.path so `from llm_client import llm_complete`
 # resolves the same module the app uses.

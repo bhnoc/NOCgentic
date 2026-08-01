@@ -86,5 +86,5 @@ Expect `derived_views.rebuilt` to list all three and `derived_views.failed` to b
 empty. Then confirm the app sees data:
 
 ```bash
-curl -sk https://nocgentic.bhnoc.com/api/v1/alerts/recent
+curl -sk https://ng.bhnoc.com/api/v1/alerts/recent
 ```

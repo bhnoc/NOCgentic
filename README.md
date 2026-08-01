@@ -1,7 +1,7 @@
 # NOCgentic — AI-Powered Security Operations Center
 
 Multi-agent LLM platform deployed at the **Black Hat NOC**.
-Live at **`https://nocgentic.bhnoc.com`**.
+Live at **`https://ng.bhnoc.com`**.
 
 A Python/TypeScript SOC assistant that routes analyst questions to the
 right specialist (alerts / network-quality / data-lake hunt), queries
@@ -49,7 +49,7 @@ alert-triage  thousandeyes   athena-hunter
 - **OpenTelemetry** → Manifold (`blackcap.app.manifoldsecurity.io`) for monitoring
 - **S3 span archive** at `s3://blackhat-pope-dev-logs/nocgentic/traces/` (NDJSON.gz, Hive partitions)
 - **AWS Athena** — `blackhat_pope_logs.{conn,dns,http,ssl,files,alerts,suricata_corelight,uid_lookup,fuid_lookup,…}`
-- **Docker Compose** stack on EC2 `nocgentic.bhnoc.com`
+- **Docker Compose** stack on EC2 `ng.bhnoc.com`
 - **Gemini 3.1 Flash-Lite-Preview** (swappable via `GEMINI_MODEL`); OpenRouter available as alternate provider
 
 ---
@@ -125,7 +125,7 @@ Each agent:
 
 `tools/audit-monitor/` — FastAPI + SSE live view of every agent span.
 
-- **URL**: `https://nocgentic.bhnoc.com/bh/1337/thetraces/`
+- **URL**: `https://ng.bhnoc.com/bh/1337/thetraces/`
 - **Auth**: bearer token → HTTPOnly signed cookie (HMAC(expiry))
 - **Data source**: polls `s3://blackhat-pope-dev-logs/nocgentic/traces/` every 2 s
 - **UI**: one swim-lane per service, color-coded card kinds (LLM, athena, agent, tool, http). Cards show query/prompt/SQL preview (≤300 chars). Click-to-expand for full attributes including LLM prompt/completion.
@@ -136,19 +136,19 @@ Each agent:
 
 ## Deployment
 
-- **Target**: `nocgentic.bhnoc.com` (EC2 `<INSTANCE-ID>`, us-west-2)
+- **Target**: `ng.bhnoc.com` (EC2 `<INSTANCE-ID>`, us-west-2)
 - **Creds**: instance role `blackhat-pope-dev-ec2-role` (S3 + Athena + Glue read; S3 write scoped to `blackhat-pope-dev-logs`)
 - **Refresh STS**: `bash scripts/refresh-env-creds.sh .env.s3` on the host before `docker compose up`
-- **SSH**: `ssh -i ~/.ssh/id_macmini ubuntu@nocgentic.bhnoc.com`, app at `/opt/nocgentic/app`
+- **SSH**: `ssh -i ~/.ssh/id_macmini ubuntu@ng.bhnoc.com`, app at `/opt/nocgentic/app`
 
 ### Deploy cycle
 ```bash
 # From repo root, after changes:
 rsync -av -e "ssh -i ~/.ssh/id_macmini" \
   agents/ packages/ tools/ docker-compose.agents.yml nginx/ \
-  ubuntu@nocgentic.bhnoc.com:/opt/nocgentic/app/
+  ubuntu@ng.bhnoc.com:/opt/nocgentic/app/
 
-ssh -i ~/.ssh/id_macmini ubuntu@nocgentic.bhnoc.com \
+ssh -i ~/.ssh/id_macmini ubuntu@ng.bhnoc.com \
   'cd /opt/nocgentic/app && docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d --build'
 ```
 

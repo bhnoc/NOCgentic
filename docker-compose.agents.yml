@@ -176,7 +176,7 @@ services:
       - ALERT_MAX_FETCH=${ALERT_MAX_FETCH:-200}
       - PORT=3000
       - NODE_ENV=production
-      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-https://nocgentic.bhnoc.com}
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-https://ng.bhnoc.com}
       # Public event-edition label shown in the UI (served via /api/v1/config).
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     depends_on:

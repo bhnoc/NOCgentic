@@ -647,9 +647,9 @@ The AING EC2 instance is pre-configured with Athena access.
 | **Instance ID** | `<INSTANCE-ID>` |
 | **Type** | g6e.4xlarge |
 | **Public IP** | `<EC2-PUBLIC-IP>` |
-| **DNS** | `nocgentic.bhnoc.com` |
+| **DNS** | `ng.bhnoc.com` |
 | **IAM Role** | `blackhat-pope-dev-ec2-role` |
-| **SSH** | `ssh ubuntu@nocgentic.bhnoc.com` |
+| **SSH** | `ssh ubuntu@ng.bhnoc.com` |
 
 The instance role already has all required Athena, Glue, and S3 permissions.
 

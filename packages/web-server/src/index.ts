@@ -20,7 +20,7 @@ const wsClients = new Set<any>();
 
 const SESSION_COOKIE = 'bh_sid';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
-const ALLOWED_WS_ORIGIN = process.env.ALLOWED_ORIGIN ?? 'https://nocgentic.bhnoc.com';
+const ALLOWED_WS_ORIGIN = process.env.ALLOWED_ORIGIN ?? 'https://ng.bhnoc.com';
 
 async function main() {
   // trustProxy honors X-Forwarded-For from nginx so request.ip is the real client.

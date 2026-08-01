@@ -82,7 +82,7 @@ Useful flags:
 
 ```
 --label v1-baseline          # goes in the results filename
---base-url https://nocgentic.bhnoc.com   # default; override for staging
+--base-url https://ng.bhnoc.com   # default; override for staging
 --scenarios path/to/golden.jsonl    # default bench/scenarios/golden.jsonl
 --judge-provider openrouter  # force judge provider (openrouter|gemini|local)
 --poll-interval 1.0          # seconds between polls
