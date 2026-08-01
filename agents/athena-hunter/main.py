@@ -197,8 +197,28 @@ SQL_GEN_PROMPT = (
     "randomized_mac=true explains an unknown vendor_mac as privacy behaviour rather than "
     "missing data. confidence says how many signals backed the row: prefer high/medium "
     "when attributing a device to a person or org.\n"
-    "- known_devices: mac, vendor_mac, host_ip, annotations, protocols (tracked-device list; "
-    "vendor_mac resolved from OUI)\n"
+    # Corelight's "known_*" inventory family. All share the same spine
+    # (host_ip, kuid, annotations, ts/ts_datetime/dt) and differ by what they
+    # record about the host. These already existed in the catalog with real data
+    # but only known_devices was documented here, so the model never queried the
+    # rest: an undocumented table is an invisible table.
+    "- known_devices: host_ip, mac, vendor_mac, annotations, protocols, num_instances "
+    "(tracked-device list; vendor_mac resolved from OUI)\n"
+    "- known_users: host_ip, user_ (NOTE the trailing underscore, `user` is reserved), "
+    "protocol, server_ip, annotations, num_instances (OBSERVED USERNAMES per host, seen "
+    "over HTTP/RDP/SIP/etc. The strongest identity signal available: use for 'who is on "
+    "this host' / 'which accounts did X use'. Treat as sensitive.)\n"
+    "- known_domains: host_ip, domain, protocols, annotations, num_instances "
+    "(domains a host announced, e.g. its DHCP domain; use for org/tenant attribution)\n"
+    "- known_names: host_ip, hostname, protocols, num_instances "
+    "(self-reported hostnames per host)\n"
+    "- known_hosts: host_ip, long_conns, n_opened, n_closed, n_pending, annotations "
+    "(per-host connection activity roll-up)\n"
+    "- known_services: host_ip, port_num, protocol, service, software, app, "
+    "num_conns_complete (LISTENING services per host: use for 'what is this box "
+    "running' / exposed-surface questions)\n"
+    "- known_certs: host_ip, hash, subject, issuer_subject, serial, port, protocol "
+    "(certificates observed per host)\n"
     "- All tables have: ts (epoch bigint), ts_datetime (varchar), dt (varchar YYYY-MM-DD)\n\n"
     "TYPES & ENUMS:\n"
     "- alerts.severity is VARCHAR: 'critical','high','medium','low','informational'. "

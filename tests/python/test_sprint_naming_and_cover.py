@@ -230,3 +230,33 @@ class TestSanitizeIsSharedNotCopied:
         padded = "x" * (llm_sanitize.MAX_LLM_CHARS - 5) + " AKIAIOSFODNN7EXAMPLE"
         out = llm_sanitize.sanitize_for_llm(padded)
         assert "AKIAIOSFODNN7EXAMPLE" not in out
+
+
+class TestKnownInventoryTablesAreDocumented:
+    """These tables existed in the catalog with real data, but only known_devices
+    was described in SQL_GEN_PROMPT, so the model never wrote SQL against the
+    others. An undocumented table is an invisible table: the data was there the
+    whole time and looked missing."""
+
+    def _prompt(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "..",
+                            "agents", "athena-hunter", "main.py")
+        return open(path).read()
+
+    @pytest.mark.parametrize("table", [
+        "known_devices", "known_users", "known_domains", "known_names",
+        "known_hosts", "known_services", "known_certs",
+    ])
+    def test_table_is_described_for_the_sql_generator(self, table):
+        assert f"- {table}:" in self._prompt(), f"{table} is not documented"
+
+    def test_reserved_word_column_is_called_out(self):
+        """known_users.user_ has a trailing underscore because `user` is reserved.
+        Without the note the model writes `SELECT user` and the query fails."""
+        src = self._prompt()
+        assert "user_" in src
+        assert "trailing underscore" in src
+
+    def test_username_table_is_flagged_sensitive(self):
+        """Observed usernames are the strongest identity signal in the dataset."""
+        assert "Treat as sensitive" in self._prompt()
