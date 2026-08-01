@@ -85,18 +85,23 @@ async function main() {
   registerChatRoutes(server);
 
   // WebSocket endpoint for real-time updates (server pushes the shared alert feed).
-  server.get('/ws', { websocket: true }, (connection, request) => {
+  // @fastify/websocket v11 (required by fastify 5) passes the WebSocket DIRECTLY
+  // as the first argument. v8 passed a wrapper whose `.socket` held it. Note this
+  // does NOT fail typecheck, because wsClients is Set<any> and the old wrapper
+  // access typed through: it would have broken at runtime, silently dropping the
+  // origin check and the alert feed.
+  server.get('/ws', { websocket: true }, (socket, request) => {
     // Reject cross-site WebSocket handshakes. Same-origin and cookie-less clients
     // (curl, no Origin header) are allowed; a foreign Origin is closed with 1008.
     const origin = request.headers.origin;
     if (origin && origin !== ALLOWED_WS_ORIGIN) {
-      connection.socket.close(1008, 'origin not allowed');
+      socket.close(1008, 'origin not allowed');
       return;
     }
-    wsClients.add(connection.socket);
+    wsClients.add(socket);
     // Inbound messages are ignored: job results are delivered by HTTP polling,
     // not over this socket. This endpoint is broadcast-only (alert feed).
-    connection.socket.on('close', () => { wsClients.delete(connection.socket); });
+    socket.on('close', () => { wsClients.delete(socket); });
   });
 
   // Server-level alert trickle: one timer broadcasts the next alert to all
