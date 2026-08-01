@@ -6,7 +6,8 @@ description: Operate and maintain the running NOCgentic (bhnocgentic) Black Hat 
 # NOCgentic — Ops Skill
 
 Day-2 operations for the Black Hat Asia NOC platform (**bhnocgentic**, repo `bhnoc/NOCgentic`),
-served at **`https://aing.bhnoc.com/`**. For first-time provisioning see [[../deploy/skill.md]].
+served at **`https://nocgentic.bhnoc.com/`** (`ssh nocgentic`). For first-time provisioning
+see [[../deploy/skill.md]].
 **PostCog** (the Slack bot on the same box) is a separate app — see `blackhat/PostCog/.claude/skills/`.
 
 Living document — append incidents, fixes, and gotchas as they happen.
@@ -15,16 +16,21 @@ Living document — append incidents, fixes, and gotchas as they happen.
 
 | Property | Value |
 |----------|-------|
-| Instance ID | `i-0430224b1ac82701e` (**AING**) |
-| Region | `us-west-2` |
-| Type | g6e.4xlarge (GPU — **bills ~$3+/hr running**; app doesn't use the GPU) |
+| Instance ID | `i-0b278c0b3a38ebf69` (the **nocgentic box**) |
+| Account / Region | `104738328073` (Product-Research) / `us-east-2` |
+| Type | `g4dn.xlarge` (T4 GPU; the app itself doesn't use it) |
 | App dir | `/opt/bhasia/app` |
-| Compose file | `docker-compose.agents.yml` (env file: `.env.s3`) |
-| DNS | `aing.bhnoc.com` (Cloudflare) → ephemeral public IP |
-| Security group | `sg-022b87911ecf12539` |
-| IAM role | `blackhat-pope-dev-ec2-role` |
-| SSH | `ssh aing` (shorthand; = `ubuntu@aing.bhnoc.com` via the 1Password agent, biometric-gated) |
-| AWS profile | `VirtualPOC-users` (`-admins` for infra changes) |
+| Compose file | `docker-compose.agents.yml` (env file: `.env.s3`, mode 600, not in git) |
+| DNS | `nocgentic.bhnoc.com` |
+| SSH | `ssh nocgentic` (see `~/.ssh/config`; 1Password agent, biometric-gated) |
+| CI runner | `actions.runner.bhnoc-NOCgentic.nocgentic-box.service` at `/opt/bhasia/actions-runner-nocgentic` |
+| Athena backend | still in the OTHER account: `blackhat_pope_logs`, `blackhat-pope-dev`, `us-west-2` |
+
+> **Host moved 2026-07-31.** aing (`i-0430224b1ac82701e`, `552440750419`, `us-west-2`,
+> `aing.bhnoc.com`) is retired: runner deregistered, and SSH to it times out from the
+> current workstation. Verified on the live box 2026-08-01. Any `ssh aing` /
+> `ubuntu@aing.bhnoc.com` command still below is stale — use `ssh nocgentic`. The
+> `sg-022b87911ecf12539` / IAM-role notes are aing's and are unverified for this box.
 
 > **Cost discipline:** it's a GPU box the app doesn't need. **Stop it whenever it's
 > idle.** Between conferences / during dev, don't leave it running overnight.
@@ -32,7 +38,7 @@ Living document — append incidents, fixes, and gotchas as they happen.
 ## Golden rules
 
 1. **The public IP changes on every stop/start** (no Elastic IP). After starting, always
-   re-point the `aing.bhnoc.com` Cloudflare A record, or SSH by raw IP.
+   re-point the box's Cloudflare A record, or SSH by raw IP.
 2. **Containers can't use the instance role directly.** They need AWS creds baked into
    `.env.s3` via `refresh-env-creds.sh`. Those creds **expire in hours** — the #1 cause
    of "agents suddenly can't query Athena/S3."
@@ -47,8 +53,11 @@ Living document — append incidents, fixes, and gotchas as they happen.
 ## Start / stop the instance
 
 ```bash
-export AWS_PROFILE=VirtualPOC-users
-I=i-0430224b1ac82701e; R=us-west-2
+# ⚠️ These are AING's values (retired box, different account). The nocgentic box is
+# i-0b278c0b3a38ebf69 in account 104738328073 / us-east-2 and needs that account's
+# profile, NOT VirtualPOC-*. Re-verify before running any start/stop against it.
+I=i-0b278c0b3a38ebf69; R=us-east-2   # nocgentic box
+# I=i-0430224b1ac82701e; R=us-west-2 # aing (retired)
 
 # Start
 aws ec2 start-instances  --instance-ids $I --region $R
@@ -73,7 +82,7 @@ done
 ```
 
 ### After starting — re-point DNS
-The IP changed. Update the `aing.bhnoc.com` A record in the Cloudflare `bhnoc.com` zone to
+The IP changed. Update the box's A record in the Cloudflare `bhnoc.com` zone to
 the new public IP. (DNS-01 cert renewal doesn't need the record, but users and SSH-by-name do.)
 
 ---
@@ -81,21 +90,22 @@ the new public IP. (DNS-01 cert renewal doesn't need the record, but users and S
 ## TLS certificate
 
 Let's Encrypt via **certbot `dns-cloudflare`** (DNS-01). Renewal config lives at
-`/etc/letsencrypt/renewal/aing.bhnoc.com.conf`; Cloudflare token at
+`/etc/letsencrypt/renewal/<fqdn>.conf` (`nocgentic.bhnoc.com.conf` on the current box);
+Cloudflare token at
 `/etc/letsencrypt/cloudflare.ini`. nginx mounts `/etc/letsencrypt` read-only.
 
 ### Check expiry
 ```bash
 # on the box
-sudo openssl x509 -in /etc/letsencrypt/live/aing.bhnoc.com/fullchain.pem -noout -dates
+sudo openssl x509 -in /etc/letsencrypt/live/current/fullchain.pem -noout -dates
 ```
 
 ### Renew
 ```bash
 # on the box — DNS-01, waits ~30s for propagation. Runs long; expect a pre-delay.
-sudo certbot renew --cert-name aing.bhnoc.com
+sudo certbot renew --cert-name nocgentic.bhnoc.com
 # force even if not near expiry:
-sudo certbot renew --cert-name aing.bhnoc.com --force-renewal
+sudo certbot renew --cert-name nocgentic.bhnoc.com --force-renewal
 ```
 
 Then **reload nginx** so it stops serving the cached (old) cert:
@@ -152,12 +162,14 @@ Watch it: `gh run watch <id>` / `gh run list --branch main`.
 ### Runner health
 ```bash
 gh api /repos/bhnoc/NOCgentic/actions/runners --jq '.runners[]|{name,status}'   # want online
-ssh ubuntu@aing.bhnoc.com 'sudo /home/ubuntu/actions-runner-nocgentic/svc.sh status'
+ssh nocgentic 'cd /opt/bhasia/actions-runner-nocgentic && sudo ./svc.sh status'
+#   svc.sh MUST run from the runner root: an absolute path fails with
+#   "Must run from runner root or install is corrupt". cd first.
 # systemd unit on the box: actions.runner.bhnoc-NOCgentic.aing-nocgentic.service (runs as ubuntu)
 # NOTE: distinct from PostCog's runner (/home/ubuntu/actions-runner, label `postcog`).
 ```
 Offline runner → deploys queue until it's back. Restart it:
-`ssh ubuntu@aing.bhnoc.com 'sudo systemctl restart actions.runner.bhnoc-NOCgentic.aing-nocgentic.service'`.
+`ssh nocgentic 'sudo systemctl restart actions.runner.bhnoc-NOCgentic.nocgentic-box.service'`.
 Re-register (token expires): `gh api -X POST /repos/bhnoc/NOCgentic/actions/runners/registration-token --jq .token`.
 
 ### Manual fallback (runner down / off-main deploy)
@@ -191,6 +203,38 @@ sudo docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d
 ```
 
 ---
+
+## Re-brand for the next show (EVENT_EDITION)
+
+The public event name is one env var driving the UI tagline, the header subtitle, and all
+four agent system prompts. Code composes `Black Hat {EVENT_EDITION}`
+(`agents/shared/event.py`, served to the browser at `/api/v1/config`). Currently
+`USA 2026`, set explicitly in `/opt/bhasia/app/.env.s3`.
+
+```bash
+ssh nocgentic
+cd /opt/bhasia/app
+cp -p .env.s3 .env.s3.bak                                        # it holds secrets; back up first
+sed -i 's/^EVENT_EDITION=.*/EVENT_EDITION=Asia 2026/' .env.s3    # or "Europe 2026", "USA 2027"
+docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d web-server orchestrator \
+  alert-triage athena-hunter thousandeyes-analyst
+curl -sk https://127.0.0.1/api/v1/config    # expect {"eventLabel":"Black Hat Asia 2026"}
+```
+
+Rehearsed end to end 2026-08-01 (flipped to Asia, verified, restored to USA). Gotchas:
+
+- **Nation + year ONLY.** The `Black Hat` prefix is added in code; including it yields
+  "Black Hat Black Hat USA 2026".
+- **Read compose's output, don't assume.** `Recreated`/`Started` means the new value landed;
+  `Running` means compose decided nothing changed and your edit is NOT live yet. Naming the
+  services does recreate them when the env genuinely differs (verified), but if you see
+  `Running` across the board, add `--force-recreate`. Either way confirm with
+  `docker exec app-orchestrator-1 printenv EVENT_EDITION` and the `/api/v1/config` curl.
+- **Display only.** Never wire S3 prefixes, IAM names, or Athena config to it — those stay
+  frozen on the `bh-asia-26` convention even at a USA show.
+- Compose falls back to `USA 2026` if the var is missing, so a fresh box is accidentally
+  right for this show and would be silently wrong for the next one.
+- Never `cat .env.s3` (LLM keys + injected AWS creds). `grep '^EVENT_EDITION' .env.s3`.
 
 ## Show-day runbook (flip from dev to live at the conference)
 
@@ -268,23 +312,23 @@ AWS_PROFILE=VirtualPOC-users aws ec2 create-image --instance-id i-0430224b1ac827
   --description "backup before OS patch" --query ImageId --output text
 
 # 1. Baseline health so you can compare after (want HTTP 200)
-ssh ubuntu@aing.bhnoc.com 'curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/health -H "Host: aing.bhnoc.com"'
+ssh nocgentic 'curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/health'
 
 # 2. Non-interactive full upgrade — KEEP existing configs (confold), don't clobber
 #    nginx/docker/ssh confs; needrestart auto-restarts services but "No containers
 #    need to be restarted" (docker daemon restart doesn't bounce running containers).
-ssh ubuntu@aing.bhnoc.com '
+ssh nocgentic '
   export DEBIAN_FRONTEND=noninteractive
   sudo apt-get update -qq
   sudo apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" dist-upgrade
   sudo apt-get -y autoremove   # prunes old kernels'
 
 # 3. If /var/run/reboot-required exists (kernel/apparmor/libc bump) → SOFT reboot
-ssh ubuntu@aing.bhnoc.com 'sudo systemctl reboot'
+ssh nocgentic 'sudo systemctl reboot'
 # wait ~45s, SSH comes back on the SAME IP; containers + runners auto-start.
 
 # 4. Verify: kernel bumped, no reboot flag, 7 containers up, 3 services active, /health 200
-ssh ubuntu@aing.bhnoc.com '
+ssh nocgentic '
   uname -r; [ -f /var/run/reboot-required ] && echo REBOOT-STILL-NEEDED || echo clean
   cd /opt/bhasia/app && sudo docker compose -f docker-compose.agents.yml ps
   systemctl is-active actions.runner.bhnoc-NOCgentic.aing-nocgentic.service actions.runner.bhnoc-PostCog.aing-postcog.service postcog

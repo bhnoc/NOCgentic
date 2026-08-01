@@ -8,8 +8,12 @@ description: Deploy the NOCgentic (bhnocgentic) Black Hat NOC platform from noth
 Take the Black Hat Asia NOC platform (**bhnocgentic**, repo `bhnoc/NOCgentic`) from
 nothing to fully running.
 
-> `nocgentic` is the **project name**, not a hostname. The app is served at
-> **`https://aing.bhnoc.com/`**. There is no `nocgentic.bhnoc.com`.
+> **The live host is `https://nocgentic.bhnoc.com/` (SSH: `ssh nocgentic`).** This
+> replaced aing on 2026-07-31 when the CI runner moved; `main` auto-deploys here.
+> An earlier version of this doc claimed `nocgentic.bhnoc.com` did not exist and
+> pointed everything at `aing.bhnoc.com`. It does exist, aing is no longer the
+> deploy target, and aing's SSH is not reachable from here. Ignore any `ssh aing`
+> or `aing.bhnoc.com` instruction below that this note contradicts.
 
 This skill is a living document — append what you learn each deploy. Its sibling is
 [[../ops/skill.md]] (day-2 operations). **PostCog** (the Slack bot) is a separate app with
@@ -35,21 +39,35 @@ Backend data: **Athena** (`blackhat_pope_logs` DB, `blackhat-pope-dev` workgroup
 over Corelight logs in S3 (`blackhat-pope-dev-logs`). LLM: **Gemini** by default
 (`GEMINI_MODEL`, provider selectable via `LLM_PROVIDER`, OpenRouter as fallback).
 
-## Current deployed instance (as of 2026-07-22)
+## Current deployed instance — the nocgentic box (verified 2026-08-01)
+
+This is the live host. Values below came from IMDS on the box itself, not the API.
 
 | Property | Value |
 |----------|-------|
-| Instance ID | `i-0430224b1ac82701e` (nickname **AING**) |
-| Account | `552440750419` |
-| VPC / Subnet | `vpc-06a6a29e7d0aecab3` / `subnet-076f03e8454c7bb70` (us-west-2a) |
-| Type | g6e.4xlarge (GPU — **overspec'd**, the app is pure Athena/HTTP; see [[../ops/skill.md]]) |
-| Region | `us-west-2` |
-| Public IP | ephemeral — changes on every stop/start (currently `44.248.50.25`) |
-| DNS | `aing.bhnoc.com` (Cloudflare zone) |
-| IAM role | `blackhat-pope-dev-ec2-role` (has Athena/Glue/S3) |
-| SSH | `ssh aing` (shorthand; = `ubuntu@aing.bhnoc.com` via the 1Password agent, biometric-gated) |
-| Security groups | `sg-022b87911ecf12539` (`blackhat-asia-dev-sg`, the primary allow-list) + `sg-0a24a0bef5a92acca` (`aing-https-443-allowlist`, per-guest 443 rules) |
+| Instance ID | `i-0b278c0b3a38ebf69` |
+| Account | `104738328073` (Product-Research — **different account from aing**) |
+| Region / AZ | `us-east-2` / `us-east-2a` |
+| Type | `g4dn.xlarge` |
+| Private IP | `10.20.1.254` (hostname `ip-10-20-1-254`) |
+| DNS | `nocgentic.bhnoc.com` |
+| SSH | `ssh nocgentic` (see `~/.ssh/config`; 1Password agent, biometric-gated) |
 | App dir | `/opt/bhasia/app` |
+| Env file | `/opt/bhasia/app/.env.s3` (mode 600 ubuntu:ubuntu, **not in git**) |
+| CI runner | `/opt/bhasia/actions-runner-nocgentic` (label `nocgentic`) |
+| TLS | `/etc/letsencrypt/live/current` -> `/etc/letsencrypt/live/nocgentic.bhnoc.com` |
+
+> The Athena backend still lives in the **other** account (`blackhat_pope_logs`,
+> workgroup `blackhat-pope-dev`, `us-west-2`), so the box's region is not the data's
+> region. Do not "fix" `ATHENA_REGION` to match the instance.
+
+### Retired: the aing box (do not use)
+
+`i-0430224b1ac82701e` / account `552440750419` / `us-west-2` / `aing.bhnoc.com` was the
+deploy target until 2026-07-31. Its runner is deregistered and **SSH to it times out from
+the current workstation**. Everything below that says `ssh aing` or `aing.bhnoc.com` is
+stale; substitute `nocgentic`. The per-guest 443 allow-list SG notes
+(`sg-0a24a0bef5a92acca`) are aing-specific and have not been re-verified for this box.
 
 ### AWS access (read this before any `aws` command)
 
@@ -66,7 +84,7 @@ over Corelight logs in S3 (`blackhat-pope-dev-logs`). LLM: **Gemini** by default
   accounts" when nothing moved. Every NotFound chase in this project has traced back to a
   stray export, not missing resources.
 - **Ground truth when in doubt:** ask the box itself, not the API guesswork:
-  `ssh aing 'TOK=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60"); curl -s -H "X-aws-ec2-metadata-token: $TOK" http://169.254.169.254/latest/dynamic/instance-identity/document'`
+  `ssh nocgentic 'TOK=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60"); curl -s -H "X-aws-ec2-metadata-token: $TOK" http://169.254.169.254/latest/dynamic/instance-identity/document'`
   returns the real account, region, instance ID, and AZ.
 
 > Note: the box **also** hosts PostCog at `/home/ubuntu/PostCog` (systemd service). Different
@@ -115,6 +133,41 @@ Fix or ignore these — they predate the current infra:
 
 ---
 
+## Re-brand for the next show (EVENT_EDITION)
+
+The public event name is one env var. It drives the UI tagline, the header subtitle, and
+all four agent system prompts, composed in code as `Black Hat {EVENT_EDITION}` (see
+`agents/shared/event.py` and `/api/v1/config`). Currently `USA 2026`, set explicitly in
+`/opt/bhasia/app/.env.s3`.
+
+To rotate, edit that one line on the box and restart:
+
+```bash
+ssh nocgentic
+cd /opt/bhasia/app
+sed -i 's/^EVENT_EDITION=.*/EVENT_EDITION=Asia 2026/' .env.s3   # or "Europe 2026", "USA 2027"
+docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d
+curl -sk https://127.0.0.1/api/v1/config     # expect {"eventLabel":"Black Hat Asia 2026"}
+```
+
+Rehearsed end-to-end on 2026-08-01: flipping the value and restarting `web-server` changed
+the served label, and restoring it changed it back. Notes:
+
+- **Nation + year ONLY.** The `Black Hat` prefix is added in code; putting it in the var
+  yields "Black Hat Black Hat USA 2026".
+- **Read compose's output.** `Recreated`/`Started` = the new value is live; `Running` = compose
+  saw no change and your edit has NOT taken effect. Naming the service (`up -d web-server`)
+  recreates it when the env really differs; if you still see `Running`, add `--force-recreate`.
+  Confirm with `docker exec <container> printenv EVENT_EDITION`, not compose's output.
+- **Display only.** Never tie S3 prefixes, IAM names, or Athena config to it; those stay
+  frozen on the `bh-asia-26` convention even at a USA show.
+- Compose defaults to `USA 2026` when the var is absent, so a fresh box is right for this
+  show but must be set deliberately for the next one.
+- `.env.s3` is mode 600 and not in git. Back it up before editing (`cp -p`), and never cat
+  the whole file (it holds LLM keys and injected AWS creds) — grep the single key instead.
+
+---
+
 ## Source control & deploy flow
 
 - **Repo:** `bhnoc/NOCgentic` (private, GitHub). Local clone: `blackhat/NOCgentic`.
@@ -139,11 +192,13 @@ Fix or ignore these — they predate the current infra:
 ### Runner health
 ```bash
 gh api /repos/bhnoc/NOCgentic/actions/runners --jq '.runners[]|{name,status,labels:[.labels[].name]}'
-# on the box: sudo /home/ubuntu/actions-runner-nocgentic/svc.sh status
-#   systemd unit: actions.runner.bhnoc-NOCgentic.aing-nocgentic.service (runs as ubuntu, enabled on boot)
+#   systemd unit: actions.runner.bhnoc-NOCgentic.nocgentic-box.service (runs as ubuntu, enabled on boot)
+# on the box: cd /opt/bhasia/actions-runner-nocgentic && sudo ./svc.sh status
+#   (svc.sh must run from the runner root; an absolute path errors "Must run from
+#    runner root or install is corrupt")
 ```
 If the runner is offline, deploys queue until it's back:
-`ssh ubuntu@aing.bhnoc.com 'sudo systemctl restart actions.runner.bhnoc-NOCgentic.aing-nocgentic.service'`.
+`ssh nocgentic 'sudo systemctl restart actions.runner.bhnoc-NOCgentic.nocgentic-box.service'`.
 Re-register with a fresh token (they expire):
 `gh api -X POST /repos/bhnoc/NOCgentic/actions/runners/registration-token --jq .token`.
 
@@ -312,13 +367,18 @@ copy-paste smoke-test loop and good default queries.
 
 ## Local LLM on the GPU box (llama.cpp, optional; set up 2026-07-25)
 
+> ⚠️ This section documents **aing's** g6e.4xlarge / L40S. The current nocgentic box is a
+> `g4dn.xlarge` (T4, 16GB), so the model sizing here does not transfer and the `ssh aing`
+> below is unreachable. Re-verify VRAM and model choice before running any of it on the
+> live box.
+
 The g6e.4xlarge has an **NVIDIA L40S (48GB, Ada)**. To run a local model instead of
 the Gemini cloud baseline (air-gapped / no-cloud posture), set up the GPU + a local
 OpenAI-compatible server and point the app at it with `LLM_PROVIDER=local`. The base
 AMI ships with NO NVIDIA driver, so this is a one-time host setup:
 
 ```bash
-ssh aing
+ssh aing   # STALE for the current box; see the warning above
 # 1. NVIDIA driver + CUDA toolkit (kernel headers for the running -aws kernel are needed;
 #    they were already present). The CUDA apt repo gives matched driver + toolkit.
 cd /tmp && curl -fsSL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
