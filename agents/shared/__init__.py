@@ -1,1 +1,1 @@
-# BHNOCgentic agents shared utilities
+# NOCgentic agents shared utilities

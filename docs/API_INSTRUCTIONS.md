@@ -1,5 +1,10 @@
 # BH Asia 2026 NOC — Data Ingestion API Reference
 
+> ⚠️ **Stale (2026-08-01):** the `ap-southeast-1` / Singapore region and the
+> ingestion architecture described here predate the current stack. The live box
+> is `us-east-2` with Athena in `us-west-2`; see `.claude/skills/deploy/skill.md`
+> for current facts. Kept for the design record.
+
 **For partner use only. Keep your API key confidential.**
 
 ---

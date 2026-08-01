@@ -5,7 +5,7 @@
 # "Black Hat" wrapper is composed here into EVENT_LABEL.
 #
 # This is DISPLAY branding only — it must never be used for S3 prefixes, IAM
-# names, or any system config that depends on the frozen "bh-asia-26" naming.
+# names, or any system config. Those are opaque keys, not branding.
 import os
 
 EVENT_EDITION = os.getenv("EVENT_EDITION", "USA 2026").strip()

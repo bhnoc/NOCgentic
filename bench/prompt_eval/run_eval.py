@@ -62,13 +62,13 @@ AGENTS_DIR = REPO_ROOT / "agents"
 SHARED_DIR = AGENTS_DIR / "shared"
 
 # Default results dir is bench/prompt_eval/results. On the deploy box that path
-# is under /opt/bhasia/app which the deploy rsync wipes with --delete, so results
+# is under /opt/nocgentic/app which the deploy rsync wipes with --delete, so results
 # get erased on the next deploy. Run from a repo checkout, or copy results off the
 # box, or set BENCH_RESULTS_DIR to a deploy-safe path (e.g. /home/ubuntu/eval-results).
 RESULTS_DIR = Path(os.getenv("BENCH_RESULTS_DIR") or (EVAL_DIR / "results"))
 
 DEFAULT_SCENARIOS = BENCH_DIR / "scenarios" / "golden.jsonl"
-DEFAULT_BASE_URL = "https://aing.bhnoc.com"
+DEFAULT_BASE_URL = "https://nocgentic.bhnoc.com"
 
 # Put the real agents/shared on sys.path so `from llm_client import llm_complete`
 # resolves the same module the app uses.

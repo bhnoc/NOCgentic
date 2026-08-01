@@ -1,6 +1,11 @@
-# BHNOCgentic — System Design
+# NOCgentic — System Design
 
-**Black Hat Asia 2026 — AI-Powered SOC for Attendees**
+> ⚠️ **Stale (2026-08-01):** the `ap-southeast-1` / Singapore region and the
+> ingestion architecture described here predate the current stack. The live box
+> is `us-east-2` with Athena in `us-west-2`; see `.claude/skills/deploy/skill.md`
+> for current facts. Kept for the design record.
+
+**Black Hat — AI-Powered SOC for Attendees**
 **Region:** ap-southeast-1 (Singapore)
 **Last updated:** 2026-04-20
 
@@ -15,7 +20,7 @@
 
 ## 1. Purpose
 
-Give Black Hat Asia 2026 attendees a window into the NOC. Instead of watching traffic dashboards from behind glass, attendees can ask natural-language questions — "What are the top threat actors right now?", "Show me suspicious DNS activity in the last hour", "What's causing the most alerts?" — and get real answers drawn from live NOC data.
+Give Black Hat attendees a window into the NOC. Instead of watching traffic dashboards from behind glass, attendees can ask natural-language questions — "What are the top threat actors right now?", "Show me suspicious DNS activity in the last hour", "What's causing the most alerts?" — and get real answers drawn from live NOC data.
 
 The system is self-contained on AWS. No login required. No local infrastructure dependencies. Attendees walk up, type a question, get an answer.
 
@@ -214,7 +219,7 @@ python scripts/seed-opensearch.py
 
 ### 5.5 Backup
 
-- Script: `/opt/bhasia/backup-to-s3.sh` — exports OpenSearch to S3 daily
+- Script: `/opt/nocgentic/backup-to-s3.sh` — exports OpenSearch to S3 daily
 - Bucket: `bhasia-data-backup-<ACCOUNT-ID-PRODUCTION>`
 - Schedule: 2 AM UTC
 - Retention: 8 days (auto-delete lifecycle)
@@ -261,7 +266,7 @@ Single-page app served from `packages/web-server/static/index.html`. Dark theme,
 - EBS encrypted at rest
 - Security group: only 443 public; 22 from admin IP only
 
-**Post-event:** `/opt/bhasia/delete-all-data.sh` — stops services, deletes OpenSearch volume, wipes S3. 10-second countdown before execution.
+**Post-event:** `/opt/nocgentic/delete-all-data.sh` — stops services, deletes OpenSearch volume, wipes S3. 10-second countdown before execution.
 
 ---
 
@@ -286,7 +291,7 @@ ALERT_TRIAGE_URL=http://alert-triage:8003
 Run from a machine with SSH access (requires `~/.ssh/blackhat` key):
 
 ```bash
-cd BHNOCgentic
+cd NOCgentic
 ./scripts/deploy-agents.sh
 # or with explicit key:
 ./scripts/deploy-agents.sh --ssh-key ~/.ssh/blackhat --ec2-ip <EC2-PUBLIC-IP>
@@ -336,7 +341,7 @@ Well within the $200/month budget.
 ## 11. File Map
 
 ```
-BHNOCgentic/
+NOCgentic/
 ├── design.md                        # This file
 ├── PROGRESS.md                      # Chronological build log
 ├── SETUP.md                         # AWS infrastructure setup guide

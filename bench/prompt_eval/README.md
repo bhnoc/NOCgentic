@@ -82,7 +82,7 @@ Useful flags:
 
 ```
 --label v1-baseline          # goes in the results filename
---base-url https://aing.bhnoc.com   # default; override for staging
+--base-url https://nocgentic.bhnoc.com   # default; override for staging
 --scenarios path/to/golden.jsonl    # default bench/scenarios/golden.jsonl
 --judge-provider openrouter  # force judge provider (openrouter|gemini|local)
 --poll-interval 1.0          # seconds between polls
@@ -109,7 +109,7 @@ confirm the hard-fail path scores low without crashing.
 ## Results directory warning
 
 Results default to `bench/prompt_eval/results/`. On the deploy box that path is
-under `/opt/bhasia/app`, which the deploy rsync wipes with `--delete`, so results
+under `/opt/nocgentic/app`, which the deploy rsync wipes with `--delete`, so results
 are erased on the next deploy. To keep them:
 
 - Run from a repo checkout (not the deployed tree), or

@@ -561,7 +561,7 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="BHNOCgentic ThousandEyes Analyst", version="0.2.0")
+app = FastAPI(title="NOCgentic ThousandEyes Analyst", version="0.2.0")
 instrument_fastapi_app(app)
 
 

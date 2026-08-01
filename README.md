@@ -1,7 +1,7 @@
-# BHNOCgentic — AI-Powered Security Operations Center
+# NOCgentic — AI-Powered Security Operations Center
 
-Multi-agent LLM platform deployed at the **Black Hat Asia 2026 NOC**.
-Live at **`https://aing.bhnoc.com`**.
+Multi-agent LLM platform deployed at the **Black Hat NOC**.
+Live at **`https://nocgentic.bhnoc.com`**.
 
 A Python/TypeScript SOC assistant that routes analyst questions to the
 right specialist (alerts / network-quality / data-lake hunt), queries
@@ -47,9 +47,9 @@ alert-triage  thousandeyes   athena-hunter
 - **Python 3.11** (all four agents, FastAPI)
 - **LangChain** + **LangSmith OTEL bridge** for LLM spans
 - **OpenTelemetry** → Manifold (`blackcap.app.manifoldsecurity.io`) for monitoring
-- **S3 span archive** at `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/` (NDJSON.gz, Hive partitions)
+- **S3 span archive** at `s3://blackhat-pope-dev-logs/nocgentic/traces/` (NDJSON.gz, Hive partitions)
 - **AWS Athena** — `blackhat_pope_logs.{conn,dns,http,ssl,files,alerts,suricata_corelight,uid_lookup,fuid_lookup,…}`
-- **Docker Compose** stack on EC2 `aing.bhnoc.com`
+- **Docker Compose** stack on EC2 `nocgentic.bhnoc.com`
 - **Gemini 3.1 Flash-Lite-Preview** (swappable via `GEMINI_MODEL`); OpenRouter available as alternate provider
 
 ---
@@ -125,9 +125,9 @@ Each agent:
 
 `tools/audit-monitor/` — FastAPI + SSE live view of every agent span.
 
-- **URL**: `https://aing.bhnoc.com/bh/1337/thetraces/`
+- **URL**: `https://nocgentic.bhnoc.com/bh/1337/thetraces/`
 - **Auth**: bearer token → HTTPOnly signed cookie (HMAC(expiry))
-- **Data source**: polls `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/` every 2 s
+- **Data source**: polls `s3://blackhat-pope-dev-logs/nocgentic/traces/` every 2 s
 - **UI**: one swim-lane per service, color-coded card kinds (LLM, athena, agent, tool, http). Cards show query/prompt/SQL preview (≤300 chars). Click-to-expand for full attributes including LLM prompt/completion.
 - **Startup preload**: pulls last 5 min of spans so lanes are populated immediately.
 - **Raw admin view**: spans show **unredacted** queries, IPs, zone names — the restricted-range filter only touches end-user responses.
@@ -136,20 +136,20 @@ Each agent:
 
 ## Deployment
 
-- **Target**: `aing.bhnoc.com` (EC2 `<INSTANCE-ID>`, us-west-2)
+- **Target**: `nocgentic.bhnoc.com` (EC2 `<INSTANCE-ID>`, us-west-2)
 - **Creds**: instance role `blackhat-pope-dev-ec2-role` (S3 + Athena + Glue read; S3 write scoped to `blackhat-pope-dev-logs`)
 - **Refresh STS**: `bash scripts/refresh-env-creds.sh .env.s3` on the host before `docker compose up`
-- **SSH**: `ssh -i ~/.ssh/id_macmini ubuntu@aing.bhnoc.com`, app at `/opt/bhasia/app`
+- **SSH**: `ssh -i ~/.ssh/id_macmini ubuntu@nocgentic.bhnoc.com`, app at `/opt/nocgentic/app`
 
 ### Deploy cycle
 ```bash
 # From repo root, after changes:
 rsync -av -e "ssh -i ~/.ssh/id_macmini" \
   agents/ packages/ tools/ docker-compose.agents.yml nginx/ \
-  ubuntu@aing.bhnoc.com:/opt/bhasia/app/
+  ubuntu@nocgentic.bhnoc.com:/opt/nocgentic/app/
 
-ssh -i ~/.ssh/id_macmini ubuntu@aing.bhnoc.com \
-  'cd /opt/bhasia/app && docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d --build'
+ssh -i ~/.ssh/id_macmini ubuntu@nocgentic.bhnoc.com \
+  'cd /opt/nocgentic/app && docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d --build'
 ```
 
 ### Local dev
@@ -176,7 +176,7 @@ docker compose -f docker-compose.agents.yml up -d --build
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Manifold | trace export |
 | `OTEL_EXPORTER_OTLP_API_KEY` | — | Manifold bearer |
 | `TRACE_S3_BUCKET` | `blackhat-pope-dev-logs` | span archive bucket |
-| `TRACE_S3_PREFIX` | `bh-asia-26/aing-trace` | |
+| `TRACE_S3_PREFIX` | `nocgentic/traces` | |
 | `AUDIT_BEARER_TOKEN` | — | required for audit monitor |
 | `AUDIT_COOKIE_SECRET` | — | HMAC key for admin cookie |
 | `ADMIN_BEARER_TOKEN` | n/a | bearer token guarding the orchestrator `/admin/*` routes; audit monitor forwards it |
@@ -249,4 +249,4 @@ All exported to Manifold + the S3 NDJSON archive. The audit monitor reads S3 liv
 
 ## License
 
-Internal — Black Hat Asia 2026 NOC project.
+Internal — Black Hat NOC project.

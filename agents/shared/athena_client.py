@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -41,6 +42,67 @@ ATHENA_REGION: str = os.getenv("ATHENA_REGION", os.getenv("S3_REGION", "us-west-
 # Max rows accumulated by _fetch_results before we stop paginating. Hitting this
 # cap silently truncates the result set, so we log a WARNING when it triggers.
 MAX_RESULT_ROWS: int = 500
+
+# ---------------------------------------------------------------------------
+# Result cache
+# ---------------------------------------------------------------------------
+#
+# Keyed on the SANITIZED SQL string (sanitize_sql() runs before any cache
+# lookup — never cache/serve on raw LLM output, or a query that would now be
+# rejected by the allowlist/scope check could be served from a prior hit).
+#
+# TTL default 300s (5 min): Athena partitions are daily (dt='YYYY-MM-DD'), so
+# TTL has no relationship to partition boundaries — it exists purely to bound
+# staleness of a live security feed. The alerts table / demo seed refreshes on
+# a multi-minute cadence, so 5 minutes is short enough that a real new alert
+# shows up promptly, while long enough that the common demo-booth pattern
+# ("ask the same question a couple of times in a row") reliably hits cache.
+# Override with ATHENA_CACHE_TTL_SECONDS for a live show where freshness
+# matters more than cache hit rate.
+#
+# Cached hits sleep ~1.5s (ATHENA_CACHE_HIT_DELAY_SECONDS) via asyncio.sleep
+# (non-blocking) before returning, so a demo answer doesn't look suspiciously
+# instant, without stalling the event loop for other concurrent requests.
+_CACHE_ENABLED: bool = os.getenv("ATHENA_CACHE_ENABLED", "true").strip().lower() not in (
+    "false", "0", "no", "off",
+)
+_CACHE_TTL_SECONDS: float = float(os.getenv("ATHENA_CACHE_TTL_SECONDS", "300"))
+_CACHE_MAX_ENTRIES: int = int(os.getenv("ATHENA_CACHE_MAX_ENTRIES", "200"))
+_CACHE_HIT_DELAY_SECONDS: float = float(os.getenv("ATHENA_CACHE_HIT_DELAY_SECONDS", "1.5"))
+
+# sql -> (expires_at_monotonic, rows, metadata). OrderedDict gives us cheap
+# oldest-first eviction (popitem(last=False)) once we exceed the size bound.
+_query_cache: "OrderedDict[str, tuple[float, list[dict[str, str]], dict[str, Any]]]" = OrderedDict()
+# Guards all cache reads/writes. execute_query awaits network I/O between the
+# cache-miss check and the cache-put, so without this two concurrent identical
+# queries could both miss, both hit Athena (fine, just wasteful), and then
+# race on OrderedDict mutation (not fine — dict corruption under concurrent
+# asyncio tasks is possible once awaits interleave mutation). A plain
+# asyncio.Lock (not threading.Lock) is correct here: everything in this
+# module runs on the single event loop; boto3 calls are pushed to worker
+# threads via asyncio.to_thread but the cache itself is only ever touched
+# from event-loop code.
+_cache_lock = asyncio.Lock()
+
+
+def _cache_get(key: str) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    """Return (rows, metadata) for a live cache entry, or None on miss/expiry."""
+    entry = _query_cache.get(key)
+    if entry is None:
+        return None
+    expires_at, rows, metadata = entry
+    if time.monotonic() >= expires_at:
+        _query_cache.pop(key, None)
+        return None
+    return rows, metadata
+
+
+def _cache_put(key: str, rows: list[dict[str, str]], metadata: dict[str, Any]) -> None:
+    """Insert/refresh a cache entry, evicting the oldest entry past the size bound."""
+    _query_cache[key] = (time.monotonic() + _CACHE_TTL_SECONDS, rows, metadata)
+    _query_cache.move_to_end(key)
+    while len(_query_cache) > _CACHE_MAX_ENTRIES:
+        _query_cache.popitem(last=False)
 
 def _get_athena():
     """Return a fresh boto3 Athena client on every call.
@@ -250,6 +312,29 @@ async def execute_query(
     Runs the blocking boto3 calls in a thread to avoid blocking the event loop.
     """
     sql = sanitize_sql(sql)
+
+    if _CACHE_ENABLED:
+        async with _cache_lock:
+            cached = _cache_get(sql)
+        if cached is not None:
+            rows, metadata = cached
+            # Non-blocking: asyncio.sleep yields to the event loop, so other
+            # concurrent requests (cache hits or cold Athena calls) are not
+            # stalled while this one "looks like" it's working.
+            await asyncio.sleep(_CACHE_HIT_DELAY_SECONDS)
+            hit_metadata = dict(metadata)
+            hit_metadata["cached"] = True
+            # execution_time_ms/total_time_ms below are left as the ORIGINAL
+            # cold-query timings (not overwritten with the fake delay) so a
+            # caller inspecting them isn't misled about how long Athena took.
+            # Callers that feed execution_time_ms into OTel duration metrics
+            # (e.g. agents/athena-hunter/main.py's _athena_query_duration)
+            # should check `metadata.get("cached")` and skip re-recording on
+            # a hit — recording the original duration again would silently
+            # double-count that histogram bucket for work that didn't happen.
+            hit_metadata["cache_hit_delay_ms"] = round(_CACHE_HIT_DELAY_SECONDS * 1000, 1)
+            return list(rows), hit_metadata
+
     athena = _get_athena()
 
     start_time = time.monotonic()
@@ -325,6 +410,15 @@ async def execute_query(
             "Scope filter dropped %d/%d rows: id=%s", dropped, len(rows), query_id
         )
         metadata["rows_dropped_out_of_scope"] = dropped
+
+    # Mark this as an uncached/original execution so callers can distinguish
+    # a cold run from a later cache hit via the same "cached" field either way.
+    metadata["cached"] = False
+
+    if _CACHE_ENABLED:
+        # Cache the FILTERED rows (post-ipscope).
+        async with _cache_lock:
+            _cache_put(sql, kept, dict(metadata))
 
     return kept, metadata
 

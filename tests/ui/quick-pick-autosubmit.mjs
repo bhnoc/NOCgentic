@@ -90,6 +90,24 @@ const settled = await evaluate(`(() => ({
 check('answer rendered', settled.agentBubbles.some(t => t.includes('stub answer')), JSON.stringify(settled.agentBubbles));
 check('send button re-enabled after completion', settled.sendDisabled === false);
 
+// --- sprint gates: favicon + "network sessions" rename ---------------------
+const brand = await evaluate(`(() => ({
+  faviconHref: document.querySelector('link[rel="icon"]')?.getAttribute('href') || null,
+  placeholder: document.getElementById('query-input')?.placeholder || '',
+  headTitle: document.title,
+}))()`);
+check('favicon link present', !!brand.faviconHref, JSON.stringify(brand.faviconHref));
+check('favicon is the local BH hat icon', brand.faviconHref === '/favicon.ico', JSON.stringify(brand.faviconHref));
+check('input placeholder says network sessions', brand.placeholder.includes('network sessions'),
+  JSON.stringify(brand.placeholder));
+check('placeholder no longer says flows', !/\bflows\b/.test(brand.placeholder),
+  JSON.stringify(brand.placeholder));
+
+const favResp = await fetch(BASE + '/favicon.ico');
+check('favicon actually served (not 404)', favResp.status === 200, 'http ' + favResp.status);
+const favBytes = (await favResp.arrayBuffer()).byteLength;
+check('favicon is a real ICO payload', favBytes > 1000, favBytes + ' bytes');
+
 await send('Page.close').catch(() => {});
 ws.close();
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

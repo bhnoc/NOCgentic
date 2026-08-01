@@ -10,7 +10,7 @@ The Hive-style partitions let Athena query the archive directly.
 
 Environment variables:
     TRACE_S3_BUCKET   — bucket name (default: blackhat-pope-dev-logs)
-    TRACE_S3_PREFIX   — key prefix (default: bh-asia-26/aing-trace)
+    TRACE_S3_PREFIX   — key prefix (default: nocgentic/traces)
     TRACE_S3_REGION   — region (default: S3_REGION or us-west-2)
 """
 
@@ -33,7 +33,7 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 logger = logging.getLogger(__name__)
 
 DEFAULT_BUCKET = os.getenv("TRACE_S3_BUCKET", "blackhat-pope-dev-logs")
-DEFAULT_PREFIX = os.getenv("TRACE_S3_PREFIX", "bh-asia-26/aing-trace").strip("/")
+DEFAULT_PREFIX = os.getenv("TRACE_S3_PREFIX", "nocgentic/traces").strip("/")
 DEFAULT_REGION = os.getenv(
     "TRACE_S3_REGION",
     os.getenv("S3_REGION", os.getenv("AWS_REGION", "us-west-2")),

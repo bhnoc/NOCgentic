@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NOCgentic deploy — run BY the self-hosted GitHub Actions runner on the AING box.
+# NOCgentic deploy — run BY the self-hosted GitHub Actions runner on the nocgentic box.
 #
 # The runner checks main out into its own workspace ($GITHUB_WORKSPACE, == PWD here).
 # This script mirrors that checkout into the live app dir, refreshes the AWS creds the
@@ -9,10 +9,10 @@
 #   .env .env.s3  (LLM + S3 + OTEL secrets, injected AWS creds)   node_modules/ venv/
 #   *.log *.pid  .git/   (and never touches /etc/letsencrypt, which nginx mounts)
 #
-# Safe to run by hand on the box too:  APP_DIR=/opt/bhasia/app bash ops/deploy.sh
+# Safe to run by hand on the box too:  APP_DIR=/opt/nocgentic/app bash ops/deploy.sh
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/opt/bhasia/app}"
+APP_DIR="${APP_DIR:-/opt/nocgentic/app}"
 SRC="${GITHUB_WORKSPACE:-$(pwd)}"
 COMPOSE_FILE="docker-compose.agents.yml"
 ENV_FILE=".env.s3"
@@ -69,7 +69,7 @@ docker compose -f "$COMPOSE_FILE" ps
 
 HEALTHY=false
 for i in $(seq 1 12); do
-  if curl -sk --fail -o /dev/null "https://127.0.0.1/health" -H 'Host: aing.bhnoc.com'; then
+  if curl -sk --fail -o /dev/null "https://127.0.0.1/health" ; then
     HEALTHY=true
     break
   fi

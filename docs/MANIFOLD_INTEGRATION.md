@@ -1,6 +1,6 @@
 # Manifold Integration
 
-How BHNOCgentic ships LLM and agent traces, metrics, and logs to **Manifold Security**, plus the parallel S3 span archive that backs Athena queries and the live audit monitor.
+How NOCgentic ships LLM and agent traces, metrics, and logs to **Manifold Security**, plus the parallel S3 span archive that backs Athena queries and the live audit monitor.
 
 > **Source of truth.** Code paths and behaviors below are verified against the current tree. Conversation history (the Claude Code transcript and `PROGRESS.md`) is used to reconstruct *why* a decision was made; those passages are flagged "(per session history)" so future-you knows the difference between "this is how the code is" and "this is how I remember we got here".
 
@@ -15,7 +15,7 @@ How BHNOCgentic ships LLM and agent traces, metrics, and logs to **Manifold Secu
 - **Wire-up:** every Python agent calls `init_telemetry(service_name=...)` at startup (see `agents/shared/telemetry.py`), which registers OTLP exporters for traces+metrics+logs, plus a parallel `S3SpanExporter`.
 - **LLM tracing:** done by the **OpenInference LangChain instrumentor** (`openinference-instrumentation-langchain`). `LangChainInstrumentor().instrument(tracer_provider=...)` in `init_telemetry()` hooks LangChain's callback manager, so every `ChatGoogleGenerativeAI.ainvoke()` / `ChatOpenAI.ainvoke()` emits an OpenInference LLM span (`openinference.span.kind=LLM`, `llm.model_name`, `llm.token_count.*`, `input.value`/`output.value`) through *our* `TracerProvider`. This **replaced the LangSmith OTEL bridge**, which emitted zero LLM spans in practice — see §3.
 - **Agent-graph semantics:** hand-rolled request/tool spans are stamped with OpenInference span kinds (`AGENT` on root handlers, `CHAIN` on wrappers, `TOOL` on Athena/ThousandEyes calls) via helpers in `telemetry.py` (`set_agent_span`/`set_chain_span`/`set_tool_span`/`set_tool_resource`). This is what populates Manifold's **Inventory** (agents/models/tools) and **Agent Graph** (Agent→Model CALLS, Agent→Tool INVOKES, Tool→Resource ACCESSES).
-- **Sister exporter:** every span is *also* gzipped to `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/service=<svc>/dt=YYYY-MM-DD/hour=HH/...jsonl.gz` (Hive-partitioned, Athena-queryable).
+- **Sister exporter:** every span is *also* gzipped to `s3://blackhat-pope-dev-logs/nocgentic/traces/service=<svc>/dt=YYYY-MM-DD/hour=HH/...jsonl.gz` (Hive-partitioned, Athena-queryable).
 - **Live admin view:** `tools/audit-monitor/` (FastAPI + SSE swim-lane dashboard at `/bh/1337/thetraces/`) tails the S3 archive every 2 s.
 
 ---
@@ -66,7 +66,7 @@ Span attributes carry full context — every root `orchestrator.query` span is t
 | `LANGCHAIN_TRACING_V2` | forced `false` by `init_telemetry` | keep LangChain off the LangSmith *cloud* API |
 | `TRACE_S3_ENABLED` | `true` | toggles the S3 sister exporter only |
 | `TRACE_S3_BUCKET` | `blackhat-pope-dev-logs` | |
-| `TRACE_S3_PREFIX` | `bh-asia-26/aing-trace` | |
+| `TRACE_S3_PREFIX` | `nocgentic/traces` | |
 | `TRACE_S3_REGION` | `us-west-2` (falls through `S3_REGION` then `AWS_REGION`) | |
 
 Every agent's compose service block sets the first two via `${...}` substitution from `.env.s3`, plus its own `OTEL_SERVICE_NAME=bhnocgentic-<role>`.
@@ -104,7 +104,7 @@ Captured LLM-span attributes (OpenInference semantic conventions, which is what 
 
 ### 3.2 Why the LangSmith bridge was replaced (postmortem)
 
-The prior design set `LANGSMITH_TRACING=true` + `LANGSMITH_OTEL_ENABLED=true` and assumed LangSmith's OTEL bridge would auto-emit `gen_ai.*` spans through our provider. **It never did.** A 2026-07-27 audit of the S3 span archive (`backups/aing-trace-*/`, which contains the exact spans shipped to Manifold) found **9,025 spans with zero `gen_ai.*`, zero `langsmith.*`, and empty `events: []` on every LLM-wrapper span.** The bridge silently no-op'd — most likely because LangSmith's OTEL export path needs an active LangSmith tracing pipeline (an API key / run tree) that was deliberately never configured, and `os.environ.setdefault` won't override a stale container env.
+The prior design set `LANGSMITH_TRACING=true` + `LANGSMITH_OTEL_ENABLED=true` and assumed LangSmith's OTEL bridge would auto-emit `gen_ai.*` spans through our provider. **It never did.** A 2026-07-27 audit of the S3 span archive (`backups/traces-*/`, which contains the exact spans shipped to Manifold) found **9,025 spans with zero `gen_ai.*`, zero `langsmith.*`, and empty `events: []` on every LLM-wrapper span.** The bridge silently no-op'd — most likely because LangSmith's OTEL export path needs an active LangSmith tracing pipeline (an API key / run tree) that was deliberately never configured, and `os.environ.setdefault` won't override a stale container env.
 
 The visible symptom in Manifold: **"Most Active Agents" and "Most Invoked Assets" populated** (from HTTP/FastAPI spans + the `bhnoc.*` metrics, which *do* export) **but the "Activity" trace view was blank** — no real agent/LLM trace data ever arrived in a shape the trace explorer renders.
 
@@ -145,7 +145,7 @@ In addition, `llm_client.py` keeps a thread-local `_last_metrics` dict (`get_las
 `agents/shared/s3_span_exporter.py` defines `S3SpanExporter`, a `SpanExporter` subclass that batches `ReadableSpan`s into gzipped NDJSON and PUTs them to S3 under:
 
 ```
-s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/service=<svc>/dt=YYYY-MM-DD/hour=HH/<svc>-<ts>-<rand>.jsonl.gz
+s3://blackhat-pope-dev-logs/nocgentic/traces/service=<svc>/dt=YYYY-MM-DD/hour=HH/<svc>-<ts>-<rand>.jsonl.gz
 ```
 
 It is wrapped in a `BatchSpanProcessor(max_export_batch_size=256, schedule_delay_millis=5000)` and registered alongside the OTLP processor — both fire on every span; neither blocks the other.
@@ -167,7 +167,7 @@ The session history (`PROGRESS.md` §7 + transcript) frames the S3 archive as a 
 
 ---
 
-## 6. Real-time audit monitor — `https://aing.bhnoc.com/bh/1337/thetraces/`
+## 6. Real-time audit monitor — `https://nocgentic.bhnoc.com/bh/1337/thetraces/`
 
 The most-used artifact of the whole observability stack isn't Manifold itself — it's the in-house **audit monitor**, a single-page swim-lane dashboard that turns the S3 span archive into a live SOC view. It's the screen that gets demoed and the screen that gets watched during a live presentation. Manifold is the long-term system of record; the audit monitor is the cockpit.
 
@@ -187,7 +187,7 @@ Two FastAPI services and an HTML page:
 
 ```
        ┌────────────────────────────────────┐
-       │  S3: bh-asia-26/aing-trace/        │ ← Manifold gets the same data
+       │  S3: nocgentic/traces/        │ ← Manifold gets the same data
        │  service=<svc>/dt=…/hour=…/*.gz    │   in parallel
        └──────────────────┬─────────────────┘
                           │ list_objects_v2(StartAfter=last_seen_key)
@@ -531,7 +531,7 @@ curl -i -H "Authorization: Bearer $OTEL_EXPORTER_OTLP_API_KEY" \
 **Watch S3 spans land:**
 
 ```bash
-aws s3 ls s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/ --recursive \
+aws s3 ls s3://blackhat-pope-dev-logs/nocgentic/traces/ --recursive \
   | tail -20
 ```
 
@@ -575,8 +575,8 @@ gets). This is the definitive check — it's how the original breakage was found
 
 ```bash
 # newest object under any service prefix
-aws s3 ls s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/ --recursive | sort | tail -1
-aws s3 cp s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/<key>.jsonl.gz - | zcat | \
+aws s3 ls s3://blackhat-pope-dev-logs/nocgentic/traces/ --recursive | sort | tail -1
+aws s3 cp s3://blackhat-pope-dev-logs/nocgentic/traces/<key>.jsonl.gz - | zcat | \
   python3 -c "import sys,json,collections
 c=collections.Counter()
 for l in sys.stdin:

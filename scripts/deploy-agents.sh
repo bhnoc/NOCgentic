@@ -23,7 +23,7 @@ IFS=$'\n\t'
 EC2_IP="${EC2_IP:-${EC2_IP:?Set EC2_IP}}"
 SSH_KEY="${SSH_KEY:-${HOME}/.ssh/blackhat}"
 EC2_USER="ubuntu"
-REMOTE_DIR="/opt/bhasia/app"
+REMOTE_DIR="/opt/nocgentic/app"
 DRY_RUN=false
 
 # ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ if ! ${DRY_RUN}; then
     # shellcheck disable=SC2029
     ssh ${SSH_OPTS} "${EC2_USER}@${EC2_IP}" bash -s <<'REMOTE'
 set -euo pipefail
-cd /opt/bhasia/app
+cd /opt/nocgentic/app
 
 # Use .env.s3 as the canonical env file (has OTEL + S3 + LLM keys)
 if [[ ! -f .env.s3 ]]; then

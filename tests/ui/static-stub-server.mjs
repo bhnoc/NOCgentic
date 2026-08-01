@@ -33,6 +33,11 @@ const server = createServer(async (req, res) => {
     return res.end(JSON.stringify(received));
   }
 
+  if (url.pathname === '/favicon.ico') {
+    res.writeHead(200, { 'content-type': 'image/x-icon' });
+    return res.end(await readFile(new URL('../../packages/web-server/static/favicon.ico', import.meta.url)));
+  }
+
   if (url.pathname === '/' || url.pathname === '/index.html') {
     res.writeHead(200, { 'content-type': 'text/html' });
     return res.end(await readFile(STATIC));

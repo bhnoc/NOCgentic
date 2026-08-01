@@ -735,7 +735,7 @@ async def llm_triage(
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="BHNOCgentic Alert Triage", version="0.4.0")
+app = FastAPI(title="NOCgentic Alert Triage", version="0.4.0")
 instrument_fastapi_app(app)
 
 

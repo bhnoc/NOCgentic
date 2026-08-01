@@ -31,9 +31,9 @@ readonly LOG_FILE="${SCRIPT_DIR}/setup-organization-$(date +%Y%m%d-%H%M%S).log"
 readonly AWS_REGION="ap-southeast-1"
 
 # Organization configuration
-readonly ORG_NAME="BHAsiaSOC"
-readonly PROJECT_TAG="BHAsia2026NOC"
-readonly RESOURCE_PREFIX="bhasia"
+readonly ORG_NAME="NOCgenticSOC"
+readonly PROJECT_TAG="NOCgentic2026NOC"
+readonly RESOURCE_PREFIX="nocgentic"
 
 # Alternate Contacts
 readonly BILLING_EMAIL="${BILLING_EMAIL:?Set BILLING_EMAIL env var}"
@@ -62,9 +62,9 @@ declare -A OU_STRUCTURE=(
 # Accounts to create (name:email:ou)
 # Format: name:email:ou
 declare -a ACCOUNTS_TO_CREATE=(
-    "bhasia-security:${SECURITY_ACCOUNT_EMAIL:?Set SECURITY_ACCOUNT_EMAIL}:Security"
-    "bhasia-production:${PRODUCTION_ACCOUNT_EMAIL:?Set PRODUCTION_ACCOUNT_EMAIL}:Production"
-    "bhasia-development:${DEVELOPMENT_ACCOUNT_EMAIL:?Set DEVELOPMENT_ACCOUNT_EMAIL}:Development"
+    "nocgentic-security:${SECURITY_ACCOUNT_EMAIL:?Set SECURITY_ACCOUNT_EMAIL}:Security"
+    "nocgentic-production:${PRODUCTION_ACCOUNT_EMAIL:?Set PRODUCTION_ACCOUNT_EMAIL}:Production"
+    "nocgentic-development:${DEVELOPMENT_ACCOUNT_EMAIL:?Set DEVELOPMENT_ACCOUNT_EMAIL}:Development"
 )
 
 # Colors for output
@@ -575,10 +575,10 @@ create_security_scps() {
     }'
 
     # Create policies
-    create_scp_if_not_exists "BHAsia-DenyRootUsage" "Deny root account usage in member accounts" "${deny_root_policy}"
-    create_scp_if_not_exists "BHAsia-RequireMFAForSensitive" "Require MFA for sensitive operations" "${require_mfa_policy}"
-    create_scp_if_not_exists "BHAsia-DenyLeaveOrg" "Prevent accounts from leaving organization" "${deny_leave_org_policy}"
-    create_scp_if_not_exists "BHAsia-RegionRestriction" "Restrict to Singapore and global services" "${region_restriction_policy}"
+    create_scp_if_not_exists "NOCgentic-DenyRootUsage" "Deny root account usage in member accounts" "${deny_root_policy}"
+    create_scp_if_not_exists "NOCgentic-RequireMFAForSensitive" "Require MFA for sensitive operations" "${require_mfa_policy}"
+    create_scp_if_not_exists "NOCgentic-DenyLeaveOrg" "Prevent accounts from leaving organization" "${deny_leave_org_policy}"
+    create_scp_if_not_exists "NOCgentic-RegionRestriction" "Restrict to Singapore and global services" "${region_restriction_policy}"
 }
 
 create_scp_if_not_exists() {

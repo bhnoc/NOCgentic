@@ -1,20 +1,20 @@
-# Corelight Data Schema — Black Hat Asia 2026
+# Corelight Data Schema — Black Hat
 
 ## Overview
 
-Live network telemetry from Corelight sensors deployed at Black Hat Asia 2026 (Marina Bay Sands, Singapore).
+Live network telemetry from Corelight sensors deployed at the Black Hat conference network.
 
 - **S3 Bucket:** `blackhat-pope-dev-logs`
 - **Region:** `us-west-2`
-- **Prefix:** `bh-asia-26/corelight/{YYYY-MM-DD}/`
+- **Prefix:** `nocgentic/corelight/{YYYY-MM-DD}/`
 - **Format:** Gzipped Zeek TSV (`.log.gz`) with `#fields` header rows
 - **Timestamps:** Unix epoch floats (e.g., `1776752541.431893`)
 - **Volume:** ~25,000+ files per day across 60+ log types
 
 ### Date Folders
 ```
-bh-asia-26/corelight/2026-04-21/   (~25,094 files)
-bh-asia-26/corelight/2026-04-22/   (~26,036 files)
+nocgentic/corelight/2026-04-21/   (~25,094 files)
+nocgentic/corelight/2026-04-22/   (~26,036 files)
 ```
 
 ### File Naming Convention
@@ -321,4 +321,4 @@ The Corelight sensors tag traffic with the originating network segment. Known se
 ---
 
 *Last updated: 2026-04-21*
-*Source: Live Corelight sensors at Black Hat Asia 2026, Marina Bay Sands, Singapore*
+*Source: Live Corelight sensors at the Black Hat conference network*

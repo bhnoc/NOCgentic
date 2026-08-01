@@ -2,31 +2,31 @@
 
 ## Project Overview
 
-**Project Name:** BHNOCgentic - AI-Powered Security Operations Center Platform
-**Target:** Black Hat Asia 2026 NOC
+**Project Name:** NOCgentic - AI-Powered Security Operations Center Platform
+**Target:** Black Hat NOC
 **Architecture:** Multi-agent LLM-based security operations platform
 **Languages:** TypeScript (primary), Python (ML/AI agents), Bash (automation/infra)
 **Infrastructure:** AWS (EC2, Docker containers, OpenRouter for LLM)
 
 ### Current AWS Environment
 
-**AWS CLI Profile:** `bhasia-deploy`
+**AWS CLI Profile:** `nocgentic-deploy`
 
-The `bhasia-deploy` IAM user is configured for all deployment operations. This user has:
+The `nocgentic-deploy` IAM user is configured for all deployment operations. This user has:
 - Assume role access to member accounts (Security, Production, Development)
 - Read access to organization structure and CloudTrail logs
 - Read access to billing/budgets
 
 **To deploy to member accounts:**
 ```bash
-# Use the bhasia-deploy profile
-aws sts get-caller-identity --profile bhasia-deploy
+# Use the nocgentic-deploy profile
+aws sts get-caller-identity --profile nocgentic-deploy
 
 # Assume role into production account
 aws sts assume-role \
     --role-arn arn:aws:iam::<ACCOUNT-ID>:role/OrganizationAccountAccessRole \
     --role-session-name DeploySession \
-    --profile bhasia-deploy
+    --profile nocgentic-deploy
 ```
 
 > **Note:** Root credentials should ONLY be used for account-level operations that
@@ -60,7 +60,7 @@ config/local.*
 ## Project Structure
 
 ```
-BHNOCgentic/
+NOCgentic/
 ├── CLAUDE.md                    # This file - development guide
 ├── SETUP.md                     # AWS infrastructure setup guide
 ├── infrastructure/              # IaC and deployment
@@ -477,7 +477,7 @@ interface AgentResponse {
 ```bash
 # 1. Clone and install dependencies
 git clone <repo>
-cd BHNOCgentic
+cd NOCgentic
 
 # 2. Install Node.js dependencies (uses workspaces)
 npm install

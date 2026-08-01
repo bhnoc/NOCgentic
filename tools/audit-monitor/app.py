@@ -11,7 +11,7 @@ Run:
 
 Environment:
     AUDIT_BUCKET          — default: blackhat-pope-dev-logs
-    AUDIT_PREFIX          — default: bh-asia-26/aing-trace
+    AUDIT_PREFIX          — default: nocgentic/traces
     AUDIT_REGION          — default: us-west-2
     AUDIT_HOST            — default: 0.0.0.0
     AUDIT_PORT            — default: 8787
@@ -61,7 +61,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # --- Config ---------------------------------------------------------------
 
 BUCKET   = os.getenv("AUDIT_BUCKET", "blackhat-pope-dev-logs")
-PREFIX   = os.getenv("AUDIT_PREFIX", "bh-asia-26/aing-trace").strip("/")
+PREFIX   = os.getenv("AUDIT_PREFIX", "nocgentic/traces").strip("/")
 REGION   = os.getenv("AUDIT_REGION", "us-west-2")
 HOST     = os.getenv("AUDIT_HOST", "0.0.0.0")
 PORT     = int(os.getenv("AUDIT_PORT", "8787"))

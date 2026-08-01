@@ -58,7 +58,7 @@ REPO_ROOT = BENCH_DIR.parent
 AGENTS_DIR = REPO_ROOT / "agents"
 SHARED_DIR = AGENTS_DIR / "shared"
 # Default results dir is bench/results, BUT on the deploy box that path is inside
-# /opt/bhasia/app which deploy.sh rsyncs with --delete, so results get wiped on the
+# /opt/nocgentic/app which deploy.sh rsyncs with --delete, so results get wiped on the
 # next deploy. Set BENCH_RESULTS_DIR to a deploy-safe path (e.g. /home/ubuntu/bench-results)
 # to keep raw result JSON across deploys.
 import os as _os

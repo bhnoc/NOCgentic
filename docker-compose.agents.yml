@@ -32,7 +32,7 @@ services:
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
-      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
       # Public event-edition label (display only). Nation + year, e.g. "USA 2027".
@@ -69,7 +69,7 @@ services:
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
-      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-alert-triage
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
@@ -103,7 +103,7 @@ services:
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
-      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-athena-hunter
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
@@ -130,7 +130,7 @@ services:
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
-      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-bh-asia-26/aing-trace}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
       - OTEL_SERVICE_NAME=bhnocgentic-thousandeyes-analyst
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
@@ -146,7 +146,7 @@ services:
       - "8787"
     environment:
       - AUDIT_BUCKET=${AUDIT_BUCKET:-blackhat-pope-dev-logs}
-      - AUDIT_PREFIX=${AUDIT_PREFIX:-bh-asia-26/aing-trace}
+      - AUDIT_PREFIX=${AUDIT_PREFIX:-nocgentic/traces}
       - AUDIT_REGION=${AUDIT_REGION:-us-west-2}
       - AUDIT_ROOT_PATH=/bh/1337/thetraces
       - AUDIT_POLL_S=${AUDIT_POLL_S:-2}
@@ -176,7 +176,7 @@ services:
       - ALERT_MAX_FETCH=${ALERT_MAX_FETCH:-200}
       - PORT=3000
       - NODE_ENV=production
-      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-https://aing.bhnoc.com}
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-https://nocgentic.bhnoc.com}
       # Public event-edition label shown in the UI (served via /api/v1/config).
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     depends_on:

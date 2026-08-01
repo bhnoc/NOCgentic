@@ -1,10 +1,15 @@
 # BH Asia 2026 NOC - AI-Powered SOC Platform Setup Guide
 
+> ⚠️ **Stale (2026-08-01):** the `ap-southeast-1` / Singapore region and the
+> ingestion architecture described here predate the current stack. The live box
+> is `us-east-2` with Athena in `us-west-2`; see `.claude/skills/deploy/skill.md`
+> for current facts. Kept for the design record.
+
 ## Executive Summary
 
 | Attribute | Value |
 |-----------|-------|
-| **Event** | Black Hat Asia 2026 NOC |
+| **Event** | Black Hat NOC |
 | **Duration** | 5 days event + 2 days buffer (7 days total) |
 | **Region** | `ap-southeast-1` (Singapore) |
 | **Data Volume** | ~50GB total (~10GB/day) |
@@ -43,10 +48,10 @@ AWS Organization: <ORG-ID>
 
 | SCP | ID | Effect |
 |-----|-----|--------|
-| BHAsia-DenyRootUsage | <SCP-ID> | Blocks root account in member accounts |
-| BHAsia-RequireMFAForSensitive | <SCP-ID> | MFA required for CloudTrail changes |
-| BHAsia-DenyLeaveOrg | <SCP-ID> | Prevents accounts from leaving |
-| BHAsia-RegionRestriction | <SCP-ID> | Only ap-southeast-1 + us-east-1 allowed |
+| NOCgentic-DenyRootUsage | <SCP-ID> | Blocks root account in member accounts |
+| NOCgentic-RequireMFAForSensitive | <SCP-ID> | MFA required for CloudTrail changes |
+| NOCgentic-DenyLeaveOrg | <SCP-ID> | Prevents accounts from leaving |
+| NOCgentic-RegionRestriction | <SCP-ID> | Only ap-southeast-1 + us-east-1 allowed |
 
 ### Alternate Contacts
 
@@ -612,7 +617,7 @@ aws ec2 terminate-instances --instance-ids ${INSTANCE_ID}
 
 # Delete EBS snapshots
 aws ec2 describe-snapshots --owner-ids self \
-    --filters "Name=tag:Project,Values=BHAsia2026" \
+    --filters "Name=tag:Project,Values=NOCgentic2026" \
     --query 'Snapshots[*].SnapshotId' --output text | \
     xargs -I {} aws ec2 delete-snapshot --snapshot-id {}
 
@@ -668,7 +673,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
     --key-name bhasia-data-server \
     --security-group-ids $SG_ID \
     --block-device-mappings '[{"DeviceName":"/dev/xvda","Ebs":{"VolumeSize":100,"VolumeType":"gp3","Encrypted":true}}]' \
-    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=bhasia-data-server},{Key=Project,Value=BHAsia2026}]' \
+    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=bhasia-data-server},{Key=Project,Value=NOCgentic2026}]' \
     --region ap-southeast-1 \
     --query 'Instances[0].InstanceId' --output text)
 
@@ -714,9 +719,9 @@ echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
 sudo sysctl -w vm.max_map_count=262144
 
 # Create application directory
-sudo mkdir -p /opt/bhasia
-sudo chown ec2-user:ec2-user /opt/bhasia
-cd /opt/bhasia
+sudo mkdir -p /opt/nocgentic
+sudo chown ec2-user:ec2-user /opt/nocgentic
+cd /opt/nocgentic
 
 # Clone or copy application files
 # (docker-compose.yml, ingestion-api/, nginx/, secrets/)
@@ -735,8 +740,8 @@ curl -k https://localhost/v1/health
 # Option A: Self-signed (for testing)
 openssl req -x509 -nodes -days 7 \
     -newkey rsa:2048 \
-    -keyout /opt/bhasia/nginx/ssl/server.key \
-    -out /opt/bhasia/nginx/ssl/server.crt \
+    -keyout /opt/nocgentic/nginx/ssl/server.key \
+    -out /opt/nocgentic/nginx/ssl/server.crt \
     -subj "/CN=bhasia-data.blackhat.com"
 
 # Option B: Let's Encrypt (if you have a domain)
@@ -748,7 +753,7 @@ sudo certbot certonly --standalone -d your-domain.com
 
 ```bash
 # Generate secure API keys for each source
-cat > /opt/bhasia/secrets/api_keys.json << 'EOF'
+cat > /opt/nocgentic/secrets/api_keys.json << 'EOF'
 {
     "sources": {
         "corelight": {

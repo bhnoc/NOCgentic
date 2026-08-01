@@ -90,7 +90,7 @@ def redact_row(row: dict) -> dict:
 
 
 def newest_backup() -> Path | None:
-    candidates = sorted(glob.glob(str(BACKUPS_DIR / "aing-trace-*")))
+    candidates = sorted(glob.glob(str(BACKUPS_DIR / "traces-*")))
     return Path(candidates[-1]) if candidates else None
 
 

@@ -3,7 +3,7 @@
 seed-s3.py — Generate and upload synthetic security event data to S3.
 
 Usage:
-    python scripts/seed-s3.py --bucket bhasia-noc-data --region us-east-1
+    python scripts/seed-s3.py --bucket nocgentic-noc-data --region us-east-1
 
 Uploads NDJSON files to:
     s3://{bucket}/corelight/events-{timestamp}.ndjson

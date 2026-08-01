@@ -5,15 +5,15 @@ description: Deploy the NOCgentic (bhnocgentic) Black Hat NOC platform from noth
 
 # NOCgentic — Deploy Skill
 
-Take the Black Hat Asia NOC platform (**bhnocgentic**, repo `bhnoc/NOCgentic`) from
+Take the Black Hat NOC platform (**bhnocgentic**, repo `bhnoc/NOCgentic`) from
 nothing to fully running.
 
 > **The live host is `https://nocgentic.bhnoc.com/` (SSH: `ssh nocgentic`).** This
 > replaced aing on 2026-07-31 when the CI runner moved; `main` auto-deploys here.
 > An earlier version of this doc claimed `nocgentic.bhnoc.com` did not exist and
-> pointed everything at `aing.bhnoc.com`. It does exist, aing is no longer the
+> pointed everything at `nocgentic.bhnoc.com`. It does exist, aing is no longer the
 > deploy target, and aing's SSH is not reachable from here. Ignore any `ssh aing`
-> or `aing.bhnoc.com` instruction below that this note contradicts.
+> or `nocgentic.bhnoc.com` instruction below that this note contradicts.
 
 This skill is a living document — append what you learn each deploy. Its sibling is
 [[../ops/skill.md]] (day-2 operations). **PostCog** (the Slack bot) is a separate app with
@@ -21,7 +21,7 @@ its own skills at `blackhat/PostCog/.claude/skills/`.
 
 ## What you're deploying
 
-An agentic NOC/SOC dashboard. Docker Compose stack at `/opt/bhasia/app` on the EC2 box:
+An agentic NOC/SOC dashboard. Docker Compose stack at `/opt/nocgentic/app` on the EC2 box:
 
 | Service | Port | Role |
 |---------|------|------|
@@ -52,9 +52,9 @@ This is the live host. Values below came from IMDS on the box itself, not the AP
 | Private IP | `10.20.1.254` (hostname `ip-10-20-1-254`) |
 | DNS | `nocgentic.bhnoc.com` |
 | SSH | `ssh nocgentic` (see `~/.ssh/config`; 1Password agent, biometric-gated) |
-| App dir | `/opt/bhasia/app` |
-| Env file | `/opt/bhasia/app/.env.s3` (mode 600 ubuntu:ubuntu, **not in git**) |
-| CI runner | `/opt/bhasia/actions-runner-nocgentic` (label `nocgentic`) |
+| App dir | `/opt/nocgentic/app` |
+| Env file | `/opt/nocgentic/app/.env.s3` (mode 600 ubuntu:ubuntu, **not in git**) |
+| CI runner | `/opt/nocgentic/actions-runner-nocgentic` (label `nocgentic`) |
 | TLS | `/etc/letsencrypt/live/current` -> `/etc/letsencrypt/live/nocgentic.bhnoc.com` |
 
 > The Athena backend still lives in the **other** account (`blackhat_pope_logs`,
@@ -63,9 +63,9 @@ This is the live host. Values below came from IMDS on the box itself, not the AP
 
 ### Retired: the aing box (do not use)
 
-`i-0430224b1ac82701e` / account `552440750419` / `us-west-2` / `aing.bhnoc.com` was the
+`i-0430224b1ac82701e` / account `552440750419` / `us-west-2` / `nocgentic.bhnoc.com` was the
 deploy target until 2026-07-31. Its runner is deregistered and **SSH to it times out from
-the current workstation**. Everything below that says `ssh aing` or `aing.bhnoc.com` is
+the current workstation**. Everything below that says `ssh aing` or `nocgentic.bhnoc.com` is
 stale; substitute `nocgentic`. The per-guest 443 allow-list SG notes
 (`sg-0a24a0bef5a92acca`) are aing-specific and have not been re-verified for this box.
 
@@ -73,7 +73,7 @@ stale; substitute `nocgentic`. The per-guest 443 allow-list SG notes
 
 - **Profiles:** `VirtualPOC-users` for READS (describe/list), `VirtualPOC-admins` for
   WRITES to infra (security groups, `modify-instance-attribute`, launch/stop). Both SSO,
-  both account `552440750419`. `bhasia-deploy` in the top-level CLAUDE.md is stale; it is
+  both account `552440750419`. `nocgentic-deploy` in the top-level CLAUDE.md is stale; it is
   not what this box uses.
 - **If a token is expired:** `aws sso login --profile VirtualPOC-admins` (or `-users`).
   Just run it; it opens a browser and lands creds in-session.
@@ -138,16 +138,16 @@ Fix or ignore these — they predate the current infra:
 The public event name is one env var. It drives the UI tagline, the header subtitle, and
 all four agent system prompts, composed in code as `Black Hat {EVENT_EDITION}` (see
 `agents/shared/event.py` and `/api/v1/config`). Currently `USA 2026`, set explicitly in
-`/opt/bhasia/app/.env.s3`.
+`/opt/nocgentic/app/.env.s3`.
 
 To rotate, edit that one line on the box and restart:
 
 ```bash
 ssh nocgentic
-cd /opt/bhasia/app
+cd /opt/nocgentic/app
 sed -i 's/^EVENT_EDITION=.*/EVENT_EDITION=Asia 2026/' .env.s3   # or "Europe 2026", "USA 2027"
 docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d
-curl -sk https://127.0.0.1/api/v1/config     # expect {"eventLabel":"Black Hat Asia 2026"}
+curl -sk https://127.0.0.1/api/v1/config     # expect {"eventLabel":"Black Hat USA 2026"}
 ```
 
 Rehearsed end-to-end on 2026-08-01: flipping the value and restarting `web-server` changed
@@ -160,7 +160,7 @@ the served label, and restoring it changed it back. Notes:
   recreates it when the env really differs; if you still see `Running`, add `--force-recreate`.
   Confirm with `docker exec <container> printenv EVENT_EDITION`, not compose's output.
 - **Display only.** Never tie S3 prefixes, IAM names, or Athena config to it; those stay
-  frozen on the `bh-asia-26` convention even at a USA show.
+  frozen on the `nocgentic` convention even at a USA show.
 - Compose defaults to `USA 2026` when the var is absent, so a fresh box is right for this
   show but must be set deliberately for the next one.
 - `.env.s3` is mode 600 and not in git. Back it up before editing (`cp -p`), and never cat
@@ -176,7 +176,7 @@ the served label, and restoring it changed it back. Notes:
   (label `nocgentic`). The runner polls GitHub *outbound*, so no inbound ports are opened.
   This is a **separate runner** from PostCog's (`postcog` label, `bhnoc/PostCog`) — one
   runner binds to one repo — but both live on the same box.
-- The deploy step runs `ops/deploy.sh`: it rsyncs the git checkout into `/opt/bhasia/app`
+- The deploy step runs `ops/deploy.sh`: it rsyncs the git checkout into `/opt/nocgentic/app`
   **preserving** `.env`, `.env.s3`, `node_modules/`, `venv/`, `*.log`, `.git/`, then
   refreshes IMDS creds into `.env.s3` and runs `docker compose ... up -d --build
   --remove-orphans`, then health-checks `https://127.0.0.1/health`. It **refuses to deploy
@@ -186,14 +186,14 @@ the served label, and restoring it changed it back. Notes:
 - **Test before pushing to `main`** — main is the deploy branch. For LLM/model changes you
   can test the real module in a version-matched venv without a container rebuild (see the
   Gemini section in [[../ops/skill.md]]).
-- The box (`/opt/bhasia/app`) was originally an **untracked** copy that drifted from git.
+- The box (`/opt/nocgentic/app`) was originally an **untracked** copy that drifted from git.
   If you hand-edit on the box, mirror it back into the repo or it's lost on next deploy.
 
 ### Runner health
 ```bash
 gh api /repos/bhnoc/NOCgentic/actions/runners --jq '.runners[]|{name,status,labels:[.labels[].name]}'
 #   systemd unit: actions.runner.bhnoc-NOCgentic.nocgentic-box.service (runs as ubuntu, enabled on boot)
-# on the box: cd /opt/bhasia/actions-runner-nocgentic && sudo ./svc.sh status
+# on the box: cd /opt/nocgentic/actions-runner-nocgentic && sudo ./svc.sh status
 #   (svc.sh must run from the runner root; an absolute path errors "Must run from
 #    runner root or install is corrupt")
 ```
@@ -221,7 +221,7 @@ EC2_IP=$(AWS_PROFILE=VirtualPOC-users aws ec2 describe-instances \
 ```
 
 What `deploy-agents.sh` does:
-1. `rsync` the repo to `ubuntu@EC2_IP:/opt/bhasia/app` (excludes `.env`, `.env.s3`, `.git`, `node_modules`, venvs)
+1. `rsync` the repo to `ubuntu@EC2_IP:/opt/nocgentic/app` (excludes `.env`, `.env.s3`, `.git`, `node_modules`, venvs)
 2. On the box: `scripts/refresh-env-creds.sh .env.s3` (see below), re-seed S3, then
    `docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d --build --remove-orphans`
 3. Poll `https://EC2_IP/health` up to 12×5s until healthy
@@ -237,7 +237,7 @@ pulls **temporary** role credentials from IMDS and writes `AWS_ACCESS_KEY_ID` /
 if agents start failing S3/Athena calls with auth errors, re-run it and recreate:
 
 ```bash
-# on the box, in /opt/bhasia/app
+# on the box, in /opt/nocgentic/app
 bash scripts/refresh-env-creds.sh .env.s3
 docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d
 ```
@@ -271,12 +271,12 @@ ssh ubuntu@<IP>
 # Docker + compose plugin
 sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin
 sudo usermod -aG docker ubuntu   # re-login for group to take effect
-sudo mkdir -p /opt/bhasia/app && sudo chown ubuntu:ubuntu /opt/bhasia/app
+sudo mkdir -p /opt/nocgentic/app && sudo chown ubuntu:ubuntu /opt/nocgentic/app
 ```
 
 ### 3. Sync code + env
 
-- `rsync`/`deploy-agents.sh` the repo to `/opt/bhasia/app`.
+- `rsync`/`deploy-agents.sh` the repo to `/opt/nocgentic/app`.
 - Create `.env.s3` on the box (it is **not** synced) with: `GEMINI_API_KEY`,
   `OPENROUTER_API_KEY`, `LLM_PROVIDER`, `GEMINI_MODEL`, `S3_BUCKET`, `S3_REGION`,
   `S3_PREFIX`, `ATHENA_*`, OTEL settings, `THOUSANDEYES_BEARER_TOKEN`, `AUDIT_*`.
@@ -284,21 +284,21 @@ sudo mkdir -p /opt/bhasia/app && sudo chown ubuntu:ubuntu /opt/bhasia/app
 
 ### 4. DNS
 
-Point `aing.bhnoc.com` (Cloudflare A record) at the instance's public IP. **Re-point it
+Point `nocgentic.bhnoc.com` (Cloudflare A record) at the instance's public IP. **Re-point it
 after every stop/start** — the IP is ephemeral (no Elastic IP attached).
 
 ### 5. TLS certificate (first issuance)
 
 The stack uses certbot with the **`dns-cloudflare`** authenticator (DNS-01 challenge, so
 the box needn't be publicly reachable during issuance). Renewal config already exists at
-`/etc/letsencrypt/renewal/aing.bhnoc.com.conf` once issued.
+`/etc/letsencrypt/renewal/nocgentic.bhnoc.com.conf` once issued.
 
 ```bash
 # on the box — creds at /etc/letsencrypt/cloudflare.ini (dns_cloudflare_api_token=...)
 sudo certbot certonly --dns-cloudflare \
   --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
   --dns-cloudflare-propagation-seconds 30 \
-  -d aing.bhnoc.com --key-type ecdsa \
+  -d nocgentic.bhnoc.com --key-type ecdsa \
   --server https://acme-v02.api.letsencrypt.org/directory
 ```
 
@@ -308,7 +308,7 @@ immediately. (Renewal after this is covered in [[../ops/skill.md]].)
 ### 6. Bring up the stack
 
 ```bash
-cd /opt/bhasia/app
+cd /opt/nocgentic/app
 docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d --build --remove-orphans
 ```
 
@@ -317,12 +317,12 @@ docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d --build --r
 ```bash
 # on the box
 docker compose -f docker-compose.agents.yml ps
-curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: aing.bhnoc.com'
+curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: nocgentic.bhnoc.com'
 # from an allow-listed IP
-curl -s -o /dev/null -w "HTTP %{http_code}\n" https://aing.bhnoc.com/health
+curl -s -o /dev/null -w "HTTP %{http_code}\n" https://nocgentic.bhnoc.com/health
 ```
 
-Expect HTTP 200 and a valid cert for `aing.bhnoc.com`.
+Expect HTTP 200 and a valid cert for `nocgentic.bhnoc.com`.
 
 ### 8. Seed a demo day (between conferences)
 
@@ -341,7 +341,7 @@ Verified route names (the app does **not** expose a bare `/api/v1/alerts` — th
 
 | URL | Serves |
 |-----|--------|
-| `https://aing.bhnoc.com/` | Chat UI |
+| `https://nocgentic.bhnoc.com/` | Chat UI |
 | `POST /api/v1/chat` | Submit a query → returns `{jobId}` (async) |
 | `GET /api/v1/chat/:id` | Poll job result (`status`, `answer`, `agentUsed`, …) |
 | `GET /api/v1/alerts/recent` | Last-24h alert feed (dashboard) |
@@ -356,10 +356,10 @@ copy-paste smoke-test loop and good default queries.
 ## Deploy checklist
 
 - [ ] Instance running, IP known
-- [ ] `aing.bhnoc.com` DNS points at current IP (Cloudflare)
-- [ ] Code synced to `/opt/bhasia/app` (runner on push, or `--ec2-ip` for manual)
+- [ ] `nocgentic.bhnoc.com` DNS points at current IP (Cloudflare)
+- [ ] Code synced to `/opt/nocgentic/app` (runner on push, or `--ec2-ip` for manual)
 - [ ] `.env.s3` present + `refresh-env-creds.sh` run (creds not expired)
-- [ ] Valid TLS cert for `aing.bhnoc.com`
+- [ ] Valid TLS cert for `nocgentic.bhnoc.com`
 - [ ] Self-hosted runner `aing-nocgentic` shows `online` (`gh api …/actions/runners`)
 - [ ] `docker compose ... up -d --build` succeeded, all services up
 - [ ] `https://.../health` returns 200 from an allow-listed IP
@@ -422,7 +422,7 @@ export LLAMA_CACHE=/home/ubuntu/models
 ## CI auto-deploy — how it's wired (2026-07-22)
 - `.github/workflows/deploy.yml`: `on: push [main]` + `workflow_dispatch`,
   `runs-on: [self-hosted, nocgentic]`, `concurrency: deploy-nocgentic` (no racing deploys).
-- `ops/deploy.sh`: rsync `--delete` from the runner checkout → `/opt/bhasia/app`, excluding
+- `ops/deploy.sh`: rsync `--delete` from the runner checkout → `/opt/nocgentic/app`, excluding
   `.env .env.* node_modules/ venv/ .venv/ dist/ *.log *.pid .git/ __pycache__` (keeps
   `.env.example`). Then refresh IMDS creds into `.env.s3`, `docker compose -f
   docker-compose.agents.yml --env-file .env.s3 up -d --build --remove-orphans`, prune
@@ -447,7 +447,7 @@ CI runner moved off aing onto the Product-Research **nocgentic box**.
   `sudo ln -sfn /etc/letsencrypt/live/<fqdn> /etc/letsencrypt/live/current`. The rsync deploy
   (`--delete`, no nginx exclude) would otherwise clobber a box's server_name/cert path; the
   catch-all + symlink makes one conf safe everywhere. (deploy.sh health-check still sends
-  `Host: aing.bhnoc.com` — harmless, catch-all answers any Host.)
+  `Host: nocgentic.bhnoc.com` — harmless, catch-all answers any Host.)
 - **Per-tenant catalog:** athena-hunter rewrites AQLight's baked-in `blackhat_pope_logs.`
   prefix → `ATHENA_DATABASE` (no-op when equal). Set `ATHENA_DATABASE/WORKGROUP/REGION` in
   `.env.s3`.
@@ -457,7 +457,7 @@ CI runner moved off aing onto the Product-Research **nocgentic box**.
 
 ### Runner arrangement (2026-07-31)
 - **`nocgentic-box`** runner (label `nocgentic`, x64) lives on the nocgentic box at
-  `/opt/bhasia/actions-runner-nocgentic`, runs as `ubuntu`. **This is the only NOCgentic runner** —
+  `/opt/nocgentic/actions-runner-nocgentic`, runs as `ubuntu`. **This is the only NOCgentic runner** —
   `git push origin main` auto-deploys to the nocgentic box.
 - aing's `aing-nocgentic` runner: **stopped + disabled + deregistered**. aing no longer
   auto-deploys NOCgentic. (aing's PostCog runner was separately retired earlier.)

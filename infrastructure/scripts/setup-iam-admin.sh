@@ -23,9 +23,9 @@ readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly LOG_FILE="${SCRIPT_DIR}/setup-iam-admin-$(date +%Y%m%d-%H%M%S).log"
 
 # IAM Configuration
-readonly ADMIN_USER_NAME="bhasia-deploy"
-readonly ADMIN_GROUP_NAME="BHAsiaAdmins"
-readonly PROJECT_TAG="BHAsia2026NOC"
+readonly ADMIN_USER_NAME="nocgentic-deploy"
+readonly ADMIN_GROUP_NAME="NOCgenticAdmins"
+readonly PROJECT_TAG="NOCgenticNOC"
 
 # Member account IDs (from organization setup)
 readonly SECURITY_ACCOUNT_ID="${SECURITY_ACCOUNT_ID:?Set SECURITY_ACCOUNT_ID env var}"
@@ -227,8 +227,8 @@ get_cloudtrail_s3_policy() {
                 "s3:ListBucket"
             ],
             "Resource": [
-                "arn:aws:s3:::bhasia-cloudtrail-${mgmt_account_id}",
-                "arn:aws:s3:::bhasia-cloudtrail-${mgmt_account_id}/*"
+                "arn:aws:s3:::nocgentic-cloudtrail-${mgmt_account_id}",
+                "arn:aws:s3:::nocgentic-cloudtrail-${mgmt_account_id}/*"
             ]
         }
     ]
@@ -265,17 +265,17 @@ create_and_attach_policies() {
     mgmt_account_id="$(aws sts get-caller-identity --query 'Account' --output text)"
 
     # Policy 1: Assume Role in Member Accounts
-    local assume_role_policy_name="BHAsia-AssumeRoleInMemberAccounts"
+    local assume_role_policy_name="NOCgentic-AssumeRoleInMemberAccounts"
     create_policy_if_not_exists "${assume_role_policy_name}" "$(get_assume_role_policy)"
     attach_policy_to_group "${assume_role_policy_name}" "${mgmt_account_id}"
 
     # Policy 2: Organization Management
-    local org_mgmt_policy_name="BHAsia-OrganizationManagement"
+    local org_mgmt_policy_name="NOCgentic-OrganizationManagement"
     create_policy_if_not_exists "${org_mgmt_policy_name}" "$(get_org_management_policy)"
     attach_policy_to_group "${org_mgmt_policy_name}" "${mgmt_account_id}"
 
     # Policy 3: CloudTrail S3 Access
-    local cloudtrail_policy_name="BHAsia-CloudTrailS3Access"
+    local cloudtrail_policy_name="NOCgentic-CloudTrailS3Access"
     create_policy_if_not_exists "${cloudtrail_policy_name}" "$(get_cloudtrail_s3_policy)"
     attach_policy_to_group "${cloudtrail_policy_name}" "${mgmt_account_id}"
 
@@ -478,9 +478,9 @@ print_summary() {
     echo ""
 
     echo "Member Account Access:"
-    echo "  - bhasia-security    (${SECURITY_ACCOUNT_ID})"
-    echo "  - bhasia-production  (${PRODUCTION_ACCOUNT_ID})"
-    echo "  - bhasia-development (${DEVELOPMENT_ACCOUNT_ID})"
+    echo "  - nocgentic-security    (${SECURITY_ACCOUNT_ID})"
+    echo "  - nocgentic-production  (${PRODUCTION_ACCOUNT_ID})"
+    echo "  - nocgentic-development (${DEVELOPMENT_ACCOUNT_ID})"
     echo ""
 
     echo "=============================================="
@@ -489,19 +489,19 @@ print_summary() {
     echo ""
     echo "1. Configure AWS CLI with the new credentials:"
     echo ""
-    echo "   aws configure --profile bhasia-deploy"
+    echo "   aws configure --profile nocgentic-deploy"
     echo "   # Enter the Access Key ID and Secret Access Key"
     echo ""
     echo "2. Test the new credentials:"
     echo ""
-    echo "   aws sts get-caller-identity --profile bhasia-deploy"
+    echo "   aws sts get-caller-identity --profile nocgentic-deploy"
     echo ""
     echo "3. To deploy to production account, assume the role:"
     echo ""
     echo "   aws sts assume-role \\"
     echo "       --role-arn arn:aws:iam::${PRODUCTION_ACCOUNT_ID}:role/OrganizationAccountAccessRole \\"
     echo "       --role-session-name DeploySession \\"
-    echo "       --profile bhasia-deploy"
+    echo "       --profile nocgentic-deploy"
     echo ""
     echo "4. (Optional) Set up MFA for the user in AWS Console"
     echo ""

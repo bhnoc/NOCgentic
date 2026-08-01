@@ -75,6 +75,9 @@ _athena_query_duration = _meter.create_histogram(
 _athena_bytes_scanned = _meter.create_histogram(
     "bhnoc.athena_hunter.bytes_scanned", unit="bytes", description="Athena data scanned"
 )
+_athena_cache_hit_counter = _meter.create_counter(
+    "bhnoc.athena_hunter.cache_hits", description="Queries served from the result cache"
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -478,7 +481,7 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
             # AQLight is fine-tuned to emit the literal schema `blackhat_pope_logs.<table>`
             # regardless of prompt. Rewrite that baked-in prefix to the configured
             # ATHENA_DATABASE so the catalog can be named per-tenant (e.g. blackhatnoc_glue).
-            # No-op when ATHENA_DATABASE == blackhat_pope_logs (the original/aing case).
+            # No-op when ATHENA_DATABASE == blackhat_pope_logs (the single-tenant case).
             if ATHENA_DATABASE != "blackhat_pope_logs":
                 s = re.sub(r"(?i)\bblackhat_pope_logs\.", f"{ATHENA_DATABASE}.", s)
             return s
@@ -667,9 +670,16 @@ async def gather_athena_context(
                     qspan.set_attribute("sql.execution_time_ms", meta["execution_time_ms"])
                     qspan.set_attribute("sql.data_scanned_mb", meta["data_scanned_mb"])
 
-                    _athena_query_counter.add(1)
-                    _athena_query_duration.record(meta["execution_time_ms"])
-                    _athena_bytes_scanned.record(meta["data_scanned_bytes"])
+                    # A cache hit did no Athena work: recording its (replayed) cold
+                    # timings and byte count again would double-count the original
+                    # query and make the latency histogram and spend look worse than
+                    # reality. Count the hit separately instead.
+                    if meta.get("cached"):
+                        _athena_cache_hit_counter.add(1)
+                    else:
+                        _athena_query_counter.add(1)
+                        _athena_query_duration.record(meta["execution_time_ms"])
+                        _athena_bytes_scanned.record(meta["data_scanned_bytes"])
 
                     ctx["query_results"].append({
                         "sql": sql,
@@ -817,7 +827,7 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="BHNOCgentic Athena Hunter", version="0.1.0")
+app = FastAPI(title="NOCgentic Athena Hunter", version="0.1.0")
 instrument_fastapi_app(app)
 
 
@@ -1043,8 +1053,11 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
             alerts = [_athena_row_to_alert(r) for r in rows]
             span.set_attribute("alerts.count", len(alerts))
             span.set_attribute("athena.execution_time_ms", meta.get("execution_time_ms", 0))
-            _athena_query_counter.add(1)
-            _athena_query_duration.record(meta.get("execution_time_ms", 0))
+            if meta.get("cached"):
+                _athena_cache_hit_counter.add(1)
+            else:
+                _athena_query_counter.add(1)
+                _athena_query_duration.record(meta.get("execution_time_ms", 0))
             return {
                 "alerts": alerts,
                 "count": len(alerts),

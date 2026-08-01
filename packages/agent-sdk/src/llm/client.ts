@@ -53,7 +53,7 @@ export class LLMClient {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://bhasia2026.noc',
+        'HTTP-Referer': 'https://nocgentic.noc',
         'X-Title': 'BH Asia NOC Agent',
       },
       body: JSON.stringify(body),

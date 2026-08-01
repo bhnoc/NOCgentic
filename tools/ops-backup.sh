@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ops-backup.sh — Capture operational state from the aing.bhnoc.com host
+# ops-backup.sh — Capture operational state from the nocgentic.bhnoc.com host
 # that does NOT live in the S3 trace archive:
 #   - Docker logs for every container (with timestamps)
 #   - nginx access + error logs (they're symlinked to container stdout/stderr)
@@ -11,12 +11,12 @@
 # Output: backups/ops-<UTC-timestamp>/  (and a .tar.gz next to it)
 #
 # Usage:  bash tools/ops-backup.sh
-#         SSH_KEY=~/.ssh/id_macmini EC2_HOST=ubuntu@aing.bhnoc.com bash tools/ops-backup.sh
+#         SSH_KEY=~/.ssh/id_macmini EC2_HOST=ubuntu@nocgentic.bhnoc.com bash tools/ops-backup.sh
 set -euo pipefail
 
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_macmini}"
-EC2_HOST="${EC2_HOST:-ubuntu@aing.bhnoc.com}"
-REMOTE_APP_DIR="${REMOTE_APP_DIR:-/opt/bhasia/app}"
+EC2_HOST="${EC2_HOST:-ubuntu@nocgentic.bhnoc.com}"
+REMOTE_APP_DIR="${REMOTE_APP_DIR:-/opt/nocgentic/app}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -109,7 +109,7 @@ files:
 
 The S3 span archive ("prompts" data) is NOT in this bundle — that's
 covered by:
-  backups/aing-trace-*/                (rsync'd from s3://...aing-trace/)
+  backups/traces-*/                (rsync'd from the trace prefix)
   trace-export-*.csv                   (produced by tools/trace-export.py)
 EOF
 

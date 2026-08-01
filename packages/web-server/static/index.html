@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BlackHat NOCGentic // AI SOC</title>
+  <!-- Black Hat hat mark, vendored locally: the conference network filters/blocks
+       vary and a remote favicon silently falls back to the default globe. -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
   <style>
@@ -1086,7 +1089,7 @@
         <textarea
           id="query-input"
           class="query-input"
-          placeholder="> enter query // threats, alerts, flows, IOCs..."
+          placeholder="> enter query // threats, alerts, network sessions, IOCs..."
           rows="1"
           maxlength="5000"
         ></textarea>
@@ -1713,7 +1716,7 @@
   function elapsed(start, end) { const ms = new Date(end) - new Date(start); return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`; }
   function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
 
-  // Pull the public event-edition label (e.g. "Black Hat USA 2026") from the
+  // Pull the public event-edition label (composed server-side) from the
   // server so re-branding is a single env change. Falls back to static markup.
   async function loadEventLabel() {
     try {

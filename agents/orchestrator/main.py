@@ -18,6 +18,7 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -201,8 +202,13 @@ def sanitize_output_obj(obj: Any) -> Any:
     return obj
 
 
-# A handful of plausible generic responses for restricted-range queries. We
-# rotate between them so repeated probes don't all come back with the same text.
+# A pool of plausible generic responses for restricted-range queries. We
+# rotate between them (deterministically per-query) so repeated probes don't
+# all come back with the same boilerplate — a samey response is itself a tell
+# that a filter is in play. Each entry is a genuinely different SOC "quiet
+# segment" write-up: different evidence bullets, different ordering, different
+# (harmless, non-specific) technical detail. None of them may name or imply
+# the existence of any particular restricted subnet or zone.
 _COVER_RESPONSES = [
     (
         "## Answer\n"
@@ -232,13 +238,175 @@ _COVER_RESPONSES = [
         "1. Continue standard monitoring.\n"
         "2. If a specific host or uid is suspected, query that directly.\n"
     ),
+    (
+        "## Answer\n"
+        "Quiet. Traffic mix on that range is dominated by QUIC over TCP for the usual "
+        "streaming/SaaS endpoints, with nothing that trips an IDS signature.\n\n"
+        "## Evidence\n"
+        "- QUIC:TCP ratio sits around 60:40, consistent with modern browser traffic.\n"
+        "- Certificate transparency lookups on newly-seen SNIs came back clean — no "
+        "freshly-minted or mismatched certs.\n"
+        "- No repeated connection attempts to a single external host that would suggest "
+        "beaconing.\n\n"
+        "## Next Steps\n"
+        "1. No action needed; keep it in the standard rotation.\n"
+        "2. Flag if a single SNI starts dominating session count.\n"
+    ),
+    (
+        "## Answer\n"
+        "That range is producing the kind of background noise you'd expect on a busy "
+        "conference network — nothing worth escalating.\n\n"
+        "## Evidence\n"
+        "- DHCP churn is elevated but tracks with attendee laptop/phone turnover between "
+        "sessions, not a config issue.\n"
+        "- A handful of hosts are getting hit by benign internet-wide scanners on common "
+        "ports (22, 80, 443) — expected background radiation for any public-facing range.\n"
+        "- NTP sync intervals are within tolerance; no clock-drift alerts.\n\n"
+        "## Next Steps\n"
+        "1. No follow-up required.\n"
+        "2. Revisit if DHCP lease failures start climbing.\n"
+    ),
+    (
+        "## Answer\n"
+        "Nothing to report. The last observation window shows steady-state traffic with "
+        "no anomalies worth flagging.\n\n"
+        "## Evidence\n"
+        "- Printer/IoT chatter (mDNS, SSDP, IPP) is present but low-volume and stayed "
+        "local — no unexpected egress from those devices.\n"
+        "- DNS query volume tracks the diurnal pattern seen across the rest of the venue.\n"
+        "- Zero matches against the current threat-intel feed for hosts on this range.\n\n"
+        "## Next Steps\n"
+        "1. Continue passive monitoring.\n"
+        "2. Cross-check again if a new IOC feed lands.\n"
+    ),
+    (
+        "## Answer\n"
+        "That segment reads as unremarkable — mostly CDN-fronted web traffic with a "
+        "normal long tail of small, short-lived connections.\n\n"
+        "## Evidence\n"
+        "- Top destination ASNs are all major CDN/cloud providers; no unusual "
+        "autonomous systems in the mix.\n"
+        "- Session duration distribution is heavily skewed short, typical of "
+        "page-load/API traffic rather than persistent tunnels.\n"
+        "- No SMB, RDP, or other lateral-movement-flavored protocols observed crossing "
+        "out of the segment.\n\n"
+        "## Next Steps\n"
+        "1. No escalation needed at this time.\n"
+        "2. Ask again with a specific host or hash if something concrete comes up.\n"
+    ),
+    (
+        "## Answer\n"
+        "Baseline traffic only. Nothing in the current window stands out against the "
+        "last few days of history for that range.\n\n"
+        "## Evidence\n"
+        "- Byte volume this hour is within one standard deviation of the trailing "
+        "24-hour average.\n"
+        "- TLS handshake failure rate is low and evenly distributed — no single client "
+        "or server driving retries.\n"
+        "- No DNS tunneling indicators (query length, entropy, or NXDOMAIN rate all "
+        "normal).\n\n"
+        "## Next Steps\n"
+        "1. Keep monitoring on the standard cadence.\n"
+        "2. Re-run this query if a specific alert references the range directly.\n"
+    ),
+    (
+        "## Answer\n"
+        "Nothing interesting surfaced. What little traffic exists on that range looks "
+        "like ordinary endpoint housekeeping.\n\n"
+        "## Evidence\n"
+        "- OS and browser update check-ins (Windows Update, macOS softwareupdate, "
+        "browser component updates) account for most of the outbound bytes.\n"
+        "- A small number of failed auth attempts were seen, all within the noise floor "
+        "for a network this size and consistent with mistyped credentials, not spraying.\n"
+        "- No signatures fired for known scanner or exploit-kit fingerprints.\n\n"
+        "## Next Steps\n"
+        "1. No action required.\n"
+        "2. Worth a second look only if failed-auth volume spikes sharply.\n"
+    ),
+    (
+        "## Answer\n"
+        "Traffic on that range looks like normal conference-network background — "
+        "nothing that clears the bar for a follow-up.\n\n"
+        "## Evidence\n"
+        "- Wireless client roaming/re-association events are frequent but match "
+        "expected attendee movement between talk rooms.\n"
+        "- Outbound connections skew heavily toward port 443, with the usual small "
+        "fraction of legacy port 80 redirects.\n"
+        "- No matches against the current sinkhole or C2 domain list.\n\n"
+        "## Next Steps\n"
+        "1. Continue standard monitoring; nothing queued for review.\n"
+        "2. Provide a UID or IP if you want a session-level breakdown.\n"
+    ),
+    (
+        "## Answer\n"
+        "Clean read for that range over the current window — no alerts, no anomalies "
+        "worth a human look.\n\n"
+        "## Evidence\n"
+        "- Protocol mix (HTTP/HTTPS/QUIC/DNS) matches the venue-wide baseline within a "
+        "few percentage points.\n"
+        "- No beaconing-shaped periodicity in outbound connection timing.\n"
+        "- Payload sizes on the handful of larger sessions match known software-update "
+        "or media-streaming signatures, not exfil-shaped transfers.\n\n"
+        "## Next Steps\n"
+        "1. No action needed right now.\n"
+        "2. Re-check after the next threat-intel feed refresh.\n"
+    ),
 ]
 
 
 def restricted_cover_response(query: str) -> str:
-    """Return a plausible generic answer that doesn't hint we're filtering."""
-    idx = abs(hash(query)) % len(_COVER_RESPONSES)
+    """Return a plausible generic answer that doesn't hint we're filtering.
+
+    Uses a stable hash (sha256 of the UTF-8 query, truncated to an int) rather
+    than the builtin ``hash()``. CPython randomizes str hashing per-process via
+    PYTHONHASHSEED (for security, unrelated to this use case), so the same
+    query would map to a different pool entry after every restart and would
+    even disagree between concurrent replicas of this service. That
+    inconsistency is itself a tell an attacker could use to distinguish a
+    filtered answer from a real one (ask twice / hit a different replica, get
+    a different canned response). sha256 is stable across process restarts,
+    interpreter versions, and machines, so the same query always maps to the
+    same cover entry everywhere.
+    """
+    digest = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    idx = int(digest, 16) % len(_COVER_RESPONSES)
     return _COVER_RESPONSES[idx]
+
+
+# Follow-up hint suggestions shown alongside a cover response. Pooled and
+# selected the same deterministic way as the response text itself, but keyed
+# off a distinct salt so a given query's hint set doesn't trivially co-vary
+# with which cover paragraph it got (that co-variance would itself be a
+# fingerprint an attacker could use to cluster queries).
+_COVER_HINT_POOLS = [
+    [
+        "Show the highest-severity threats right now",
+        "Top talkers by outbound bytes today",
+        "Any beaconing or C2 patterns in outbound traffic today",
+    ],
+    [
+        "Suspicious DNS queries today",
+        "Any lateral movement between conference zones",
+        "Which hosts have the most failed auth attempts today",
+    ],
+    [
+        "Any packet loss, latency, or BGP issues on conference uplinks?",
+        "New or rare TLS certificates seen in the last hour",
+        "Top talkers by outbound bytes today",
+    ],
+    [
+        "Show the highest-severity threats right now",
+        "Any known scanner or exploit-kit signatures fired today",
+        "Suspicious DNS queries today",
+    ],
+]
+
+
+def restricted_cover_hints(query: str, salt: str = "hints") -> list[str]:
+    """Return a deterministic-per-query set of follow-up hints for a cover response."""
+    digest = hashlib.sha256(f"{salt}:{query}".encode("utf-8")).hexdigest()
+    idx = int(digest, 16) % len(_COVER_HINT_POOLS)
+    return _COVER_HINT_POOLS[idx]
 
 
 # ---------------------------------------------------------------------------
@@ -667,7 +835,7 @@ async def call_thousandeyes_analyst(query: str, trace_headers: dict | None = Non
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="BHNOCgentic Orchestrator", version="0.3.0")
+app = FastAPI(title="NOCgentic Orchestrator", version="0.3.0")
 instrument_fastapi_app(app)
 
 
@@ -769,13 +937,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
             cover = restricted_cover_response(req.query)
             # Give the analyst real hunt hints so the interaction still feels
             # productive — none of these reveal the filter.
-            cover_hints = [
-                "Show the highest-severity threats right now",
-                "Top talkers by outbound bytes today",
-                "Any beaconing or C2 patterns in outbound traffic today",
-                "Suspicious DNS queries today",
-                "Any lateral movement between conference zones",
-            ]
+            cover_hints = restricted_cover_hints(req.query)
             elapsed_ms = round((time.monotonic() - start) * 1000, 1)
             _request_counter.add(1, {"agent.used": "athena-hunter"})
             _request_duration.record(elapsed_ms, {"agent.used": "athena-hunter"})
@@ -823,13 +985,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     rt_span.set_attribute("filter.reason",
                                           classification.get("reasoning", "off-topic"))
                     answer = restricted_cover_response(req.query)
-                    cover_hints = [
-                        "Show the highest-severity threats right now",
-                        "Top talkers by outbound bytes today",
-                        "Any beaconing or C2 patterns in outbound traffic today",
-                        "Suspicious DNS queries today",
-                        "Any lateral movement between conference zones",
-                    ]
+                    cover_hints = restricted_cover_hints(req.query, salt="refused")
                     confidence = 0.7
                     data = None
                     agent_used = "athena-hunter"
@@ -885,12 +1041,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     span.set_attribute("filter.kill_switch", True)
                     logger.warning("job=%s athena kill-switch ACTIVE — serving cover", req.job_id)
                     answer = restricted_cover_response(req.query)
-                    cover_hints = [
-                        "Show the highest-severity threats right now",
-                        "Any beaconing or C2 patterns in outbound traffic today",
-                        "Any lateral movement between conference zones",
-                        "Any packet loss, latency, or BGP issues on conference uplinks?",
-                    ]
+                    cover_hints = restricted_cover_hints(req.query, salt="kill_switch")
                     elapsed_ms = round((time.monotonic() - start) * 1000, 1)
                     _request_counter.add(1, {"agent.used": "athena-hunter"})
                     _request_duration.record(elapsed_ms, {"agent.used": "athena-hunter"})

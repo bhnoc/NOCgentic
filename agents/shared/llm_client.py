@@ -9,7 +9,7 @@ configured in telemetry.py — no manual span creation needed here.
 
 Spans include openinference.span.kind=LLM, llm.model_name, llm.token_count.*,
 and input.value/output.value. (This replaced the LangSmith OTEL bridge, which
-emitted no LLM spans in practice — see MANIFOLD_INTEGRATION.md §3.)
+emitted no LLM spans in practice — see docs/MANIFOLD_INTEGRATION.md §3.)
 
 Usage:
     from llm_client import llm_complete
@@ -163,7 +163,7 @@ OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku"
 # servers (llama.cpp ignores it, Ollama accepts anything). Set LOCAL_LLM_MODEL to
 # the served model name (e.g. the GGUF alias for llama.cpp, or "qwen3:8b" for Ollama).
 # Default model name is AQLight (the fine-tuned Qwen2.5-Coder-7B NL->SQL model served
-# on the AING box via llama.cpp; see docs/llm/AQLight-integration.md). AQLight is a SQL
+# on the GPU box via llama.cpp; see docs/llm/AQLight-integration.md). AQLight is a SQL
 # SPECIALIST, great for athena-hunter's NL->SQL, but it does not do routing/classify,
 # answer synthesis, or triage prose, so LLM_PROVIDER=local across ALL agents is not a
 # drop-in for Gemini. Point only the SQL path at it, or run a general local model too.
@@ -237,7 +237,7 @@ def _get_openrouter_model(
         temperature=temperature,
         timeout=90,
         default_headers={
-            "HTTP-Referer": "https://bhasia2026.noc",
+            "HTTP-Referer": "https://nocgentic.noc",
             "X-Title": "BH Asia NOC Agent",
         },
     )
