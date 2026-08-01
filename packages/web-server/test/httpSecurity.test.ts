@@ -60,3 +60,23 @@ describe('CSP / security headers (sweep-4 web-10)', () => {
     expect(SECURITY_HEADERS['Referrer-Policy']).toBe('no-referrer');
   });
 });
+
+// uuid v14 is ESM-only ("type": "module"). This package compiles to CommonJS, so it
+// is loaded via require(), which Node only supports for ESM from 20.19.0 / 22.12.0.
+// The container is node:20-slim, currently 20.20.2, so it works. But a base-image
+// downgrade would break session-cookie and jobId minting at RUNTIME with
+// ERR_REQUIRE_ESM, and typecheck would not catch it (the WebSocket v11 change
+// already proved tsc is not a runtime guarantee here).
+describe('uuid v14 ESM interop under CommonJS', () => {
+  it('is requirable from CommonJS on this Node', () => {
+    const { v4 } = require('uuid');
+    expect(typeof v4).toBe('function');
+    expect(v4()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it('runs on a Node new enough for require(esm)', () => {
+    const [maj, min] = process.versions.node.split('.').map(Number);
+    const ok = maj > 20 || (maj === 20 && min >= 19);
+    expect(ok).toBe(true);
+  });
+});
