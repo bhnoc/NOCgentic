@@ -191,8 +191,14 @@ SQL_GEN_PROMPT = (
     "came from; join back to that table on uid for its specific columns.\n"
     "- fuid_lookup: fuid, log_type, ts, ts_datetime, orig_h, resp_h, orig_network_name, "
     "filename, mime_type, sha256, md5, dt (FAST file index across every fuid-bearing log)\n"
-    "- dhcp: uid, mac, host_name, client_addr, assigned_addr, requested_addr, server_addr, "
-    "id_orig_h, id_resp_h (DHCP leases; host_name is the device's self-reported name)\n"
+    # Verified against the live schema 2026-08-01. This line previously claimed
+    # `uid`, `id_orig_h` and `id_resp_h`, none of which exist on dhcp: the uid
+    # column is `uids` (PLURAL, an array-ish string) and there are no id_ columns
+    # at all. Any query the model wrote from the old line failed COLUMN_NOT_FOUND.
+    "- dhcp: uids (PLURAL, not uid), mac, host_name, client_fqdn, domain, "
+    "client_addr, assigned_addr, requested_addr, server_addr, lease_time, msg_types "
+    "(DHCP leases. NO id_orig_h / id_resp_h on this table: the host is "
+    "`client_addr` or `assigned_addr`. host_name is the device's self-reported name.)\n"
     "- asset_classification: ip, mac, vendor_mac, hostname, os_name, device_type, "
     "user_agent, org_name, mgmt_tooling, randomized_mac, connections, mb_in, mb_out, "
     "first_seen, last_seen, network_name, room_name, confidence, dt (device inventory, "
@@ -252,10 +258,14 @@ SQL_GEN_PROMPT = (
     "- ntlm: uid, id_orig_h, id_resp_h, username, hostname, domainname, "
     "server_dns_computer_name, success (NTLM AUTH: `username` and `domainname` are "
     "the account being used. Use for NTLM relay, spray, and legacy-auth findings.)\n"
-    "- net_perf: uid, `window`, trigger, host, domain, local_entity, total, crossings, "
-    "max_val, sent_bytes, recv_bytes, reply_rate (network performance samples. NOTE "
-    "`window` is a RESERVED WORD: it MUST be backtick-quoted in any query, e.g. "
-    "SELECT `window` FROM net_perf.)\n"
+    # Verified against Athena: DDL takes backticks, but the SELECT engine (Trino)
+    # rejects them and wants DOUBLE QUOTES. Getting this wrong is not a soft
+    # failure: a backticked SELECT is refused before it even runs.
+    "- net_perf: uid, \"window\", trigger, host, domain, local_entity, total, crossings, "
+    "max_val, sent_bytes, recv_bytes, reply_rate (network performance samples. "
+    "WARNING: `window` is a RESERVED WORD. In a SELECT you MUST wrap it in DOUBLE "
+    "QUOTES, not backticks: SELECT \"window\" FROM net_perf. A backticked SELECT is "
+    "rejected outright.)\n"
     "- All tables have: ts (epoch bigint), ts_datetime (varchar), dt (varchar YYYY-MM-DD)\n\n"
     "TYPES & ENUMS:\n"
     "- alerts.severity is VARCHAR: 'critical','high','medium','low','informational'. "

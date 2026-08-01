@@ -319,3 +319,39 @@ class TestAlertTriageEnrichesByHost:
         src = open(path).read()
         assert 'triage_data["host_identity"]' in src
         assert "instead of raw IPs" in src
+
+
+class TestDocumentedColumnsMatchTheRealSchema:
+    """The prompt IS the model's schema reference. A column named here that does not
+    exist produces SQL that fails COLUMN_NOT_FOUND, and the swallowed-error path
+    then shows the analyst "no results" rather than an error.
+
+    Found by validating the prompt against the live catalog: the dhcp line had
+    claimed `uid`, `id_orig_h` and `id_resp_h` for a long time. None exist. The uid
+    column is `uids` (plural) and dhcp has no id_ columns at all."""
+
+    def _prompt(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "..",
+                            "agents", "athena-hunter", "main.py")
+        return open(path).read()
+
+    def test_dhcp_uses_the_plural_uids(self):
+        src = self._prompt()
+        assert "uids (PLURAL, not uid)" in src
+
+    def test_dhcp_does_not_claim_id_prefixed_columns(self):
+        """dhcp is neither a raw-Zeek-prefix table nor a derived one; its host is
+        client_addr / assigned_addr."""
+        src = self._prompt()
+        dhcp_line = src[src.index('"- dhcp:'):src.index('"- dhcp:') + 600]
+        assert "id_orig_h /" in dhcp_line or "NO id_orig_h" in dhcp_line, (
+            "the dhcp entry must state that id_orig_h does not exist"
+        )
+
+    def test_reserved_column_guidance_says_double_quotes_not_backticks(self):
+        """Verified against Athena: DDL accepts backticks but the SELECT engine
+        rejects them outright. A backticked SELECT never even runs, so the wrong
+        guidance here fails 100% of the time."""
+        src = self._prompt()
+        assert "DOUBLE" in src and "not backticks" in src
+        assert 'SELECT \\"window\\" FROM net_perf' in src
