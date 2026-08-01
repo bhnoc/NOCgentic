@@ -38,6 +38,7 @@ if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
 import ipscope  # noqa: E402
+import credscrub  # noqa: E402
 from llm_client import llm_complete  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
@@ -78,9 +79,6 @@ MAX_QUERY_LEN = 5000
 # Security: sanitize before sending to LLM
 # ---------------------------------------------------------------------------
 
-_RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
-_RE_PASSWORD     = re.compile(r"(?i)password\s*[:=]\s*\S+")
-_RE_API_KEY      = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
 
 
 def sanitize(text: str) -> str:
@@ -89,9 +87,10 @@ def sanitize(text: str) -> str:
     # internal-IP regex, which shared one octet suffix across its private
     # branches and leaked the final octet of any 10/8 address.
     text = ipscope.redact_text(text)
-    text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
-    text = _RE_PASSWORD.sub("password: [REDACTED]", text)
-    text = _RE_API_KEY.sub("api_key: [REDACTED]", text)
+    # Credentials via the shared scrubber: the old local pattern also ate
+    # entirely-hex tokens, destroying MD5/SHA-1/SHA-256 file hashes that are
+    # legitimate IOCs an analyst needs to see.
+    text = credscrub.scrub_secrets(text)
     return text[:8000]  # hard cap
 
 
@@ -169,10 +168,16 @@ def _mask_ip(match: re.Match) -> str:
 
 
 def sanitize_output_text(text: str) -> str:
-    """Mask restricted IPs, zone names, and specific service references
-    in any string intended for the UI."""
+    """Mask credentials, out-of-scope IPs, zone names, and service references in
+    any string intended for the UI."""
     if not text:
         return text
+    # Credentials FIRST: this is the browser-facing boundary. Agent errors and
+    # exception text land here verbatim, and an upstream failure can quote a
+    # request header or env value containing a key. The LLM-input sanitize()
+    # already did this; skipping it here meant a credential in an error message
+    # reached the user intact.
+    text = credscrub.scrub_secrets(text)
     # Decoy rewrite disabled — superseded by the ipscope allowlist (see above).
     # text = _RESTRICTED_IP_RE.sub(_mask_ip, text)
     text = ipscope.redact_text(text)

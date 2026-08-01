@@ -31,11 +31,14 @@ SUSPICIOUS_IPS = [
     "62.102.148.68", "194.26.29.102", "5.2.69.50",
 ]
 
+# Must stay inside the conference ranges in agents/shared/ipscope.py, or the
+# scope allowlist redacts every seeded host to [OUT-OF-SCOPE-IP] and the demo
+# looks broken. tests/python/test_ipscope.py asserts these are in scope.
 INTERNAL_IPS = [
-    "10.0.1.10", "10.0.1.25", "10.0.1.50",
-    "10.0.2.10", "10.0.2.30", "10.0.2.100",
-    "172.16.0.5", "172.16.0.20",
-    "192.168.1.100",
+    "10.220.31.10", "10.220.31.25", "10.220.31.50",
+    "10.220.40.10", "10.220.40.30", "10.220.40.100",
+    "10.220.55.5", "10.220.55.20",
+    "192.168.130.100",
 ]
 
 C2_DOMAINS = [

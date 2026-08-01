@@ -1253,12 +1253,12 @@
   function injectDemoAlerts() {
     const now = Date.now();
     renderAlerts([
-      { id:'d1', severity:'critical', source:'paloalto', description:'C2 beacon detected -- high frequency TCP/4444', srcIp:'172.16.4.88', dstPort:4444, timestamp:new Date(now-12000).toISOString() },
+      { id:'d1', severity:'critical', source:'paloalto', description:'C2 beacon detected -- high frequency TCP/4444', srcIp:'10.220.44.88', dstPort:4444, timestamp:new Date(now-12000).toISOString() },
       { id:'d2', severity:'high', source:'corelight', description:'Port scan -- 1,247 SYN packets in 10s', srcIp:'45.83.193.150', timestamp:new Date(now-45000).toISOString() },
-      { id:'d3', severity:'high', source:'paloalto', description:'Outbound DENY -- blocked TOR exit node connection', srcIp:'10.0.2.15', dstPort:9001, timestamp:new Date(now-90000).toISOString() },
-      { id:'d4', severity:'medium', source:'corelight', description:'DNS tunneling suspected -- 63-char subdomain', srcIp:'10.0.1.22', timestamp:new Date(now-130000).toISOString() },
+      { id:'d3', severity:'high', source:'paloalto', description:'Outbound DENY -- blocked TOR exit node connection', srcIp:'10.220.42.15', dstPort:9001, timestamp:new Date(now-90000).toISOString() },
+      { id:'d4', severity:'medium', source:'corelight', description:'DNS tunneling suspected -- 63-char subdomain', srcIp:'10.220.41.22', timestamp:new Date(now-130000).toISOString() },
       { id:'d5', severity:'medium', source:'partner', description:'Threat intel match -- IP on Emerging Threats blocklist', srcIp:'185.220.101.45', timestamp:new Date(now-200000).toISOString() },
-      { id:'d6', severity:'low', source:'corelight', description:'Unusual protocol -- SSH on TCP/8022', srcIp:'192.168.5.14', dstPort:8022, timestamp:new Date(now-310000).toISOString() },
+      { id:'d6', severity:'low', source:'corelight', description:'Unusual protocol -- SSH on TCP/8022', srcIp:'10.220.65.14', dstPort:8022, timestamp:new Date(now-310000).toISOString() },
     ]);
   }
 

@@ -32,6 +32,7 @@ if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
 import ipscope  # noqa: E402
+import credscrub  # noqa: E402
 from llm_client import (  # noqa: E402
     llm_complete, get_last_llm_metrics,
     SQLGEN_PROVIDER, SQLGEN_MODEL, LLM_PROVIDER,
@@ -88,9 +89,6 @@ logger = logging.getLogger("athena-hunter")
 # Security helpers
 # ---------------------------------------------------------------------------
 
-_RE_SECRET_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{40,}\b")
-_RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
-_RE_API_KEY_PAT = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
 
 _RE_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _RE_DOMAIN = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
@@ -104,9 +102,10 @@ def sanitize(text: str) -> str:
     # internal-IP regex, which shared one octet suffix across its private
     # branches and leaked the final octet of any 10/8 address.
     text = ipscope.redact_text(text)
-    text = _RE_SECRET_TOKEN.sub("[REDACTED-SECRET]", text)
-    text = _RE_PASSWORD.sub("password: [REDACTED]", text)
-    text = _RE_API_KEY_PAT.sub("api_key: [REDACTED]", text)
+    # Credentials via the shared scrubber: the old local pattern also ate
+    # entirely-hex tokens, destroying MD5/SHA-1/SHA-256 file hashes that are
+    # legitimate IOCs an analyst needs to see.
+    text = credscrub.scrub_secrets(text)
     return text[:8000]
 
 
@@ -975,7 +974,7 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
     # The alert feed reaches the browser via web-server's alertCache, which does
     # NOT pass through the orchestrator's output sanitizer — so scope-redact here
     # or out-of-scope addresses ship straight to the UI.
-    description = ipscope.redact_text(description)
+    description = credscrub.scrub_secrets(ipscope.redact_text(description))
     if orig_h and not ipscope.is_in_scope(orig_h):
         orig_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
     if resp_h and not ipscope.is_in_scope(resp_h):

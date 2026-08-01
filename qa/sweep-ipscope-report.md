@@ -101,3 +101,36 @@ the SQL gates go 5 red, the alert-id gate 2 red.
 One gate was rewritten during the sweep. The first version of `test_alert_id_identity.py`
 reimplemented the id logic instead of importing it, so it passed against the buggy code too.
 It now loads the real module by path.
+
+## Follow-up (2026-07-31, same day)
+
+Two of the deferred items were resolved after the NOC lead's decision.
+
+**Manifold telemetry stays unredacted by design.** The `query.text` / `response.text` /
+`classification.reasoning` span attributes reaching the OTLP endpoint and S3 trace archive
+in full is intended: those are the internal investigation record, not user-facing output.
+Not a finding. Do not "fix" this in a later sweep. Credentials are still scrubbed on that
+path via `telemetry.py`'s own patterns, which are already hash-aware.
+
+**Credentials no longer reach the browser.** Added `agents/shared/credscrub.py` as the
+single credential scrubber and wired it into both browser-facing egress points:
+`sanitize_output_text()` in the orchestrator, and `_athena_row_to_alert()` in athena-hunter
+(the alert feed bypasses the orchestrator entirely). The four agents' `sanitize()` now call
+it too, which fixed a latent defect: their local `_RE_SECRET_TOKEN` matched any 40+
+base64-ish run including entirely-hex tokens, so it destroyed MD5/SHA-1/SHA-256 file
+hashes, exactly the IOCs an analyst needs. The shared pattern carves out all-hex tokens.
+
+**Demo data rebased onto conference ranges.** `scripts/seed-s3.py` `INTERNAL_IPS` and the
+four out-of-scope UI demo alerts now use in-scope 10.220.x addresses. `randomIp()` in the
+demo ticker was left alone: it generates public addresses that play the external attackers,
+and those are shown by design.
+
+Gates: `tests/python/test_credscrub.py` (16 checks, including that hashes survive) and
+`tests/python/test_demo_data_in_scope.py` (3 checks). Both confirmed to fail against the
+pre-fix state.
+
+Two footguns worth remembering. The module was first named `secretscrub.py`, which
+`.gitignore`'s `*secret*` credential-safety rule silently swallowed — the file existed,
+tests passed locally, and `git status` showed nothing. Renamed to `credscrub.py`; do not
+weaken that ignore rule. And the first pass added the import to only two of the four
+agents; the local suite caught it, but only because the tests import the real modules.
