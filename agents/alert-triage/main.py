@@ -21,6 +21,7 @@ Security: All data sent to the LLM is sanitized; internal IPs are redacted.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -156,6 +157,24 @@ def extract_query_hints(query: str) -> dict[str, Any]:
 # Athena query helpers
 # ---------------------------------------------------------------------------
 
+# Per-request record of Athena queries that failed. A ContextVar rather than a
+# module global because triage fans out ~11 queries concurrently and the service
+# handles overlapping requests: a global would attribute one request's failures to
+# another.
+_QUERY_FAILURES: contextvars.ContextVar[list[dict[str, str]]] = contextvars.ContextVar(
+    "athena_query_failures", default=[]
+)
+
+
+def reset_query_failures() -> None:
+    """Start a fresh failure list for this request."""
+    _QUERY_FAILURES.set([])
+
+
+def get_query_failures() -> list[dict[str, str]]:
+    return list(_QUERY_FAILURES.get())
+
+
 async def _athena_query(sql: str, label: str = "query") -> list[dict[str, str]]:
     """Execute an Athena query, log timing, return rows."""
     tracer = get_tracer()
@@ -180,6 +199,11 @@ async def _athena_query(sql: str, label: str = "query") -> list[dict[str, str]]:
         except Exception as exc:
             qspan.set_attribute("error", str(exc))
             logger.warning("athena[%s] failed: %s", label, exc)
+            # Record the failure. Returning a bare [] made a timeout, a missing
+            # table, or a scope rejection indistinguishable from "this segment is
+            # quiet", so the LLM reported a clean bill of health on data it never
+            # saw. In a SOC that is a false all-clear, which is worse than an error.
+            _QUERY_FAILURES.get().append({"query": label, "error": str(exc)[:200]})
             return []
 
 
@@ -753,6 +777,9 @@ class TriageResponse(BaseModel):
 
 @app.post("/triage", response_model=TriageResponse)
 async def triage(req: TriageRequest) -> TriageResponse:
+    # Fresh failure list per request: a stale one would blame this request for a
+    # previous request's broken query.
+    reset_query_failures()
     tracer = get_tracer()
     with tracer.start_as_current_span("alert_triage.triage") as span:
         span.set_attribute("query.length", len(req.query))
@@ -1052,6 +1079,21 @@ async def triage(req: TriageRequest) -> TriageResponse:
             "prioritized_alerts": enriched_alerts[:15],
             "severity_breakdown": _severity_breakdown(enriched_alerts),
         }
+
+        # Failed queries go in FIRST-CLASS, not just a log line. Without this the
+        # LLM sees zero rows and concludes the network is quiet, which is a false
+        # all-clear when the truth is the query never ran.
+        _failures = get_query_failures()
+        if _failures:
+            triage_data["DATA_RETRIEVAL_FAILURES"] = {
+                "note": (
+                    "These queries FAILED. The absence of results below does NOT mean "
+                    "the network is clean for them. You MUST state plainly that this "
+                    "data could not be retrieved and that the report is incomplete. "
+                    "Do NOT describe the segment as quiet or clear."
+                ),
+                "failed_queries": _failures,
+            }
         if dns_logs:
             triage_data["dns_logs"] = dns_logs[:15]
         if session_context:

@@ -161,7 +161,23 @@ class TestSQLGeneration:
 
     def test_ctas_names_a_per_day_table(self):
         ddl = ac.build_ctas(DB, DATE, _catalog())
-        assert ddl.startswith(f"CREATE TABLE {DB}.asset_classification_2026_08_01 AS")
+        assert ddl.startswith(f"CREATE TABLE {DB}.asset_classification_2026_08_01")
+        assert "\nAS\n" in ddl
+
+    def test_ctas_omits_external_location_by_default(self):
+        """The show workgroup sets EnforceWorkGroupConfiguration, which rejects a
+        CTAS that names its own output path."""
+        assert "external_location" not in ac.build_ctas(DB, DATE, _catalog())
+
+    def test_ctas_can_pin_a_location_when_the_workgroup_allows_it(self):
+        ddl = ac.build_ctas(DB, DATE, _catalog(), "s3://bucket/prefix/")
+        assert "external_location = 's3://bucket/prefix/'" in ddl
+
+    def test_table_name_helper_matches_the_ctas_target(self):
+        """The Lambda uses table_name() to find and drop the previous build, so a
+        mismatch would silently orphan tables."""
+        assert ac.table_name(DATE) == "asset_classification_2026_08_01"
+        assert ac.table_name(DATE) in ac.build_ctas(DB, DATE, _catalog())
 
     def test_ctas_is_none_when_unsatisfiable(self):
         assert ac.build_ctas(DB, DATE, {}) is None

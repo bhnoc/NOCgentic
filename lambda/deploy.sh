@@ -31,9 +31,12 @@ done
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Only the two modules. No dependencies: boto3 is in the Lambda runtime, and
-# vendoring it would bloat the artifact and pin a version the runtime overrides.
-cp "$HERE/athena_refresh_lambda_v6.py" "$HERE/derived_views.py" "$WORK/"
+# Every .py in this directory. Globbing rather than naming files: the first version
+# listed two modules explicitly, then asset_classification.py was added and the
+# deploy silently shipped without it, so the Lambda died on import. No dependencies
+# vendored: boto3 is in the runtime, and bundling it pins a version the runtime
+# overrides anyway.
+cp "$HERE"/*.py "$WORK/"
 
 # Fail before upload rather than after: a syntax error here means the hourly
 # refresh dies and the alert feed silently goes stale.

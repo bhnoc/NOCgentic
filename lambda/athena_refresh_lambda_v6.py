@@ -14,6 +14,7 @@ Event shapes
 """
 import boto3
 
+import asset_classification
 import derived_views
 import json
 import os
@@ -355,6 +356,91 @@ def rebuild_derived_views():
     return {'rebuilt': rebuilt, 'failed': failed}
 
 
+def rebuild_asset_classification(date_str):
+    """Materialize asset_classification for one partition.
+
+    A CTAS rather than a view: the inference is several joins plus window functions
+    over conn/http/ssl, so evaluating it per query would be slow and expensive.
+    Dropping and recreating is idempotent, which matters because this runs hourly
+    and the day's data keeps growing.
+    """
+    catalog = _catalog_columns()
+    table = asset_classification.table_name(date_str)
+    # No external_location: this workgroup sets EnforceWorkGroupConfiguration, so
+    # Athena rejects a CTAS that names its own output path. It therefore picks a
+    # random UUID prefix under the workgroup's location, and DROP TABLE removes only
+    # the catalog entry, leaving the data behind. So read the location OFF the
+    # existing table first and delete that, rather than guessing where it lives.
+    ddl = asset_classification.build_ctas(GLUE_DATABASE, date_str, catalog)
+    if not ddl:
+        print("asset_classification: source tables absent, skipped")
+        return {'built': False, 'reason': 'sources_absent'}
+
+    stale_location = None
+    try:
+        existing = glue.get_table(DatabaseName=GLUE_DATABASE, Name=table)['Table']
+        stale_location = existing.get('StorageDescriptor', {}).get('Location')
+    except glue.exceptions.EntityNotFoundException:
+        pass
+
+    _, drop_state, drop_reason = run_athena_query(
+        f"DROP TABLE IF EXISTS {GLUE_DATABASE}.{table}", timeout=120, retries=1)
+    if drop_state != 'SUCCEEDED':
+        # Do NOT proceed to the CTAS: it would fail TABLE_ALREADY_EXISTS with a
+        # message pointing at the table rather than the real cause. This exact
+        # ignored return value hid a missing glue:DeleteTable grant for hours: the
+        # first run worked (nothing to drop) and every run after failed with a
+        # misleading error. Surface the DROP's own reason instead.
+        print(f"  DROP {table} FAILED: {(drop_reason or '')[:300]}")
+        return {'built': False, 'reason': f"drop_failed: {(drop_reason or '')[:200]}"}
+    print(f"  DROP {table}: SUCCEEDED")
+
+    # Belt and braces after a SUCCEEDED drop: Glue is eventually consistent, so poll
+    # until the table is actually gone rather than sleeping a guessed interval. The
+    # real cause of the original "not visible" was a failed DROP, now caught above.
+    for attempt in range(20):
+        try:
+            glue.get_table(DatabaseName=GLUE_DATABASE, Name=table)
+        except glue.exceptions.EntityNotFoundException:
+            break
+        time.sleep(1.5)
+    else:
+        try:
+            surviving = glue.get_table(DatabaseName=GLUE_DATABASE, Name=table)['Table']
+            print(f"  {table} STILL PRESENT after DROP: type={surviving.get('TableType')} "
+                  f"loc={surviving.get('StorageDescriptor',{}).get('Location')} "
+                  f"created={surviving.get('CreateTime')}")
+        except Exception as exc:
+            print(f"  paradox: poll said present but get_table now says {type(exc).__name__}")
+        return {'built': False, 'reason': 'drop_not_visible'}
+
+    if stale_location and stale_location.startswith('s3://'):
+        bucket, _, prefix = stale_location[5:].partition('/')
+        deleted = 0
+        for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix):
+            keys = [{'Key': o['Key']} for o in page.get('Contents', [])]
+            if keys:
+                s3.delete_objects(Bucket=bucket, Delete={'Objects': keys})
+                deleted += len(keys)
+        print(f"  cleared {deleted} objects from the previous build at {prefix}")
+
+    _, state, reason = run_athena_query(ddl, timeout=600, retries=1)
+    if state != 'SUCCEEDED':
+        print(f"  asset_classification FAILED: {(reason or '')[:200]}")
+        return {'built': False, 'reason': (reason or '')[:200]}
+
+    # Point the stable `asset_classification` name at the newest partition so the
+    # agents query one name instead of guessing the date suffix.
+    view = (f"CREATE OR REPLACE VIEW {GLUE_DATABASE}.asset_classification AS "
+            f"SELECT * FROM {GLUE_DATABASE}.{table}")
+    _, v_state, v_reason = run_athena_query(view, timeout=120, retries=1)
+    if v_state != 'SUCCEEDED':
+        print(f"  asset_classification view FAILED: {(v_reason or '')[:200]}")
+        return {'built': True, 'view': False, 'reason': (v_reason or '')[:200]}
+    print(f"asset_classification rebuilt -> {table}")
+    return {'built': True, 'view': True, 'table': table}
+
+
 def dispatch_for_date(date_str):
     log_types = get_log_types_in_s3(date_str)
     if not log_types:
@@ -386,6 +472,7 @@ def dispatch_for_date(date_str):
     # Rebuild AFTER table creation so a brand-new log type is already in the
     # catalog and gets picked up on the same run that created it.
     views = rebuild_derived_views()
+    assets = rebuild_asset_classification(date_str)
 
     result = {
         'date': date_str,
@@ -394,6 +481,7 @@ def dispatch_for_date(date_str):
         'table_create_failures': failed_create,
         'workers_dispatched': fanned,
         'derived_views': views,
+        'asset_classification': assets,
     }
     print(json.dumps(result))
     return result

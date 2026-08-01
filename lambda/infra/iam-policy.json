@@ -42,7 +42,10 @@
                 "glue:GetPartitions",
                 "glue:BatchGetPartition",
                 "glue:CreatePartition",
-                "glue:BatchCreatePartition"
+                "glue:BatchCreatePartition",
+                "glue:DeleteTable",
+                "glue:DeletePartition",
+                "glue:BatchDeletePartition"
             ],
             "Resource": "*"
         },

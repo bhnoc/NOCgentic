@@ -263,8 +263,46 @@ def build_uid_lookup_sql(database: str, tables: dict[str, set[str]]) -> str | No
     return _build_lookup_sql(database, tables, "uid")
 
 
+# File attributes worth carrying on fuid_lookup so "what was this file?" does not
+# need a join back to files. Sources disagree on the name (`files.filename` vs
+# `yara_corelight.file_name`), so each is a candidate list resolved per table.
+_FILE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("filename", ("filename", "file_name")),
+    ("mime_type", ("mime_type", "file_mime_type")),
+    ("sha256", ("sha256",)),
+    ("md5", ("md5",)),
+)
+
+
 def build_fuid_lookup_sql(database: str, tables: dict[str, set[str]]) -> str | None:
-    return _build_lookup_sql(database, tables, "fuid")
+    """Every table carrying a fuid, plus the file attributes where present.
+
+    The previous hand-made view covered only `files`; 6 tables carry a fuid here.
+    But dropping filename/mime_type/sha256 would regress the agent prompt, which
+    documents fuid_lookup as a file index, so they are projected with a per-source
+    name fallback and NULL where a source has none.
+    """
+    branches: list[str] = []
+    for name in sorted(tables):
+        if name in _LOOKUP_EXCLUDE:
+            continue
+        cols = tables[name]
+        if "fuid" not in cols or "dt" not in cols:
+            continue
+        select = ["  fuid AS fuid", f"  '{name}' AS log_type"]
+        select += [f"  {_col_or_null(cols, s)} AS {a}" for s, a in _LOOKUP_COLUMNS]
+        for alias, candidates in _FILE_COLUMNS:
+            actual = next((c for c in candidates if c in cols), None)
+            select.append(f"  {actual} AS {alias}" if actual
+                          else f"  CAST(NULL AS VARCHAR) AS {alias}")
+        select.append("  dt AS dt")
+        branches.append(
+            "SELECT\n" + ",\n".join(select)
+            + f"\nFROM {database}.{name}\nWHERE fuid IS NOT NULL"
+        )
+    if not branches:
+        return None
+    return "\nUNION ALL\n".join(branches)
 
 
 VIEW_BUILDERS = {

@@ -302,15 +302,28 @@ mgmt AS (
     return body
 
 
-def build_ctas(database: str, date_str: str, tables: dict[str, set]) -> str | None:
-    """CREATE TABLE AS for one partition, written under the classification prefix.
+def table_name(date_str: str) -> str:
+    return f"asset_classification_{date_str.replace('-', '_')}"
+
+
+def build_ctas(database: str, date_str: str, tables: dict[str, set],
+               s3_location: str | None = None) -> str | None:
+    """CREATE TABLE AS for one partition.
 
     A view will not do here: the inference is several joins and window functions
     over conn/http/ssl, so evaluating it per query would be slow and expensive.
     Materializing one partition per day keeps reads cheap.
+
+    `s3_location` must be given for a repeatable rebuild. Without it Athena picks a
+    random UUID path under the workgroup's output location, and `DROP TABLE` only
+    removes the catalog entry: the data stays behind, so the next CTAS fails with
+    TABLE_ALREADY_EXISTS pointing at an orphaned prefix nobody can find. Pinning a
+    deterministic path means the caller can delete exactly what it is about to
+    rewrite.
     """
     body = build_asset_classification_sql(database, date_str, tables)
     if not body:
         return None
-    table = f"{database}.asset_classification_{date_str.replace('-', '_')}"
-    return f"CREATE TABLE {table} AS\n{body}"
+    table = f"{database}.{table_name(date_str)}"
+    external = f"WITH (external_location = '{s3_location}')\n" if s3_location else ""
+    return f"CREATE TABLE {table}\n{external}AS\n{body}"
