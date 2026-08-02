@@ -21,6 +21,8 @@ here collapses to one row per host before anything is joined.
 
 from __future__ import annotations
 
+import tool_taxonomy
+
 # Alert-name prefixes that are informational telemetry, not detections. The live
 # feed already excludes these (agents/athena-hunter/main.py::alerts_recent), and
 # the counts here must agree with what the analyst sees in the sidebar. Without
@@ -73,6 +75,22 @@ _ORG_SNI: tuple[tuple[str, bool, str], ...] = (
     # The company is what FOLLOWS 'autodiscover.', so label 1 is never the tenant.
     ("autodiscover", True, "sni LIKE 'autodiscover.%'"),
 )
+
+def _dom(*domains: str) -> str:
+    """Match a registrable domain at a label boundary, never as a bare substring.
+
+    MEASURED TRAPS, all from one sweep of dt=2026-08-01: 'cros' matched
+    "Microsoft-CryptoAPI", 'cato' matched lcdn-locator.apple.com (950 IPs), 'eset'
+    matched sync.resetdigital.co (78) and bare 'okta' matched
+    okta-featureflag-edge.azureedge.net (13), which is Azure, not Okta.
+
+    tool_taxonomy._domain_pred is the same rule for the ai_tools/security_tools
+    tables; this stays because _ORG_SNI above predates it and uses the bare `sni`
+    column name rather than a caller-supplied expression.
+    """
+    return "(" + " OR ".join(
+        f"sni = '{d}' OR sni LIKE '%.{d}'" for d in domains
+    ) + ")"
 
 # The tenant is label 1 of the SNI in every family except autodiscover. Verified
 # against the real distinct shapes rather than assumed:
@@ -198,6 +216,81 @@ def _dominant(database: str, date_str: str, table: str, value_col: str,
 )"""
 
 
+def _fqdn_labels(database: str, date_str: str, alias: str, out_col: str,
+                 rules: tuple[tuple[str, tuple[str, ...]], ...], order: str,
+                 use_dns: bool) -> str:
+    """One row per host: a pipe-delimited list of the products it contacted.
+
+    Matches on FQDN, from TLS SNI and (when `use_dns`) DNS query names both. Neither
+    identifies the host -- `ip` is only the join key that attaches the finding to a
+    host row.
+
+    WHY BOTH SOURCES. Measured on dt=2026-08-01, in-scope: SNI reaches 571 hosts and
+    DNS 492, but the union is 587 -- DNS finds 16 hosts SNI cannot, because a resolve
+    that never completes a TLS handshake we captured leaves no server_name behind.
+    The reverse is far larger (95 SNI-only), so SNI stays the primary source and DNS
+    is the additive tail.
+
+    Aggregated in its own CTE before anything joins it: ssl is ~7M rows/day, dns is
+    larger still, and a host can hit hundreds of these names.
+
+    The CASE is applied ONLY to rows that already passed `any_match`. That WHERE is
+    not redundant with the CASE -- it prunes ~99% of rows before a 200-arm CASE is
+    evaluated over them, which is the difference between a cheap scan and a slow one.
+    """
+    label_case = "\n                 ".join(
+        f"WHEN {tool_taxonomy._any_pred('fqdn', domains)} THEN '{label}'"
+        for label, domains in rules
+    )
+    # The rule's position, carried as a column so ORDER BY can use it without
+    # restating a 200-arm CASE. First match wins, exactly as the table is written.
+    rank_case = "\n                 ".join(
+        f"WHEN {tool_taxonomy._any_pred('fqdn', domains)} THEN {i}"
+        for i, (_, domains) in enumerate(rules)
+    )
+    any_match = " OR ".join(
+        f"({tool_taxonomy._any_pred('fqdn', domains)})" for _, domains in rules
+    )
+    sources = [f"""        SELECT id_orig_h ip, LOWER(server_name) fqdn
+        FROM {database}.ssl
+        WHERE dt = '{date_str}' AND id_orig_h IS NOT NULL
+          AND {_present('server_name')}"""]
+    if use_dns:
+        # The trailing dot is stripped because Zeek writes the queried name verbatim
+        # and a FQDN needle has no trailing dot. mDNS/.local and reverse lookups can
+        # never match a public registrable domain, so they are pruned here rather
+        # than left for the 200-arm CASE to reject one row at a time.
+        sources.append(f"""        SELECT id_orig_h ip, RTRIM(LOWER(query), '.') fqdn
+        FROM {database}.dns
+        WHERE dt = '{date_str}' AND id_orig_h IS NOT NULL AND {_present('query')}
+          AND query NOT LIKE '%.local%' AND query NOT LIKE '%.arpa%'
+          AND query LIKE '%.%'""")
+    union = "\n        UNION ALL\n".join(sources)
+    return f"""{alias} AS (
+  SELECT ip, ARRAY_JOIN(SLICE(ARRAY_AGG(label ORDER BY {order}), 1, {_TOP_N}), ' | ')
+           {out_col}
+  FROM (
+    SELECT ip, label, SUM(n) n, MIN(rank) rank
+    FROM (
+      SELECT ip, n,
+             CASE {label_case}
+             END label,
+             CASE {rank_case}
+             END rank
+      FROM (
+        SELECT ip, fqdn, COUNT(*) n
+        FROM (
+{union}
+        ) WHERE ({any_match})
+        GROUP BY ip, fqdn
+      )
+    ) WHERE label IS NOT NULL
+    GROUP BY ip, label
+  )
+  GROUP BY ip
+)"""
+
+
 def _sw_part(col: str) -> str:
     return f"NULLIF(NULLIF(TRY_CAST({col} AS VARCHAR), '-'), '')"
 
@@ -287,23 +380,89 @@ def build_entity_context_sql(database: str, date_str: str, tables: dict[str, set
 )""")
         parts.append(("ks", "ip"))
 
-    if have("known_names"):
+    # observed_hostnames used to read known_names ALONE and came back empty for hosts
+    # that plainly have a name. Measured on 10.220.198.27: known_names 0 rows, but
+    # dhcp.host_name = 'iPhone' (36 rows) and 2,506 mDNS .local rows. rank orders the
+    # sources by how directly the host claimed the name, so the SLICE keeps the best.
+    hn_sources = []
+    if havecol("known_names", "hostname"):
+        hn_sources.append(f"""    SELECT host_ip ip, 1 rank, hostname v, COUNT(*) n
+    FROM {database}.known_names
+    WHERE dt = '{date_str}' AND host_ip IS NOT NULL AND {_present('hostname')}
+    GROUP BY host_ip, hostname""")
+    if havecol("dhcp", "host_name") and havecol("dhcp", "assigned_addr"):
+        hn_sources.append(f"""    SELECT assigned_addr ip, 2 rank, host_name v, COUNT(*) n
+    FROM {database}.dhcp
+    WHERE dt = '{date_str}' AND {_present('assigned_addr')} AND {_present('host_name')}
+    GROUP BY assigned_addr, host_name""")
+    if havecol("dns", "query"):
+        # The mDNS INSTANCE name only -- the same structural rule owner_name uses, so a
+        # bare '_companion-link._tcp.local' browse query contributes no hostname.
+        hn_sources.append(f"""    SELECT id_orig_h ip, 3 rank,
+           REGEXP_EXTRACT(query, '^(.*)\\._[a-zA-Z0-9-]+\\._(?:tcp|udp)\\.local\\.?$', 1) v,
+           COUNT(*) n
+    FROM {database}.dns
+    WHERE dt = '{date_str}' AND id_orig_h IS NOT NULL AND {_present('query')}
+      AND query LIKE '%.local%' AND query NOT LIKE '%._sub.%'
+      AND REGEXP_LIKE(LOWER(query), {_MDNS_INSTANCE})
+    GROUP BY id_orig_h, query""")
+    if hn_sources:
+        union = "\n    UNION ALL\n".join(hn_sources)
         ctes.append(f"""kn AS (
-  SELECT host_ip ip,
-         ARRAY_JOIN(SLICE(ARRAY_AGG(DISTINCT hostname), 1, {_TOP_N}), ',') observed_hostnames
-  FROM {database}.known_names
-  WHERE dt = '{date_str}' AND host_ip IS NOT NULL AND hostname IS NOT NULL
-  GROUP BY host_ip
+  SELECT ip, ARRAY_JOIN(SLICE(ARRAY_AGG(v ORDER BY rank, n DESC), 1, {_TOP_N}), ',')
+           observed_hostnames
+  FROM (
+    SELECT ip, v, MIN(rank) rank, SUM(n) n
+    FROM (
+{union}
+    )
+    WHERE v IS NOT NULL AND v <> ''
+    GROUP BY ip, v
+  )
+  GROUP BY ip
 )""")
         parts.append(("kn", "ip"))
 
-    if have("known_domains"):
+    # announced_domains was known_domains ALONE and empty for the same reason. The
+    # mDNS SERVICE TYPES a host browses/advertises are the fallback: '_rdlink' and
+    # '_companion-link' say "this host speaks Apple Continuity", which is exactly the
+    # device-linking signal the column is for. Note the contrast with owner_name --
+    # there a bare service type names NOBODY and is refused; here it is the value.
+    ad_sources = []
+    if havecol("known_domains", "domain"):
+        ad_sources.append(f"""    SELECT host_ip ip, 1 rank, domain v, COUNT(*) n
+    FROM {database}.known_domains
+    WHERE dt = '{date_str}' AND host_ip IS NOT NULL AND {_present('domain')}
+    GROUP BY host_ip, domain""")
+    if havecol("dns", "query"):
+        # '_services._dns-sd._udp.local' is the DNS-SD META-QUERY: "list every service
+        # type on this link". EVERY mDNS speaker emits it, so the service-type regex
+        # extracts a bogus '_dns-sd' from it that would rank at or near the top on
+        # nearly every host and push the real _companion-link/_rdlink pairing signal
+        # out of the {_TOP_N}-value slice. It names no service the host actually
+        # speaks, so it is excluded rather than merely deprioritized.
+        ad_sources.append(f"""    SELECT id_orig_h ip, 2 rank,
+           REGEXP_EXTRACT(LOWER(query), '(_[a-z0-9-]+)\\._(?:tcp|udp)\\.local\\.?$', 1) v,
+           COUNT(*) n
+    FROM {database}.dns
+    WHERE dt = '{date_str}' AND id_orig_h IS NOT NULL AND {_present('query')}
+      AND query LIKE '%.local%' AND query NOT LIKE '%._sub.%'
+      AND NOT REGEXP_LIKE(LOWER(query), '_dns-sd\\._(?:tcp|udp)\\.local\\.?$')
+    GROUP BY id_orig_h, LOWER(query)""")
+    if ad_sources:
+        union = "\n    UNION ALL\n".join(ad_sources)
         ctes.append(f"""kdom AS (
-  SELECT host_ip ip,
-         ARRAY_JOIN(SLICE(ARRAY_AGG(DISTINCT domain), 1, {_TOP_N}), ',') announced_domains
-  FROM {database}.known_domains
-  WHERE dt = '{date_str}' AND host_ip IS NOT NULL AND domain IS NOT NULL
-  GROUP BY host_ip
+  SELECT ip, ARRAY_JOIN(SLICE(ARRAY_AGG(v ORDER BY rank, n DESC), 1, {_TOP_N}), ',')
+           announced_domains
+  FROM (
+    SELECT ip, v, MIN(rank) rank, SUM(n) n
+    FROM (
+{union}
+    )
+    WHERE v IS NOT NULL AND v <> ''
+    GROUP BY ip, v
+  )
+  GROUP BY ip
 )""")
         parts.append(("kdom", "ip"))
 
@@ -375,6 +534,29 @@ def build_entity_context_sql(database: str, date_str: str, tables: dict[str, set
   GROUP BY ip
 )""")
         parts.append(("org", "ip"))
+
+        # Both tables live in tool_taxonomy: 108 AI products and 203 security
+        # products, every needle anchored on a registrable-domain boundary. See that
+        # module's docstring for the measured host counts and the deliberate
+        # omissions (events.data.microsoft.com, Datadog RUM, doh.opendns.com).
+        use_dns = havecol("dns", "query")
+
+        # Count-ranked: the assistant a host actually uses is the one it handshakes
+        # with most, and a single stray CDN hit should not lead the cell.
+        ctes.append(_fqdn_labels(database, date_str, "ai", "ai_tools",
+                                 tool_taxonomy.ai_label_rules(), "n DESC", use_dns))
+        parts.append(("ai", "ip"))
+
+        # Class-ranked rather than count-ranked: an EDR chatting constantly and an MDM
+        # checking in hourly are equally interesting, so a stable class order beats
+        # volume. security_label_rules() is already sorted by SECURITY_CLASS_ORDER,
+        # and ORDER BY label is what preserves that through the SLICE -- the labels
+        # are 'EDR:...' / 'MDM:...' so lexical order is NOT class order. Rank
+        # explicitly instead.
+        ctes.append(_fqdn_labels(database, date_str, "sec", "security_tools",
+                                 tool_taxonomy.security_label_rules(),
+                                 "rank", use_dns))
+        parts.append(("sec", "ip"))
 
     own_labels = []
     if havecol("dns", "query"):
@@ -693,6 +875,8 @@ def build_entity_context_sql(database: str, date_str: str, tables: dict[str, set
         ("kdom", ["announced_domains"]),
         ("ul", ["session_count", "log_type_count", "log_types"]),
         ("org", ["org_confidence", "org_reasons", "org_tenant", "org_tenant_sources"]),
+        ("ai", ["ai_tools"]),
+        ("sec", ["security_tools"]),
         ("own", ["owner_name", "owner_name_source", "owner_name_confidence"]),
         ("idom", ["internal_domain", "internal_domain_confidence",
                   "internal_domain_reasons"]),

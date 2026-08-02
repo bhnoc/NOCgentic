@@ -196,31 +196,87 @@ def run_athena_query(query, timeout=900, retries=3):
         return query_id, state, reason
 
 
-def get_schema_from_raw(log_type, date_str):
+def path_predicate(log_type):
+    """A `$path` filter that matches THIS log type and no other.
+
+    Filenames are `<log_type>_<YYYYMMDD>_<HH:MM:SS>-...log.gz`, so the obvious
+    `LIKE '%/conn_%'` also matches `conn_long_20260801_...`. SIX tables were loading a
+    foreign log type's rows on top of their own, with a different field order:
+    conn<-conn_long, dce_rpc<-dce_rpc_activity, dhcp<-dhcp_fp_lite,
+    files<-files_metadata, ldap<-ldap_search, profinet<-profinet_dce_rpc.
+
+    Anchoring on the 8-digit date that always follows the name is what makes the
+    boundary explicit -- the same class of bug as an unanchored SNI substring, and the
+    same fix. `_` is a single-character wildcard in SQL LIKE, so REGEXP_LIKE is used
+    rather than a LIKE pattern that would silently match `connXlong`.
+    """
+    return f"""REGEXP_LIKE("$path", '/{re.escape(log_type)}_[0-9]{{8}}_')"""
+
+
+def get_schemas_from_raw(log_type, date_str):
+    """Every DISTINCT `#fields` header for this log type, keyed by field count.
+
+    ONE header is not enough. Measured on dt=2026-08-01: `conn` ships two headers,
+    68 fields and 70, because `cli_rtt`/`svr_rtt` are optional and appear MID-SCHEMA --
+    everything after them shifts by two. `conn_long` likewise (72/74), and http, quic
+    and ssl each have two.
+
+    The old code read one header via LIMIT 1 and applied its positional offsets to
+    every row of every shape. That silently misaligned the tail of the wider variant:
+    `remote_country` sits at 1-based 62 in one conn header and 64 in the other, so the
+    column labelled 'country' was actually holding `remote_city`'s hash. The comment in
+    entity_context blamed "40-char hex hashes" in the data; the data was fine and the
+    read was shifted.
+
+    Field COUNT is the discriminator, verified sufficient: every variant of every log
+    type has a distinct count, so `cardinality(split(line, chr(9)))` picks the right
+    map per row without needing to inspect the header inline.
+    """
     query = f"""
     SELECT DISTINCT line FROM corelight_raw
-    WHERE dt = '{date_str}' AND line LIKE '#fields%' AND "$path" LIKE '%/{log_type}_%'
-    LIMIT 1
+    WHERE dt = '{date_str}' AND line LIKE '#fields%' AND {path_predicate(log_type)}
     """
     query_id, state, _ = run_athena_query(query, timeout=120, retries=2)
     if state != 'SUCCEEDED':
         return None
     results = athena.get_query_results(QueryExecutionId=query_id)
     rows = results.get('ResultSet', {}).get('Rows', [])
-    if len(rows) > 1:
-        line = rows[1]['Data'][0].get('VarCharValue', '')
-        fields = line.replace('#fields\t', '').split('\t')
-        return fields
-    return None
+    schemas = {}
+    for row in rows[1:]:
+        line = (row['Data'][0].get('VarCharValue') or '')
+        if not line.startswith('#fields'):
+            continue
+        fields = line.replace('#fields\t', '', 1).split('\t')
+        fields = [f for f in fields if f != '']
+        if fields:
+            # Keyed by the DATA row's field count, which is what the loader can test
+            # per row. A '#fields' line carries one extra leading token.
+            schemas[len(fields)] = fields
+    return schemas or None
 
 
-def create_new_table(log_type, date_str):
-    fields = get_schema_from_raw(log_type, date_str)
-    if not fields:
-        print(f"  Could not get schema for {log_type}")
-        return False
+def get_schema_from_raw(log_type, date_str):
+    """The WIDEST header, for DDL only.
 
-    columns = [f"{quote_column('ts_datetime')} string"]
+    The table needs a column for every field any variant emits, so the widest header
+    is the right one to build columns from -- a narrower variant simply leaves the
+    extra columns NULL for its rows. Reading a narrow header here would permanently
+    lose the optional fields for every row.
+    """
+    schemas = get_schemas_from_raw(log_type, date_str)
+    if not schemas:
+        return None
+    return schemas[max(schemas)]
+
+
+def columns_for_fields(fields):
+    """(column name, DDL type) per raw field, deduped, in header order.
+
+    Shared by CREATE and the ALTER reconciliation so the two can never disagree about
+    what a field is called -- a mismatch there is exactly how `user_` came to exist in
+    a table whose loader was looking for `user`.
+    """
+    columns = [('ts_datetime', 'string')]
     seen = {'ts_datetime'}
     for field in fields:
         col_name = sanitize_column_name(field)
@@ -230,10 +286,61 @@ def create_new_table(log_type, date_str):
         if not col_name or col_name in seen:
             continue
         seen.add(col_name)
-        col_type = 'DOUBLE' if field.lower() == 'ts' else 'string'
-        columns.append(f"{quote_column(col_name)} {col_type}")
+        columns.append((col_name, 'DOUBLE' if field.lower() == 'ts' else 'string'))
+    return columns
 
-    columns_str = ',\n  '.join(columns)
+
+def reconcile_table_columns(log_type, date_str, existing_cols):
+    """ADD COLUMNS for header fields the live table has no column for.
+
+    WHY THIS EXISTS. `CREATE TABLE IF NOT EXISTS` runs once and never again, so a table
+    is frozen at the schema of the day it was created -- but Corelight keeps ADDING
+    fields. Measured on dt=2026-08-01, every multi-variant table was missing the newer
+    field outright: cli_rtt/svr_rtt (conn, conn_long), hs_delay (ssl, quic),
+    tx_delay/trans_time (http). The loader read them correctly and then had nowhere to
+    put them, so they were dropped on every run with no error.
+
+    Purely ADDITIVE. Columns are never dropped, renamed or retyped: an unexpected column
+    is harmless, whereas dropping one that a view or an agent's SQL still references
+    breaks reads. That also makes this safe to run on every pass -- it is a no-op once
+    the table is current.
+
+    Returns the list of added column names (empty if already current).
+    """
+    fields = get_schema_from_raw(log_type, date_str)
+    if not fields:
+        return []
+    have = {c for c, _ in existing_cols}
+    # A column the loader would bind via the trailing-underscore fallback already has a
+    # home, so it is NOT missing. Without this, a table carrying the old `user_` would
+    # get a SECOND column named `user` and the two would split the data between them.
+    missing = [(c, t) for c, t in columns_for_fields(fields)
+               if c not in have and f"{c}_" not in have]
+    if not missing:
+        return []
+    table_name = log_type.replace('-', '_')
+    added = ', '.join(f"{quote_column(c)} {t.lower()}" for c, t in missing)
+    query = f"ALTER TABLE {GLUE_DATABASE}.{table_name} ADD COLUMNS ({added})"
+    _, state, reason = run_athena_query(query, timeout=120, retries=2)
+    if state != 'SUCCEEDED':
+        # Not fatal: the load still works for every column that does exist, and failing
+        # the whole refresh over an additive DDL would trade a missing field for a
+        # missing hour of data.
+        print(f"  ALTER TABLE {table_name} failed: {(reason or '')[:160]}")
+        return []
+    names = [c for c, _ in missing]
+    print(f"  {table_name}: added {len(names)} column(s): {', '.join(names)}")
+    return names
+
+
+def create_new_table(log_type, date_str):
+    fields = get_schema_from_raw(log_type, date_str)
+    if not fields:
+        print(f"  Could not get schema for {log_type}")
+        return False
+
+    columns_str = ',\n  '.join(
+        f"{quote_column(c)} {t}" for c, t in columns_for_fields(fields))
     table_name = log_type.replace('-', '_')
     s3_location = f"{_PARQUET_BASE}{log_type}/"
 
@@ -260,12 +367,43 @@ TBLPROPERTIES (
     return True
 
 
+def resolve_field_index(field_map, col_name):
+    """The raw-field position for an existing table column, tolerating the old rename.
+
+    THE SCAR THIS EXISTS FOR. The loader used to rename reserved words by appending an
+    underscore (`user` -> `user_`), then commit 9b2549a switched to backtick-quoting
+    and dropped the rename. But `CREATE TABLE IF NOT EXISTS` never rewrites a table
+    that already exists, so tables created under the old scheme still have `user_`
+    while the raw header says `user` -- the lookup missed and `incremental_load`
+    emitted `CAST(NULL AS varchar)` for every row. known_users.user_ went from
+    populated to exactly zero the hour that commit shipped, and smtp's date_/from_/to_
+    with it.
+
+    Trailing underscores are stripped ONLY as a fallback, so a log type that genuinely
+    has a `foo_` field still binds to `foo_` first and is never silently redirected.
+    """
+    idx = field_map.get(col_name)
+    if idx is not None:
+        return idx
+    if col_name.endswith('_'):
+        return field_map.get(col_name.rstrip('_'))
+    return None
+
+
 def incremental_load(log_type, table_cols, date_str, last_ts):
-    fields = get_schema_from_raw(log_type, date_str)
-    if not fields:
+    schemas = get_schemas_from_raw(log_type, date_str)
+    if not schemas:
         return False, None
 
-    field_map = {sanitize_column_name(f): i + 1 for i, f in enumerate(fields)}
+    # One field map PER HEADER SHAPE, keyed by the row's field count. A log type with
+    # optional mid-schema fields (conn's cli_rtt/svr_rtt) shifts every position after
+    # them, so a single map read off one header misaligns the whole tail of the other
+    # variant. See get_schemas_from_raw.
+    field_maps = {
+        nf: {sanitize_column_name(f): i + 1 for i, f in enumerate(fields)}
+        for nf, fields in schemas.items()
+    }
+    nfields = "cardinality(split(line, chr(9)))"
 
     select_cols = [
         "CASE WHEN cardinality(split(line, chr(9))) >= 1 "
@@ -275,25 +413,53 @@ def incremental_load(log_type, table_cols, date_str, last_ts):
     for col_name, col_type in table_cols:
         if col_name in ('ts_datetime', 'dt'):
             continue
-        idx = field_map.get(col_name)
-        if idx is None:
-            cast_type = 'varchar' if col_type == 'string' else col_type
+        # Position per variant. Identical across variants for every field ahead of the
+        # optional block, which is the common case and collapses back to one arm.
+        by_idx = {}
+        for nf, fmap in field_maps.items():
+            idx = resolve_field_index(fmap, col_name)
+            if idx is not None:
+                by_idx.setdefault(idx, []).append(nf)
+
+        cast_type = 'varchar' if col_type == 'string' else col_type
+        if not by_idx:
             select_cols.append(f"CAST(NULL AS {cast_type})")
             continue
-        base_expr = f"NULLIF(element_at(split(line, chr(9)), {idx}), '-')"
-        check = f"cardinality(split(line, chr(9))) >= {idx}"
-        if col_type == 'double':
-            expr = f"CASE WHEN {check} THEN TRY_CAST({base_expr} AS double) ELSE NULL END"
-        elif col_type == 'int':
-            expr = f"CASE WHEN {check} THEN TRY_CAST({base_expr} AS int) ELSE NULL END"
-        elif col_type == 'bigint':
-            expr = f"CASE WHEN {check} THEN TRY_CAST({base_expr} AS bigint) ELSE NULL END"
-        elif col_type == 'boolean':
-            expr = (f"CASE WHEN {check} THEN CASE WHEN {base_expr} = 'T' THEN true "
-                    f"WHEN {base_expr} = 'F' THEN false ELSE NULL END ELSE NULL END")
-        else:
-            expr = f"CASE WHEN {check} THEN {base_expr} ELSE NULL END"
-        select_cols.append(expr)
+
+        def _typed(idx):
+            base_expr = f"NULLIF(element_at(split(line, chr(9)), {idx}), '-')"
+            check = f"{nfields} >= {idx}"
+            if col_type == 'double':
+                return f"CASE WHEN {check} THEN TRY_CAST({base_expr} AS double) ELSE NULL END"
+            if col_type == 'int':
+                return f"CASE WHEN {check} THEN TRY_CAST({base_expr} AS int) ELSE NULL END"
+            if col_type == 'bigint':
+                return f"CASE WHEN {check} THEN TRY_CAST({base_expr} AS bigint) ELSE NULL END"
+            if col_type == 'boolean':
+                return (f"CASE WHEN {check} THEN CASE WHEN {base_expr} = 'T' THEN true "
+                        f"WHEN {base_expr} = 'F' THEN false ELSE NULL END ELSE NULL END")
+            return f"CASE WHEN {check} THEN {base_expr} ELSE NULL END"
+
+        # The shortcut is ONLY safe when the field sits at the same position in EVERY
+        # variant. A field present in just one of them must stay guarded: cli_rtt is at
+        # position 49 in conn's 70-field header and ABSENT from the 68-field one, so an
+        # unguarded read would pull position 49 of a narrow row -- 'inner_vlan' -- and
+        # file it under cli_rtt. That is the same misalignment this function exists to
+        # fix, so collapsing on `len(by_idx) == 1` alone would have reintroduced it.
+        covered = sum(len(nfs) for nfs in by_idx.values())
+        if len(by_idx) == 1 and covered == len(field_maps):
+            select_cols.append(_typed(next(iter(by_idx))))
+            continue
+        # The position differs by variant, or the field is missing from some variant.
+        # Either way, dispatch on the row's own field count. A count matching no known
+        # header falls to NULL rather than guessing a position: a wrong offset ships a
+        # real value under the wrong column name, which is worse than an absent one.
+        arms = "".join(
+            f" WHEN {nfields} IN ({', '.join(str(n) for n in sorted(nfs))}) "
+            f"THEN {_typed(idx)}"
+            for idx, nfs in sorted(by_idx.items())
+        )
+        select_cols.append(f"CASE{arms} ELSE CAST(NULL AS {cast_type}) END")
 
     select_cols.append(f"'{date_str}'")
     select_str = ',\n    '.join(select_cols)
@@ -308,7 +474,7 @@ SELECT
     {select_str}
 FROM {GLUE_DATABASE}.corelight_raw
 WHERE dt = '{date_str}'
-  AND "$path" LIKE '%/{log_type}_%'
+  AND {path_predicate(log_type)}
   AND NOT line LIKE '#%'
   AND {ts_filter}
 """
@@ -677,6 +843,10 @@ def process_single(log_type, date_str, context):
         print(f"Creating table for {log_type}...")
         if not create_new_table(log_type, date_str):
             return {'status': 'table_create_failed', 'log_type': log_type, 'date': date_str}
+        existing_tables = get_existing_tables()
+    elif reconcile_table_columns(log_type, date_str, existing_tables[table_name]):
+        # Re-read: incremental_load builds its SELECT from the table's column list, so
+        # a column added a moment ago is only populated if we see it now.
         existing_tables = get_existing_tables()
 
     last_ts = get_watermark(log_type, date_str)

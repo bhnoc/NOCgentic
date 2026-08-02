@@ -22,6 +22,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lambda"))
 
 import entity_context as ec  # noqa: E402
+import tool_taxonomy as tt  # noqa: E402
 
 DB = "testdb"
 DATE = "2026-08-01"
@@ -66,8 +67,8 @@ _PROFILING = {
 
 # Every CTE alias the full profiling catalog folds together, in join order. The
 # top-level fold must be exactly one FULL OUTER JOIN per alias after the first.
-_ALL_ALIASES = ("ac", "al", "ku", "ks", "kn", "kdom", "ul", "org", "own",
-                "idom", "mtls", "home", "j3", "hsh", "sw", "du")
+_ALL_ALIASES = ("ac", "al", "ku", "ks", "kn", "kdom", "ul", "org", "ai", "sec",
+                "own", "idom", "mtls", "home", "j3", "hsh", "sw", "du")
 
 # column -> every catalog table that could populate it. domain_user has two because
 # it merges ntlm and kerberos, so it only goes null when BOTH are gone.
@@ -95,6 +96,11 @@ _PROFILE_COLUMNS = {
     "client_cert_class": ("ssl",),
     "client_cert_subject_hash": ("ssl",),
     "client_cert_reasons": ("ssl",),
+    "ai_tools": ("ssl",),
+    "security_tools": ("ssl",),
+    # Both fall back across three sources, so they only go null when ALL are gone.
+    "observed_hostnames": ("known_names", "dhcp", "dns"),
+    "announced_domains": ("known_domains", "dns"),
 }
 
 
@@ -262,12 +268,13 @@ class TestProfileColumns:
         """None of ssl/ssh/software/conn/ntlm/kerberos/dns exist there, so every
         column sourced from them must still ship, as NULL.
 
-        owner_name is excluded because the base catalog DOES have known_names, which
-        is one of its two sources -- it is covered by the parametrized degradation
-        gate instead."""
-        sql = ec.build_entity_context_sql(DB, DATE, _catalog())
+        Columns with a source the base catalog DOES carry (owner_name via known_names,
+        observed_hostnames, announced_domains) are excluded -- they are covered by the
+        parametrized degradation gate instead."""
+        base = _catalog()
+        sql = ec.build_entity_context_sql(DB, DATE, base)
         for col, sources in _PROFILE_COLUMNS.items():
-            if "known_names" in sources:
+            if any(s in base for s in sources):
                 continue
             assert f"CAST(NULL AS VARCHAR) {col}" in sql
 
@@ -844,3 +851,592 @@ class TestNewColumnsSurviveAPartialCatalog:
     def test_ctas_still_omits_external_location(self):
         ddl = ec.build_ctas(DB, DATE, _profiling_catalog())
         assert "external_location" not in ddl
+
+    @pytest.mark.parametrize("col,alias", [("ai_tools", "ai"),
+                                           ("security_tools", "sec")])
+    def test_ssl_without_server_name_drops_the_sni_columns_to_null(self, col, alias):
+        """An `ssl` predating server_name must not build a CTAS that fails: one failed
+        statement loses the whole hourly rebuild."""
+        cat = _profiling_catalog(ssl={"id_orig_h", "ja3", "dt"})
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        assert f"CAST(NULL AS VARCHAR) {col}" in sql
+        assert f"\n{alias} AS (" not in sql
+        assert "client_ja3" in sql, "ja3 should still be read"
+
+
+class TestSniNeedlesAreDomainAnchored:
+    """The substring trap this codebase keeps getting bitten by. Measured on
+    dt=2026-08-01, in-scope: 'cros' matched "Microsoft-CryptoAPI" and reported ChromeOS
+    on a Windows box; a bare 'cato' matches lcdn-locator.apple.com (950 IPs), 'eset'
+    matches sync.resetdigital.co (78), and a bare 'okta' matches
+    okta-featureflag-edge.azureedge.net (13) -- which is Azure, not Okta.
+    """
+
+    def test_dom_matches_the_apex_and_any_subdomain(self):
+        pred = ec._dom("anthropic.com")
+        assert "sni = 'anthropic.com'" in pred
+        assert "sni LIKE '%.anthropic.com'" in pred
+
+    def test_dom_never_emits_a_bare_leading_wildcard(self):
+        """`LIKE '%anthropic.com'` would match evilanthropic.com; the dot is the
+        boundary and it is what makes the needle a domain rather than a substring."""
+        rules = tt.ai_label_rules() + tt.security_label_rules()
+        for _, domains in rules:
+            pred = tt._any_pred("fqdn", domains)
+            assert "LIKE '%anthropic" not in pred
+            for needle in ("okta", "cursor", "jamf", "claude", "gemini"):
+                assert f"LIKE '%{needle}" not in pred, needle
+
+    def test_the_shipped_sql_anchors_every_new_needle(self):
+        """Only the MATCHING predicates are in scope. `fqdn LIKE` is a needle; the
+        `query LIKE '%.local%'` source filters are exclusions that prune rows before
+        matching, and a bare wildcard is correct there.
+        """
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        for alias in ("ai", "sec"):
+            body = _cte(sql, alias)
+            needles = re.findall(r"fqdn LIKE '([^']+)'", body)
+            assert needles, f"{alias} has no fqdn needles at all"
+            # Every needle is boundary-anchored ('%.<domain>'), never '%needle%'.
+            for like in needles:
+                assert not (like.startswith("%") and like.endswith("%")), like
+                assert like.startswith("%."), like
+
+    def test_okta_is_never_matched_on_an_azure_hostname(self):
+        """okta-featureflag-edge.azureedge.net is Azure, not Okta. The taxonomy
+        deliberately omits Okta entirely (entity_context's _ORG_SNI already owns those
+        domains for org attribution), so the guarantee here is that nothing in the
+        security table claims that host."""
+        assert tt.classify_security("okta-featureflag-edge.azureedge.net") is None
+        assert tt.classify_security("okta.com") is None, (
+            "Okta is deliberately excluded; see the taxonomy's note on double-counting")
+
+    def test_cursor_does_not_match_an_unrelated_hostname(self):
+        """'cursor' as a bare substring is the same class of bug as 'cros'."""
+        assert tt.classify_ai("cursor.sh") == ("Cursor", "coding")
+        assert tt.classify_ai("api2.cursor.sh") == ("Cursor", "coding")
+        assert tt.classify_ai("notcursor.sh") is None
+        assert tt.classify_ai("mycursor.example.com") is None
+
+    @pytest.mark.parametrize("name,rules", [
+        ("ai", tt.ai_label_rules()),
+        ("security", tt.security_label_rules()),
+    ])
+    def test_no_earlier_needle_shadows_a_later_one(self, name, rules):
+        """First match wins, and the needle is a SUFFIX rule, so a broad domain placed
+        ahead of a narrower one under it makes the narrower entry dead code that can
+        never fire. This gate caught LangChain('langchain.com') shadowing
+        LangSmith('smith.langchain.com') -- a silently unreachable product.
+
+        It also guards the class REORDER: security_label_rules() re-sequences the table
+        by SECURITY_CLASS_ORDER, so an ordering change could introduce a shadow that
+        does not exist in the table as written.
+        """
+        shadows = []
+        for i, (early, early_domains) in enumerate(rules):
+            for late, late_domains in rules[i + 1:]:
+                for ld in late_domains:
+                    for ed in early_domains:
+                        if ld == ed or ld.endswith("." + ed):
+                            shadows.append(f"{early}({ed}) shadows {late}({ld})")
+        assert not shadows, f"{name}: unreachable entries: " + "; ".join(shadows)
+
+    @pytest.mark.parametrize("name,rules", [
+        ("ai", tt.ai_label_rules()),
+        ("security", tt.security_label_rules()),
+    ])
+    def test_every_entry_is_reachable_by_its_own_domains(self, name, rules):
+        """The end-to-end form of the shadow gate: every domain in the table must
+        classify to the product that declares it, apex and subdomain both."""
+        classify = tt.classify_ai if name == "ai" else tt.classify_security
+        prefixed = name == "security"
+        for label, domains in rules:
+            want = label.split(":", 1)[1] if prefixed else label
+            for d in domains:
+                for host in (d, "sub." + d):
+                    got = classify(host)
+                    assert got is not None, f"{host} ({label}) matches nothing"
+                    assert got[0] == want, f"{host} -> {got[0]}, declared by {want}"
+
+    def test_the_measured_substring_traps_are_all_refused(self):
+        """Every one of these was measured matching a bare-substring rule on live
+        traffic. lcdn-locator.apple.com alone is 950 hosts."""
+        for host in ("lcdn-locator.apple.com",          # matched 'cato'
+                     "sync.resetdigital.co",            # matched 'eset'
+                     "okta-featureflag-edge.azureedge.net",
+                     "mail.google.com",                 # matched '%ai%' via "m-ai-l"
+                     "sync.programmaticx.ai",           # adtech on a .ai TLD
+                     "dns.nrich.ai",
+                     "sync.theagenticx.ai",
+                     "secure.insightexpressai.com"):
+            assert tt.classify_ai(host) is None, host
+            assert tt.classify_security(host) is None, host
+
+
+class TestAiTools:
+    """The widest-reaching new signal in the table. Measured in-scope on dt=2026-08-01:
+    ChatGPT 487 hosts, Claude 450, Copilot 293, Gemini 170, Cursor 39, Perplexity 25.
+    """
+
+    def test_the_column_is_present(self):
+        assert "ai_tools" in ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+
+    @pytest.mark.parametrize("host,product", [
+        ("chatgpt.com", "ChatGPT"),
+        ("ab.chatgpt.com", "ChatGPT"),
+        ("api.anthropic.com", "Claude"),
+        ("claude.ai", "Claude"),
+        ("downloads.claude.ai", "Claude"),
+        ("bridge.claudeusercontent.com", "Claude"),
+        ("api.individual.githubcopilot.com", "GitHub Copilot"),
+        ("copilot.microsoft.com", "Microsoft Copilot"),
+        ("gemini.google.com", "Gemini"),
+        ("appsgenaiserver-pa.clients6.google.com", "Gemini"),
+        ("api2.cursor.sh", "Cursor"),
+        ("perplexity.ai", "Perplexity"),
+        # The categories the old 6-product list could not see at all.
+        ("ollama.com", "Ollama"),
+        ("registry.ollama.ai", "Ollama"),
+        ("versions-prod.lmstudio.ai", "LM Studio"),
+        ("openrouter.ai", "OpenRouter"),
+        ("huggingface.co", "Hugging Face"),
+        ("gnar.grammarly.com", "Grammarly"),
+        ("cloud.langfuse.com", "Langfuse"),
+    ])
+    def test_every_measured_product_is_recognised(self, host, product):
+        got = tt.classify_ai(host)
+        assert got is not None, f"{host} matched nothing"
+        assert got[0] == product, f"{host} -> {got[0]}, expected {product}"
+
+    def test_the_local_runner_class_exists_and_is_populated(self):
+        """A host running Ollama does inference ON ITSELF, which is a different risk
+        conversation from a host calling a hosted API. ollama.com was measured at 88
+        hosts -- the second-largest AI signal on the network."""
+        runners = [l for l, k, _ in tt.AI_TOOLS if k == "local_runner"]
+        assert "Ollama" in runners
+        assert tt.classify_ai("ollama.com") == ("Ollama", "local_runner")
+
+    def test_gemini_is_anchored_on_full_hosts_not_shared_google_infra(self):
+        """clients6.google.com and googleapis.com are shared Google infrastructure. A
+        suffix match on either would claim Gemini for most of the 1,236 hosts that
+        touch google.com."""
+        assert tt.classify_ai("appsgenaiserver-pa.clients6.google.com") is not None
+        for shared in ("clients6.google.com", "googleapis.com", "www.google.com",
+                       "mail.google.com", "storage.googleapis.com"):
+            assert tt.classify_ai(shared) is None, shared
+
+    def test_jetbrains_ide_traffic_is_not_an_ai_signal(self):
+        """jetbrains.com (52 hosts) is the IDE fetching plugins and checking licences.
+        Only jetbrains.ai is the AI Assistant."""
+        assert tt.classify_ai("jetbrains.ai") == ("JetBrains AI", "coding")
+        assert tt.classify_ai("plugins.jetbrains.com") is None
+
+    def test_github_browsing_is_not_copilot(self):
+        """github.com is 442 hosts -- everyone browsing repos."""
+        assert tt.classify_ai("github.com") is None
+        assert tt.classify_ai("api.individual.githubcopilot.com")[0] == "GitHub Copilot"
+
+    def test_the_list_is_count_ranked(self):
+        """A host's real assistant is the one it handshakes with most; a single stray
+        CDN hit must not lead the cell."""
+        ai = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "ai")
+        assert "ORDER BY n DESC" in ai
+        assert "COUNT(*) n" in ai
+
+    def test_the_list_is_pipe_delimited(self):
+        ai = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "ai")
+        assert "' | '" in ai
+
+    def test_the_list_is_slice_capped(self):
+        """Invariant 4: a 60-entry cell is not read, it is scrolled past."""
+        ai = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "ai")
+        assert f"SLICE(ARRAY_AGG(label ORDER BY n DESC), 1, {ec._TOP_N})" in ai
+
+    def test_the_third_party_copilot_saas_is_not_claimed_as_microsofts(self):
+        """copilot.com is an unrelated client-portal product. Attributing it to GitHub
+        Copilot would report an AI assistant on a host that never touched one."""
+        assert tt.classify_ai("copilot.com") is None
+        assert tt.classify_ai("app.copilot.com") is None
+        assert tt.classify_ai("copilot.microsoft.com")[0] == "Microsoft Copilot"
+
+    def test_the_office_portal_is_not_a_copilot_signal(self):
+        """m365.cloud.microsoft is 54 hosts: every licensed user loads it whether or
+        not Copilot is provisioned."""
+        assert tt.classify_ai("m365.cloud.microsoft") is None
+
+
+class TestSecurityToolsCarryTheClass:
+    """The class is the part an analyst reads: it says what KIND of control the host
+    talks to without needing to know the vendor. Measured in-scope on dt=2026-08-01:
+    MDM 859 hosts, Vault 179, MFA 175, ZTNA 79, EDR 55."""
+
+    def test_the_column_is_present(self):
+        assert "security_tools" in ec.build_entity_context_sql(
+            DB, DATE, _profiling_catalog())
+
+    @pytest.mark.parametrize("cls", ["EDR", "MDM", "ZTNA", "MFA", "Vault",
+                                     "Mesh VPN", "AV", "DLP", "SIEM", "VulnScan",
+                                     "RMM", "Pentest", "ThreatIntel"])
+    def test_every_class_in_the_spec_is_emitted(self, cls):
+        sec = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "sec")
+        assert f"'{cls}:" in sec, f"{cls} is not labelled in the shipped SQL"
+
+    def test_every_declared_class_actually_has_a_product(self):
+        """A class in the closed set with no product is a column value nobody's
+        dashboard will ever render."""
+        used = {k for _, k, _ in tt.SECURITY_TOOLS}
+        assert used == tt.SECURITY_CLASSES, (
+            f"declared-but-unused: {tt.SECURITY_CLASSES - used}")
+
+    @pytest.mark.parametrize("host,cls,product", [
+        # Telemetry domains, not marketing sites -- see below.
+        ("ts01-b.cloudsink.net", "edr", "CrowdStrike Falcon"),
+        ("dv-us-prod.sentinelone.net", "edr", "SentinelOne"),
+        ("conferdeploy.net", "edr", "Carbon Black"),
+        ("cloud-ios-asn.amp.cisco.com", "edr", "Cisco Secure Endpoint"),
+        ("ch-bh.traps.paloaltonetworks.com", "edr", "Cortex XDR"),
+        ("feeds.elastic.co", "edr", "Elastic Agent"),
+        ("cp.wd.microsoft.com", "edr", "Microsoft Defender for Endpoint"),
+        ("agents.manage.microsoft.com", "mdm", "Microsoft Intune"),
+        ("bhnoc.jamfcloud.com", "mdm", "Jamf"),
+        ("web-api.kandji.io", "mdm", "Kandji"),
+        ("events.goskope.com", "ztna", "Netskope"),
+        ("zscloud.net", "ztna", "Zscaler"),
+        ("zdxcloud.net", "ztna", "Zscaler"),
+        ("tenant.sso.duosecurity.com", "mfa", "Duo"),
+        ("my.1password.com", "vault", "1Password"),
+        # Classes the old 11-product list had no entry for at all.
+        ("derp3f.tailscale.com", "mesh_vpn", "Tailscale"),
+        ("notifications.bitwarden.com", "vault", "Bitwarden"),
+        ("pollserver.lastpass.com", "vault", "LastPass"),
+        ("sadownload.mcafee.com", "av", "McAfee"),
+        ("sensor.cloud.tenable.com", "vuln_scanner", "Tenable / Nessus"),
+        ("http-intake.logs.us5.datadoghq.com", "siem_agent", "Datadog Agent"),
+        ("console.us.code42.com", "dlp", "Code42 Incydr"),
+        ("telemetry.portswigger.net", "pentest", "Burp Suite"),
+        ("osquery.vanta.com", "compliance", "Vanta"),
+        ("download.wireguard.com", "vpn", "WireGuard"),
+    ])
+    def test_the_vendor_is_classified(self, host, cls, product):
+        got = tt.classify_security(host)
+        assert got is not None, f"{host} matched nothing"
+        assert got == (product, cls), f"{host} -> {got}, expected ({product}, {cls})"
+
+    def test_the_value_is_class_colon_product(self):
+        """The spec's format is `EDR:CrowdStrike | MDM:Intune`. A bare vendor name
+        makes the reader look up what kind of tool it is."""
+        sec = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "sec")
+        assert "'EDR:CrowdStrike Falcon'" in sec
+        assert "'MDM:Microsoft Intune'" in sec
+
+    def test_every_emitted_label_carries_a_known_class_prefix(self):
+        prefixes = {tt._sec_display(k) for k in tt.SECURITY_CLASSES}
+        for label, _ in tt.security_label_rules():
+            head = label.split(":", 1)[0]
+            assert head in prefixes, f"{label} has an unknown class prefix"
+
+    def test_the_list_is_pipe_delimited_and_capped(self):
+        sec = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "sec")
+        assert "' | '" in sec
+        assert f"SLICE(ARRAY_AGG(label ORDER BY rank), 1, {ec._TOP_N})" in sec
+
+    def test_controls_outrank_the_hosts_own_tooling_in_the_slice(self):
+        """A host matching more products than {_TOP_N} loses the tail. An analyst
+        asking "who manages this box" needs the EDR and the MDM to survive; a Burp
+        Suite install is interesting but is not a control."""
+        order = [l for l, _ in tt.security_label_rules()]
+        first_edr = next(i for i, l in enumerate(order) if l.startswith("EDR:"))
+        first_mdm = next(i for i, l in enumerate(order) if l.startswith("MDM:"))
+        first_pentest = next(i for i, l in enumerate(order) if l.startswith("Pentest:"))
+        first_ti = next(i for i, l in enumerate(order) if l.startswith("ThreatIntel:"))
+        assert first_edr < first_mdm < first_pentest
+        assert first_ti < first_pentest
+
+    def test_carbonblacks_sensor_domain_is_included(self):
+        """conferdeploy.net is the only Carbon Black shape actually present (6 hosts);
+        matching only the branded domains would ship a dead label."""
+        assert tt.classify_security("conferdeploy.net")[0] == "Carbon Black"
+
+    def test_marketing_sites_are_not_read_as_installed_agents(self):
+        """THE BLACK HAT PROBLEM: thousands of people BROWSE vendor websites here.
+        www.crowdstrike.com proves nothing about the host; cloudsink.net proves the
+        Falcon sensor is running."""
+        assert tt.classify_security("www.crowdstrike.com") is None
+        assert tt.classify_security("ts01-b.cloudsink.net")[0] == "CrowdStrike Falcon"
+
+    def test_generic_windows_telemetry_is_not_defender(self):
+        """events.data.microsoft.com is 678 hosts of ordinary Windows telemetry and
+        smartscreen ships in every Edge install. Folding them in would triple the
+        Defender count with garbage."""
+        for host in ("events.data.microsoft.com", "settings-win.data.microsoft.com",
+                     "smartscreen.microsoft.com"):
+            assert tt.classify_security(host) is None, host
+
+    def test_datadog_rum_is_excluded_but_the_agent_intake_is_not(self):
+        """browser-intake-*.datadoghq.com is a JavaScript beacon fired by a WEBSITE the
+        host visited -- it says nothing about the host. Getting this wrong would have
+        added ~120 phantom hosts."""
+        assert tt.classify_security("browser-intake-datadoghq.com") is None
+        assert tt.classify_security("js-cdn.dynatrace.com") is None
+        assert tt.classify_security(
+            "http-intake.logs.us5.datadoghq.com")[0] == "Datadog Agent"
+
+    def test_the_shows_own_recursive_dns_is_not_an_umbrella_fleet(self):
+        """doh.opendns.com is 635 hosts -- the show's own resolver, not an installed
+        agent. Including it would make 646 hosts look like Umbrella customers."""
+        assert tt.classify_security("doh.opendns.com") is None
+        assert tt.classify_security("disthost.umbrella.com")[0] == "Cisco Secure Access"
+
+
+class TestSniColumnsDoNotFanOut:
+    """ssl is ~7M rows/day and a host can hit hundreds of these SNIs. Invariant 1."""
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_each_cte_collapses_to_one_row_per_host(self, alias):
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert "GROUP BY ip" in body
+        assert " JOIN " not in body, f"{alias} joins raw rows"
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_each_cte_pins_the_partition(self, alias):
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert f"dt = '{DATE}'" in body, f"{alias} scans every partition"
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_each_cte_filters_the_empty_marker(self, alias):
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert "'(empty)'" in body
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_the_case_only_runs_on_prefiltered_rows(self, alias):
+        """The WHERE that repeats the match predicate is NOT redundant with the CASE:
+        it prunes ~99% of rows before a 200-arm CASE is evaluated over them. Losing it
+        turns a cheap scan into a slow one across two of the largest tables."""
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert "GROUP BY ip, fqdn" in body, (
+            "rows must collapse per (ip, fqdn) before the CASE, not after")
+        assert re.search(r"\)\s*WHERE \(\(", body), "the pre-CASE filter is gone"
+
+
+class TestToolingColumnsMatchDnsAndSni:
+    """The user's architectural point: a product is identified by FQDN, and the FQDN is
+    visible in TLS SNI *and* in the DNS query name. Measured in-scope on dt=2026-08-01:
+    SNI reaches 571 hosts, DNS 492, and the union 587 -- DNS finds 16 hosts SNI cannot,
+    because a resolve that never completes a captured TLS handshake leaves no
+    server_name behind. `ip` is only the join key; nothing here identifies a host by
+    its address."""
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_both_sources_are_read(self, alias):
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert f"{DB}.ssl" in body, "SNI is the primary source"
+        assert f"{DB}.dns" in body, "DNS is the additive tail"
+        assert "UNION ALL" in body
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_the_sources_are_unioned_not_joined(self, alias):
+        """A join would multiply SSL handshakes by DNS queries per host."""
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert " JOIN " not in body
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_the_dns_name_is_stripped_of_its_trailing_dot(self, alias):
+        """Zeek writes the queried name verbatim, so 'claude.ai.' is common. A needle
+        has no trailing dot, so without RTRIM every fully-qualified query silently
+        fails to match."""
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert "RTRIM(LOWER(query), '.')" in body
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_mdns_and_reverse_lookups_are_pruned_from_the_dns_source(self, alias):
+        """.local and .arpa can never match a public registrable domain, so they are
+        pruned at the source rather than rejected one row at a time by the CASE."""
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert "NOT LIKE '%.local%'" in body
+        assert "NOT LIKE '%.arpa%'" in body
+
+    @pytest.mark.parametrize("alias,col", [("ai", "ai_tools"),
+                                           ("sec", "security_tools")])
+    def test_dns_absent_still_populates_from_sni_alone(self, alias, col):
+        """A catalog without `dns` must degrade to the SNI-only behaviour, not drop the
+        column and not build a CTAS that references a missing table."""
+        cat = _profiling_catalog()
+        del cat["dns"]
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        assert f"{DB}.dns" not in sql
+        assert col in sql
+        body = _cte(sql, alias)
+        assert f"{DB}.ssl" in body
+        assert "UNION ALL" not in body, "no second source to union"
+
+
+class TestObservedHostnamesFallsBack:
+    """Round 2's core bug: observed_hostnames read known_names ALONE, so it came back
+    empty for hosts that plainly have a name. Measured on the spec's cited host
+    10.220.198.27: known_names 0 rows, but dhcp.host_name = 'iPhone' (36 rows) and
+    2,506 mDNS .local rows. Verified against live data after the fix, that host now
+    reads 'iPhone,phy9v452cw,wn29j0603l'."""
+
+    def test_dhcp_host_name_is_a_source(self):
+        kn = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kn")
+        assert f"{DB}.dhcp" in kn
+        assert "assigned_addr ip" in kn, "dhcp must be keyed by the leased address"
+
+    def test_mdns_instance_names_are_a_source(self):
+        kn = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kn")
+        assert f"{DB}.dns" in kn
+        assert "local" in kn
+
+    def test_a_bare_service_type_contributes_no_hostname(self):
+        """'_companion-link._tcp.local' is a browse query on 1,903 in-scope IPs and is
+        not a hostname. The same structural rule owner_name uses excludes it."""
+        kn = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kn")
+        assert "[^_.][^.]*" in kn, "bare service types would become hostnames"
+        assert "NOT LIKE '%._sub.%'" in kn
+
+    def test_known_names_still_leads_when_present(self):
+        """A self-reported hostname is the most direct claim, so it must survive the
+        SLICE cap even on a host with dozens of mDNS instances."""
+        kn = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kn")
+        assert "1 rank, hostname" in kn
+        assert "ORDER BY rank, n DESC" in kn
+
+    def test_the_sources_are_unioned_not_joined(self):
+        """A join would multiply dhcp leases by mDNS records and drop hosts in only
+        one source. dhcp alone reaches hosts known_names never saw."""
+        kn = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kn")
+        assert "UNION ALL" in kn
+        assert " JOIN " not in kn
+
+    def test_it_survives_losing_known_names(self):
+        cat = _profiling_catalog()
+        del cat["known_names"]
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        kn = _cte(sql, "kn")
+        assert f"{DB}.known_names" not in sql
+        assert f"{DB}.dhcp" in kn, "the fallback must still populate the column"
+
+    def test_the_list_is_capped(self):
+        kn = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kn")
+        assert f", 1, {ec._TOP_N})" in kn
+
+
+class TestAnnouncedDomainsIncludesServiceTypes:
+    """announced_domains read known_domains ALONE and was empty for the same reason.
+    The mDNS SERVICE TYPES a host browses are the fallback: '_rdlink' and
+    '_companion-link' say "this host speaks Apple Continuity", which is exactly the
+    device-linking signal the column is for. Measured in-scope on dt=2026-08-01:
+    _companion-link 826 hosts, _rdlink 662, _googlecast 608, _airplay 366."""
+
+    def test_mdns_is_a_source(self):
+        kdom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kdom")
+        assert f"{DB}.dns" in kdom
+        assert "local" in kdom
+
+    def test_a_bare_service_type_IS_a_valid_value_here(self):
+        """The rule that is the OPPOSITE of owner_name's, and the one thing easiest to
+        get wrong. For owner_name a bare '_airplay._tcp.local' names NOBODY and is
+        refused structurally. Here it is the value itself -- it says the host speaks
+        AirPlay. So this CTE must NOT carry the instance-name requirement."""
+        kdom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kdom")
+        assert "[^_.][^.]*" not in kdom, (
+            "the instance-name rule leaked in from owner_name and would drop every "
+            "bare service type, which is the whole signal"
+        )
+        assert "(_[a-z0-9-]+)" in kdom, "the service type is not being extracted"
+
+    def test_subtype_registrations_are_still_excluded(self):
+        """'._sub.' records are subtype registrations that name nothing: 38,023 of the
+        in-scope .local rows."""
+        kdom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kdom")
+        assert "NOT LIKE '%._sub.%'" in kdom
+
+    def test_the_dns_sd_meta_query_is_excluded(self):
+        """'_services._dns-sd._udp.local' is the DNS-SD meta-query -- "list every
+        service type on this link". EVERY mDNS speaker emits it, so the service-type
+        regex pulls a bogus '_dns-sd' out of it that would rank at or near the top on
+        nearly every host and push the real _companion-link/_rdlink pairing signal out
+        of the TOP_N slice. It names no service the host actually speaks."""
+        kdom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kdom")
+        assert "_dns-sd" in kdom, "the meta-query is not filtered at all"
+        assert "NOT REGEXP_LIKE" in kdom
+
+    @pytest.mark.parametrize("query,expected", [
+        # The meta-query must yield nothing...
+        ("_services._dns-sd._udp.local", None),
+        ("_services._dns-sd._udp.local.", None),
+        # ...while every real pairing signal survives.
+        ("_companion-link._tcp.local", "_companion-link"),
+        ("f4a45c5b-1234._companion-link._tcp.local.", "_companion-link"),
+        ("_rdlink._tcp.local", "_rdlink"),
+        ("_airplay._tcp.local", "_airplay"),
+        ("_googlecast._tcp.local", "_googlecast"),
+        ("_sleep-proxy._udp.local", "_sleep-proxy"),
+    ])
+    def test_the_extraction_keeps_pairing_signals_and_drops_the_meta_query(
+            self, query, expected):
+        """Reimplements the shipped filter+regex in Python. The SQL is asserted to
+        carry the same two clauses by the test above; this pins the SEMANTICS, which a
+        substring assertion on generated SQL cannot."""
+        excluded = re.search(r"_dns-sd\._(?:tcp|udp)\.local\.?$", query.lower())
+        m = re.search(r"(_[a-z0-9-]+)\._(?:tcp|udp)\.local\.?$", query.lower())
+        got = None if excluded else (m.group(1) if m else None)
+        assert got == expected
+
+    def test_known_domains_still_leads_when_present(self):
+        kdom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kdom")
+        assert "1 rank, domain" in kdom
+        assert "ORDER BY rank, n DESC" in kdom
+
+    def test_the_sources_are_unioned_not_joined(self):
+        kdom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kdom")
+        assert "UNION ALL" in kdom
+        assert " JOIN " not in kdom
+
+    def test_it_survives_losing_known_domains(self):
+        cat = _profiling_catalog()
+        del cat["known_domains"]
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        assert f"{DB}.known_domains" not in sql
+        assert f"{DB}.dns" in _cte(sql, "kdom")
+
+    def test_the_list_is_capped(self):
+        kdom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "kdom")
+        assert f", 1, {ec._TOP_N})" in kdom
+
+
+class TestOwnerNameIsUnchangedByTheFallbacks:
+    """Round 2 added a MORE PERMISSIVE mDNS read for announced_domains, one CTE away
+    from owner_name's deliberately strict one. Loosening owner_name's rules is the
+    regression that would put a staffer's name on up to 60 strangers, so these gates
+    assert the two rules did not bleed together."""
+
+    def test_a_bare_service_type_still_yields_no_owner_name(self):
+        """The exact case announced_domains now ACCEPTS and owner_name must still
+        REFUSE. Same raw record, opposite verdicts, on purpose."""
+        for q in ("_companion-link._tcp.local", "_rdlink._tcp.local",
+                  "_airplay._tcp.local", "_googlecast._tcp.local"):
+            assert not _is_instance_named(q), q
+            assert _owner_emitted(q.split(".")[0], 1, query=q) is None, q
+
+    def test_the_rarity_ceiling_is_untouched(self):
+        assert ec._OWNER_MAX_IPS == 10
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert f"r.nip <= {ec._OWNER_MAX_IPS}" in own
+        assert f"rs.snip <= {ec._OWNER_MAX_IPS}" in own
+
+    def test_the_instance_name_requirement_is_untouched(self):
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert "[^_.][^.]*" in own
+        assert "NOT LIKE '%._sub.%'" in own
+
+    def test_owner_name_reads_no_new_source(self):
+        """dhcp is still corroboration ONLY. Promoting it to a naming source would
+        emit an owner for every DHCP hostname, ungated."""
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert "'mdns' src" in own and "'known_names' src" in own
+        assert "'dhcp' src" not in own
+
+    def test_the_stopword_list_is_untouched(self):
+        for w in ("conference", "apple tv", "chromecast", "printer", "guest"):
+            assert w in ec._OWNER_STOPWORDS, w
