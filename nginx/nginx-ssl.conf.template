@@ -42,8 +42,15 @@ http {
         136.38.201.241/32 1;  # Spicer2
         204.228.156.49/32 1;  # klipper
         69.8.253.15/32    1;
-        10.20.0.0/16      1;  # VPC (health checks, container-to-nginx)
+        10.20.0.0/16      1;  # VPC
         127.0.0.1/32      1;
+        # Docker's userland port-proxy SNATs host-local traffic (the deploy's
+        # https://127.0.0.1/health check, certbot) to the bridge GATEWAY, so
+        # nginx sees 172.18.0.1 — not 127.0.0.1. Without this the post-deploy
+        # health check 403s and every deploy fails. Gateways only, not the whole
+        # /16: containers themselves must still present the secret.
+        172.18.0.1/32     1;  # app_default gateway (compose)
+        172.17.0.1/32     1;  # default bridge gateway
     }
 
     map "$direct_trusted:$http_x_origin_secret" $origin_denied {
