@@ -126,10 +126,44 @@ async def te_get(client: httpx.AsyncClient, path: str, params: dict[str, Any] | 
     return resp.json()
 
 
+TE_CACHE_TTL_SECONDS = float(os.getenv("TE_CACHE_TTL_SECONDS", "30.0"))
+_te_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _cache_get(key: str, client: Any = None) -> Any | None:
+    if TE_CACHE_TTL_SECONDS <= 0:
+        return None
+    prefix = "" if isinstance(client, httpx.AsyncClient) else f"{id(client)}:"
+    entry = _te_cache.get(f"{prefix}{key}")
+    if entry is None:
+        return None
+    expires_at, value = entry
+    if time.monotonic() >= expires_at:
+        _te_cache.pop(f"{prefix}{key}", None)
+        return None
+    return value
+
+
+def _cache_put(key: str, value: Any, client: Any = None) -> None:
+    if TE_CACHE_TTL_SECONDS <= 0:
+        return
+    prefix = "" if isinstance(client, httpx.AsyncClient) else f"{id(client)}:"
+    _te_cache[f"{prefix}{key}"] = (time.monotonic() + TE_CACHE_TTL_SECONDS, value)
+    if len(_te_cache) > 500:
+        oldest_keys = list(_te_cache.keys())[:200]
+        for k in oldest_keys:
+            _te_cache.pop(k, None)
+
+
 async def fetch_alerts(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    cached = _cache_get("alerts", client)
+    if cached is not None:
+        return cached
     try:
         data = await te_get(client, "/alerts", params={"state": "active"})
-        return data.get("alerts") or data.get("items") or []
+        alerts = data.get("alerts") or data.get("items") or []
+        _cache_put("alerts", alerts, client)
+        return alerts
     except Exception as exc:
         logger.warning("fetch_alerts failed: %s", exc)
         return []
@@ -145,6 +179,9 @@ async def fetch_all_tests(client: httpx.AsyncClient) -> list[dict[str, Any]] | N
     inventory fetch itself FAILED (auth 401/expiry, 403 wrong account group, 5xx,
     network/timeout). Callers MUST distinguish these: None is a dead monitoring
     feed, not an all-clear. Do NOT collapse it back to []."""
+    cached = _cache_get("all_tests", client)
+    if cached is not None:
+        return cached
     try:
         data = await te_get(client, "/tests")
         tests = data.get("tests") or data.get("items") or []
@@ -160,7 +197,9 @@ async def fetch_all_tests(client: httpx.AsyncClient) -> list[dict[str, Any]] | N
             cursor = nd.get("_links", {}).get("next", {}).get("href")
             loops += 1
         # Only enabled tests run; disabled tests return empty results forever
-        return [t for t in tests if t.get("enabled", True)]
+        enabled = [t for t in tests if t.get("enabled", True)]
+        _cache_put("all_tests", enabled, client)
+        return enabled
     except Exception as exc:
         # Signal FAILURE (not "0 tests") so the roll-up reports monitoring
         # unavailable rather than a false all-clear on a dead feed.
@@ -172,6 +211,10 @@ async def fetch_latest_results(client: httpx.AsyncClient, test_id: str | int, te
     """Pull the most-recent results for a single test. Picks the right
     layer endpoint based on test type. Returns {} on any error so
     aggregation continues for remaining tests."""
+    cache_key = f"result:{test_id}:{test_type}"
+    cached = _cache_get(cache_key, client)
+    if cached is not None:
+        return cached
     t = (test_type or "").lower()
     candidates: list[str] = []
     if "http" in t or "web" in t or "page-load" in t:
@@ -201,6 +244,7 @@ async def fetch_latest_results(client: httpx.AsyncClient, test_id: str | int, te
             data = await te_get(client, path, params={"window": "1h"})
             if data and data.get("results"):
                 data["_layer"] = path.rsplit("/", 1)[-1]
+                _cache_put(cache_key, data, client)
                 return data
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (404, 400):
@@ -210,6 +254,7 @@ async def fetch_latest_results(client: httpx.AsyncClient, test_id: str | int, te
         except Exception as exc:
             logger.debug("fetch_latest_results %s failed: %s", path, exc)
             continue
+    _cache_put(cache_key, {}, client)
     return {}
 
 

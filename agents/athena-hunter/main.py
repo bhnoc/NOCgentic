@@ -727,8 +727,8 @@ async def gather_athena_context(
             "errors": [],
         }
 
-        # Execute each query
-        for i, sql in enumerate(sql_queries):
+        # Execute all queries concurrently
+        async def _run_one(i: int, sql: str) -> dict[str, Any]:
             with tracer.start_as_current_span(f"athena_hunter.execute_sql_{i}") as qspan:
                 qspan.set_attribute("sql.query", sql[:500])
                 # TOOL invocation against the Athena data lake — drives the
@@ -753,32 +753,41 @@ async def gather_athena_context(
                         _athena_query_duration.record(meta["execution_time_ms"])
                         _athena_bytes_scanned.record(meta["data_scanned_bytes"])
 
-                    ctx["query_results"].append({
-                        "sql": sql,
-                        "rows": rows[:100],
-                        "row_count": len(rows),
-                        "execution_time_ms": meta["execution_time_ms"],
-                        "data_scanned_mb": meta["data_scanned_mb"],
-                    })
-                    ctx["total_rows"] += len(rows)
-                    ctx["total_bytes_scanned"] += meta["data_scanned_bytes"]
-                    ctx["total_query_time_ms"] += meta["execution_time_ms"]
-
-                    # Cap detection: if the query hit its LIMIT, len(rows) is a
-                    # sample floor, not a true count. Flag it so the answer says
-                    # "at least N (sampled)" rather than "N total".
-                    _lim = re.search(r"(?i)\bLIMIT\s+(\d+)", sql)
-                    if _lim and len(rows) >= int(_lim.group(1)):
-                        ctx["capped"] = True
-
                     logger.info(
                         "Athena query %d: %d rows, %dms, %.1fMB scanned",
                         i, len(rows), meta["execution_time_ms"], meta["data_scanned_mb"],
                     )
+                    return {"sql": sql, "rows": rows, "meta": meta}
                 except Exception as exc:
                     qspan.set_attribute("error", str(exc))
                     logger.warning("Athena query %d failed: %s", i, exc)
-                    ctx["errors"].append({"sql": sql, "error": str(exc)})
+                    return {"sql": sql, "error": str(exc)}
+
+        results = await asyncio.gather(*[_run_one(i, sql) for i, sql in enumerate(sql_queries)])
+        for res in results:
+            if "error" in res:
+                ctx["errors"].append({"sql": res["sql"], "error": res["error"]})
+                continue
+            sql = res["sql"]
+            rows = res["rows"]
+            meta = res["meta"]
+            ctx["query_results"].append({
+                "sql": sql,
+                "rows": rows[:100],
+                "row_count": len(rows),
+                "execution_time_ms": meta["execution_time_ms"],
+                "data_scanned_mb": meta["data_scanned_mb"],
+            })
+            ctx["total_rows"] += len(rows)
+            ctx["total_bytes_scanned"] += meta["data_scanned_bytes"]
+            ctx["total_query_time_ms"] += meta["execution_time_ms"]
+
+            # Cap detection: if the query hit its LIMIT, len(rows) is a
+            # sample floor, not a true count. Flag it so the answer says
+            # "at least N (sampled)" rather than "N total".
+            _lim = re.search(r"(?i)\bLIMIT\s+(\d+)", sql)
+            if _lim and len(rows) >= int(_lim.group(1)):
+                ctx["capped"] = True
 
         span.set_attribute("context.total_rows", ctx["total_rows"])
         span.set_attribute("context.total_queries", len(ctx["query_results"]))
