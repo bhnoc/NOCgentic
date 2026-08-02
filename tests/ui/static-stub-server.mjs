@@ -43,6 +43,18 @@ const server = createServer(async (req, res) => {
     return res.end(await readFile(STATIC));
   }
 
+  // The UI's CSS and JS were inline in index.html until they were split into
+  // app.css / app.js. This stub served only index.html, so app.js 404'd, nothing
+  // defined fillQuery/sendQuery, and every behavioural assertion failed with
+  // "fillQuery is not defined" -- which looks like the page is broken rather than
+  // like the harness is missing a route. Serve the sibling assets the page asks for.
+  const asset = { '/app.js': 'text/javascript', '/app.css': 'text/css' }[url.pathname];
+  if (asset) {
+    res.writeHead(200, { 'content-type': asset });
+    return res.end(await readFile(
+      new URL(`../../packages/web-server/static${url.pathname}`, import.meta.url)));
+  }
+
   res.writeHead(404, { 'content-type': 'application/json' });
   res.end('{}');
 });
