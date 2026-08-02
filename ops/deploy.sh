@@ -58,7 +58,8 @@ fi
 
 # Rebuild changed images and restart. --remove-orphans cleans up any renamed services.
 echo "==> Bringing up the compose stack"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build --remove-orphans
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build --remove-orphans --force-recreate nginx
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T nginx nginx -s reload || true
 
 # Prune dangling build layers so the box doesn't fill up over many deploys.
 docker image prune -f >/dev/null 2>&1 || true
