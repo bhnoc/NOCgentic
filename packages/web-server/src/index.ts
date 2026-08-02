@@ -20,7 +20,12 @@ const wsClients = new Set<any>();
 
 const SESSION_COOKIE = 'bh_sid';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
-const ALLOWED_WS_ORIGIN = process.env.ALLOWED_ORIGIN ?? 'https://ng.bhnoc.com';
+// Comma-separated: the app is reachable on more than one hostname (ng.bhnoc.com
+// direct, plus a token-gated CloudFront alias for remote users on roaming IPs).
+const ALLOWED_WS_ORIGINS = (process.env.ALLOWED_ORIGIN ?? 'https://ng.bhnoc.com')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
 
 async function main() {
   // trustProxy honors X-Forwarded-For from nginx so request.ip is the real client.
@@ -94,7 +99,7 @@ async function main() {
     // Reject cross-site WebSocket handshakes. Same-origin and cookie-less clients
     // (curl, no Origin header) are allowed; a foreign Origin is closed with 1008.
     const origin = request.headers.origin;
-    if (origin && origin !== ALLOWED_WS_ORIGIN) {
+    if (origin && !ALLOWED_WS_ORIGINS.includes(origin)) {
       socket.close(1008, 'origin not allowed');
       return;
     }
