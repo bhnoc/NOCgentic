@@ -623,6 +623,154 @@ class TestOrgInfraLabelDenylist:
         assert "'^[0-9]+$'" in org
 
 
+class TestOrgTenantShareCeiling:
+    """A denylist cannot win alone, and this is what it missed.
+
+    Measured on dt=2026-08-01: the top slack label-1 values were `edgeapi` (463 hosts,
+    93% of the family) and `wss-primary` (356, 71%) -- Slack-desktop infrastructure in
+    no denylist -- outranking the REAL tenants blackhatnoc (98, 20%) and specterops
+    (18, 4%). org_tenant is MAX_BY(tenant, n), so the infrastructure host WON and
+    hundreds of hosts were attributed to an employer named "edgeapi".
+
+    The structural insight: a shared endpoint is shared BY DEFINITION, so it trends
+    toward 100% of its family's hosts, while a real employer only covers its own staff.
+    """
+
+    def test_the_ceiling_sits_in_the_measured_gap(self):
+        """Above the largest true tenant (blackhatnoc, ~20%) and below the smallest
+        measured infra label (files, 51%). A threshold tuned to the edge would be
+        one new deployment away from being wrong."""
+        assert 20 < ec._TENANT_MAX_FAMILY_SHARE < 51
+
+    def test_the_ceiling_is_applied_in_the_sql(self):
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        assert f"<= {ec._TENANT_MAX_FAMILY_SHARE}" in org
+        assert "label_hosts" in org and "family_hosts" in org
+
+    def test_the_denominator_is_distinct_hosts_not_rows(self):
+        """THE BUG THIS GATE EXISTS FOR. One host contributing several labels appears
+        once per label, so slack's 500 hosts produce 2,275 (host,label) rows. Measured
+        against the ROW count, edgeapi scored 463/2275 = 20% and sailed under a 25%
+        ceiling; against distinct hosts it is 463/500 = 93% and is refused. The gate
+        was silently useless until the denominator was fixed."""
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        assert "DENSE_RANK() OVER (PARTITION BY kind ORDER BY ip)" in org, (
+            "family_hosts must count distinct ips, not rows")
+        assert "MAX(ip_rank) OVER (PARTITION BY kind) family_hosts" in org
+
+    def test_the_share_is_computed_per_family_not_globally(self):
+        """A label's reach only means something relative to ITS OWN family: 50 hosts is
+        most of okta's 75 but a fraction of sharepoint's 506."""
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        assert "PARTITION BY kind, raw_tenant" in org
+        assert "PARTITION BY kind)" in org
+
+    @pytest.mark.parametrize("label", [
+        "us05web", "us04web", "us02web", "eu01web",   # zoom's numbered join pool
+        "194775-ipv4v6fdse",                          # sharepoint machine id
+        "api-6ff79abe",                               # slack machine id
+        "us1", "ap2", "gw01",                         # bare region/shard ids
+    ])
+    def test_infrastructure_shapes_are_refused_structurally(self, label):
+        """These cannot be a literal list: zoom keeps adding regions, so every new
+        us<NN>web would silently become an "employer" until somebody noticed."""
+        assert any(re.search(p, label) for p in ec._INFRA_PATTERNS), label
+
+    def test_the_patterns_reach_the_generated_sql(self):
+        """Asserting on the CONSTANT is not enough -- it passes whether or not
+        _not_infra actually emits the patterns. Caught by mutation: removing them from
+        _not_infra left the whole suite green."""
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        for p in ec._INFRA_PATTERNS:
+            assert p in org, f"pattern {p} is never applied in SQL"
+        assert org.count("NOT REGEXP_LIKE(LOWER(") >= len(ec._INFRA_PATTERNS)
+
+    @pytest.mark.parametrize("tenant", [
+        # Every one of these is a REAL organisation measured on this network.
+        "blackhatnoc", "specterops", "corelight", "paloaltonetworks", "informaplc",
+        "informaplc-my", "spectertrn", "gtkcybercommunity", "freemanco", "splunk",
+        "swapcard", "crowdstrike", "se-training-bh-2026", "mgmresorts", "experian",
+        "tenet", "packsize", "cisco-my",
+    ])
+    def test_real_tenants_survive_every_gate(self, tenant):
+        """The cost of over-filtering is losing the employer attribution entirely, so
+        the patterns and the denylist are both checked against measured true positives.
+        `informaplc-my` and `cisco-my` matter: sharepoint's -my suffix is a PERSONAL
+        OneDrive site and still names the employer."""
+        assert tenant not in ec._INFRA_LABELS, f"{tenant} is denylisted"
+        for p in ec._INFRA_PATTERNS:
+            assert not re.search(p, tenant), f"{tenant} matches infra pattern {p}"
+
+    @pytest.mark.parametrize("label", [
+        "edgeapi", "wss-primary", "wss-backup", "wss-mobile",
+        "zpns", "mpapis", "xmppapi", "file-paa", "contactservice", "ark", "stderr-my",
+    ])
+    def test_long_tail_infra_below_the_ceiling_is_denylisted(self, label):
+        """These cover FEWER hosts than the largest real tenant (wss-mobile 14%,
+        ark 21% vs blackhatnoc ~20%), so no ceiling separates them and the share gate
+        genuinely cannot reach them. Naming them is the right tool."""
+        assert label in ec._INFRA_LABELS
+
+
+class TestAutodiscoverIsNotShadowed:
+    """_ORG_SNI is a FIRST-MATCH CASE and autodiscover is the only PREFIX rule in a
+    table of suffix rules, so the two overlap. When autodiscover sat LAST,
+    autodiscover.acme.onmicrosoft.com matched `entra` first, its _TENANT_OVERRIDE never
+    fired, and the tenant read the literal word "autodiscover" -> denylisted -> NULL.
+    The one SNI shape that names the employer outright produced nothing."""
+
+    def test_autodiscover_is_evaluated_first(self):
+        kinds = [k for k, _, _ in ec._ORG_SNI]
+        assert kinds[0] == "autodiscover", (
+            f"autodiscover is at index {kinds.index('autodiscover')}; any suffix rule "
+            "ahead of it shadows the prefix rule")
+
+    def test_it_precedes_every_family_it_can_overlap(self):
+        """Concretely: entra owns onmicrosoft.com and o365 owns sharepoint.com, both of
+        which can carry an autodiscover. prefix."""
+        kinds = [k for k, _, _ in ec._ORG_SNI]
+        for overlapping in ("entra", "o365"):
+            assert kinds.index("autodiscover") < kinds.index(overlapping)
+
+    def test_the_override_is_reachable_in_the_generated_sql(self):
+        """Both the kind CASE and the tenant CASE are emitted in table order, so
+        autodiscover's arm must be the FIRST arm of each. Checking the tenant CASE
+        specifically: that is the one whose arms carry _TENANT vs the override, and it
+        only contains the naming families."""
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        override = ec._TENANT_OVERRIDE["autodiscover"]
+        assert override in org
+        # The tenant CASE is the block whose arms are 'THEN <tenant expr>'. Its first
+        # arm must be autodiscover's, so the override precedes every plain _TENANT arm.
+        tenant_case = org[org.index("END kind,"):org.index("END raw_tenant")]
+        assert override in tenant_case, "the override is not in the tenant CASE"
+        assert tenant_case.index(override) < tenant_case.index(ec._TENANT), (
+            "a plain label-1 arm precedes autodiscover's override, so it never fires")
+
+
+class TestPartitionsArePinned:
+    """The stable `asset_classification` / `entity_context` names are VIEWS that UNION
+    every retained day, not pointers at today. Reading them without a dt filter silently
+    mixes days: measured 108,686 asset_classification rows on 2026-08-01 and 90,889 on
+    08-02, and 108,835 of 138,461 entity_context ips appear on BOTH days."""
+
+    def test_the_ac_cte_pins_the_partition(self):
+        """It was the ONLY cte of 22 in this file without a dt filter, so
+        SUM(connections)/mb_in/mb_out became multi-day totals stamped with one date."""
+        ac = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "ac")
+        assert f"dt = '{DATE}'" in ac, "asset_classification is read across every day"
+
+    def test_every_cte_that_reads_a_table_pins_the_partition(self):
+        """Generalised so the next CTE added cannot repeat it."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        for alias in ("ac", "al", "ku", "ks", "kn", "kdom", "ul", "org", "ai", "sec",
+                      "own", "home", "idom", "mtls", "sw"):
+            body = _cte(sql, alias)
+            if f"{DB}." not in body:
+                continue
+            assert f"dt = '{DATE}'" in body, f"{alias} scans every partition"
+
+
 class TestOrgBroadening:
     """okta+sharepoint alone reached 806 hosts. These families were each measured
     present on dt=2026-08-01 before being added."""

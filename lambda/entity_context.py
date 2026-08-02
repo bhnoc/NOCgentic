@@ -44,6 +44,14 @@ _TOP_N = 6
 # collaboration hostname IS the employer's name, whereas an EDR/MDM/SASE endpoint
 # says someone's IT owns the box without naming the company, so it corroborates.
 _ORG_SNI: tuple[tuple[str, bool, str], ...] = (
+    # FIRST, because this is a first-match CASE and `autodiscover` is a PREFIX rule
+    # while every other arm is a suffix rule -- the two overlap. When this sat last,
+    # autodiscover.acme.onmicrosoft.com matched `entra` (index 2) and its
+    # _TENANT_OVERRIDE never fired, so the tenant read 'autodiscover' -> denylisted ->
+    # NULL, losing the one shape that names the employer outright. Real Azure AD SNIs
+    # of the same family (lyncdiscover./enterpriseregistration.<corp>.onmicrosoft.com)
+    # still fall through to entra and are handled by the label-1 rule.
+    ("autodiscover", True, "sni LIKE 'autodiscover.%'"),
     ("okta", True, "(sni LIKE '%.okta.com' OR sni LIKE '%.oktapreview.com'"
                    " OR sni LIKE '%.okta-emea.com')"),
     ("o365", True, "sni LIKE '%.sharepoint.com'"),
@@ -72,8 +80,6 @@ _ORG_SNI: tuple[tuple[str, bool, str], ...] = (
     # 268 hosts but only 6 distinct SNIs, so this is one shared Google endpoint that
     # every Workspace tenant hits. It corroborates managed-ness and names no company.
     ("gworkspace", False, "(sni LIKE '%.google.com' AND sni LIKE '%workspace%')"),
-    # The company is what FOLLOWS 'autodiscover.', so label 1 is never the tenant.
-    ("autodiscover", True, "sni LIKE 'autodiscover.%'"),
 )
 
 def _dom(*domains: str) -> str:
@@ -118,7 +124,54 @@ _INFRA_LABELS: tuple[str, ...] = (
     "dl", "ota", "tenant", "default", "test", "dev", "prod", "stage", "staging",
     "global", "edge", "proxy", "gw", "ns1", "ns2", "host", "server", "cloud",
     "telemetry", "asynccomm", "endpointhealth", "devicemanagement", "azureauth",
+    # Long-tail infrastructure the share gate CANNOT reach, because each covers fewer
+    # hosts than the largest real tenant does. Measured on dt=2026-08-01 as a share of
+    # its family: wss-mobile 14%, us05web/us04web 16%, ark 21% -- all under
+    # blackhatnoc's 20-ish%, so no ceiling separates them. Named here instead.
+    # slack: the wss-* websocket tier. zoom: the us<NN>web meeting-join pool, zpns
+    # (push), mpapis, xmppapi, file-paa, contactservice, ark.
+    "wss-primary", "wss-backup", "wss-mobile", "edgeapi", "join",
+    "zpns", "mpapis", "xmppapi", "file-paa", "contactservice", "ark",
+    # us02web/us04web/us05web/us06web are handled by _INFRA_PATTERNS, not listed:
+    # Zoom keeps adding regions and a literal list would go stale silently.
+    # sharepoint's -my suffix is a PERSONAL OneDrive site (<tenant>-my), which does
+    # name the employer, so it is deliberately NOT listed. stderr-my is not a company.
+    "stderr", "stderr-my",
 )
+
+# Label SHAPES that are never a company, for the families that number their regions.
+# A literal list cannot hold these: zoom already runs us02web/us04web/us05web/us06web
+# and adds regions over time, so each new one would silently become an "employer" until
+# somebody noticed. The measured examples are the numbered meeting-join pool and the
+# machine-generated ids seen in sharepoint (`194775-ipv4v6fdse`) and slack
+# (`api-6ff79abe`) -- a hex blob names nobody.
+_INFRA_PATTERNS: tuple[str, ...] = (
+    r'^[a-z]{2}[0-9]+web$',          # us05web, eu01web
+    r'^[0-9]+-[a-z0-9]+$',           # 194775-ipv4v6fdse
+    r'^[a-z]+-[0-9a-f]{8,}$',        # api-6ff79abe
+    r'^[a-z]{1,3}[0-9]{1,3}$',       # us1, ap2, gw01
+)
+
+# A tenant label may not be shared by more than this share of its family's hosts.
+#
+# THE DENYLIST ABOVE CANNOT WIN ALONE, and this is the measured proof: on
+# dt=2026-08-01 the top slack label-1 values were `edgeapi` (463 hosts, 93% of the
+# family) and `wss-primary` (356, 71%) -- Slack-desktop infrastructure that is in no
+# denylist, outranking the REAL tenants blackhatnoc (98, 20%) and specterops (18, 4%).
+# Because org_tenant is MAX_BY(tenant, n), the infrastructure host WON: hundreds of
+# hosts were attributed to an employer named "edgeapi".
+#
+# The structural insight is that a shared endpoint is shared BY DEFINITION -- every
+# client of the family reaches it, so it trends toward 100% of the family's hosts,
+# while a real employer only ever covers its own staff. 25% is set above the largest
+# measured true tenant (blackhatnoc at 20%) and below the smallest measured infra
+# label (files at 51%), so the gap it sits in is wide rather than tuned to the edge.
+#
+# This is the same shape as _OWNER_MAX_IPS: a label held by too many hosts does not
+# identify anyone, and the ceiling is what turns a guess into a claim. It does NOT
+# replace the denylist -- okta puts `login` and the real tenant `paloaltonetworks` at
+# an identical 29% share, so neither test subsumes the other and both must pass.
+_TENANT_MAX_FAMILY_SHARE = 25
 
 # An owner_name may only be emitted when its label is this rare or rarer, counted in
 # distinct IPs on the day. MEASURED, and the whole point of the gate: person-looking
@@ -193,8 +246,12 @@ def _not_appliance(label_col: str) -> str:
 
 
 def _not_infra(expr: str) -> str:
+    """The label is neither a known infrastructure word nor an infrastructure SHAPE."""
     inner = ", ".join(f"'{w}'" for w in _INFRA_LABELS)
-    return f"LOWER({expr}) NOT IN ({inner})"
+    pats = " AND ".join(
+        f"NOT REGEXP_LIKE(LOWER({expr}), '{p}')" for p in _INFRA_PATTERNS
+    )
+    return f"(LOWER({expr}) NOT IN ({inner}) AND {pats})"
 
 
 def _dominant(database: str, date_str: str, table: str, value_col: str,
@@ -316,7 +373,14 @@ def build_entity_context_sql(database: str, date_str: str, tables: dict[str, set
     parts: list[tuple[str, str]] = []
 
     if have("asset_classification") or have("asset_classification_" + date_str.replace("-", "_")):
-        # The stable view is rebuilt to point at today's partition, so read that.
+        # PIN THE PARTITION. The stable `asset_classification` name is a VIEW that
+        # UNIONs every retained day, not a pointer at today -- it was widened so that a
+        # `WHERE dt = <older day>` stopped returning zero rows, and this CTE was the one
+        # place of 22 in this file that never filtered dt. So SUM(connections)/mb_in/
+        # mb_out silently became multi-day totals, and ARBITRARY(os_name)/MIN(first_seen)
+        # could come from any retained day, all of it stamped with THIS date_str.
+        # Measured: 108,686 rows on 2026-08-01 and 90,889 on 08-02, both summed into one
+        # row per host. Every other source here is per-day, so this has to be too.
         ctes.append(f"""ac AS (
   SELECT ip,
          ARBITRARY(mac) mac, ARBITRARY(vendor_mac) vendor_mac,
@@ -329,6 +393,7 @@ def build_entity_context_sql(database: str, date_str: str, tables: dict[str, set
          MIN(first_seen) first_seen, MAX(last_seen) last_seen,
          ARBITRARY(confidence) id_confidence
   FROM {database}.asset_classification
+  WHERE dt = '{date_str}'
   GROUP BY ip
 )""")
         parts.append(("ac", "ip"))
@@ -510,25 +575,58 @@ def build_entity_context_sql(database: str, date_str: str, tables: dict[str, set
     SELECT ip, kind, tenant, n,
            kind || ':' || COALESCE(tenant || '@', '') || sni ev
     FROM (
-      SELECT ip, kind, sni, COUNT(*) n,
+      -- Four gates, and all four must pass. The denylist and the share ceiling do NOT
+      -- subsume each other: okta puts `login` and the real tenant `paloaltonetworks`
+      -- at an identical 29% share, while `edgeapi` (93%) is in no denylist.
+      SELECT ip, kind, sni, n,
              CASE WHEN kind IN ({naming_kinds}) AND {_not_infra('raw_tenant')}
                        AND LENGTH(raw_tenant) >= 3
                        AND NOT REGEXP_LIKE(raw_tenant, '^[0-9]+$')
+                       AND 100.0 * label_hosts / family_hosts
+                           <= {_TENANT_MAX_FAMILY_SHARE}
                   THEN raw_tenant END tenant
       FROM (
-        SELECT id_orig_h ip, sni,
-               CASE {kind_case}
-               END kind,
-               CASE {tenant_case}
-               END raw_tenant
+        -- The share gate needs the label's reach across the WHOLE family, which no
+        -- single host's rows can show, so it is a window over the per-(host, label)
+        -- set rather than a second pass over ssl.
+        --
+        -- THE DENOMINATOR IS DISTINCT HOSTS, NOT ROWS, and getting that wrong makes the
+        -- gate silently useless: one host contributing several labels appears once per
+        -- label, so slack's 500 hosts produce 2,275 rows. Measured against the row
+        -- count, `edgeapi` scored 463/2275 = 20% and passed a 25% ceiling; against
+        -- distinct hosts it is 463/500 = 93% and is correctly refused. COUNT(DISTINCT)
+        -- is not a window function in Trino, so the host count comes from a
+        -- DENSE_RANK over ip within the family -- its maximum is the distinct-ip count.
+        SELECT ip, kind, sni, raw_tenant, n,
+               COUNT(*) OVER (PARTITION BY kind, raw_tenant) label_hosts,
+               MAX(ip_rank) OVER (PARTITION BY kind) family_hosts
         FROM (
-          SELECT id_orig_h, LOWER(server_name) sni
-          FROM {database}.ssl
-          WHERE dt = '{date_str}' AND id_orig_h IS NOT NULL
-            AND {_present('server_name')}
-        ) WHERE ({any_org})
-      ) WHERE kind IS NOT NULL
-      GROUP BY ip, kind, sni, raw_tenant
+          SELECT ip, kind, sni, raw_tenant, n,
+                 DENSE_RANK() OVER (PARTITION BY kind ORDER BY ip) ip_rank
+          FROM (
+            SELECT ip, kind, raw_tenant,
+                   ARBITRARY(sni) sni, SUM(n) n
+            FROM (
+              SELECT ip, kind, sni, raw_tenant, COUNT(*) n
+              FROM (
+                SELECT id_orig_h ip, sni,
+                       CASE {kind_case}
+                       END kind,
+                       CASE {tenant_case}
+                       END raw_tenant
+                FROM (
+                  SELECT id_orig_h, LOWER(server_name) sni
+                  FROM {database}.ssl
+                  WHERE dt = '{date_str}' AND id_orig_h IS NOT NULL
+                    AND {_present('server_name')}
+                ) WHERE ({any_org})
+              ) WHERE kind IS NOT NULL
+              GROUP BY ip, kind, sni, raw_tenant
+            )
+            GROUP BY ip, kind, raw_tenant
+          )
+        )
+      )
     )
   )
   GROUP BY ip

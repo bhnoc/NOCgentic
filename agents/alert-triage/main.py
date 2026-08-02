@@ -459,18 +459,32 @@ async def athena_entity_context(ips: list[str]) -> list[dict]:
     identity, accounts, exposure and alert history per host, so this is one cheap
     query instead of six.
 
-    Not partition-filtered: entity_context is a view over the current day's
-    materialized table, so it is already scoped to today.
+    ONE ROW PER IP, and that takes work: `entity_context` is a VIEW that UNIONs
+    EVERY retained daily partition, not just today's. Measured on the live catalog,
+    108,835 of 138,461 IPs appear on two days, so an unfiltered `ip IN (...)`
+    returned two rows per host that disagree with each other -- different hostname,
+    different alert_count -- and handed both to the LLM to reconcile. The docstring
+    here used to assert the view was current-day-only; it stopped being true when the
+    view was widened to fix a different bug (a dt filter for any day but the newest
+    returning zero rows).
+
+    The newest partition wins rather than summing: these are per-day observations of
+    one host, so a sum would double-count alert_count and session_count, and
+    hostname/os_name are not additive at all. Most recent is the honest answer to
+    "what IS this host".
     """
     if not ips:
         return []
     ip_list = ", ".join(f"'{sanitize_value(i)}'" for i in ips[:20])
+    cols = ("ip, hostname, os_name, device_type, org_name, vendor_mac, "
+            "mgmt_tooling, randomized_mac, observed_users, service_count, services, "
+            "alert_count, high_alert_count, session_count, network_name, room_name, "
+            "id_confidence")
     sql = (
-        "SELECT ip, hostname, os_name, device_type, org_name, vendor_mac, "
-        "mgmt_tooling, randomized_mac, observed_users, service_count, services, "
-        "alert_count, high_alert_count, session_count, network_name, room_name, "
-        "id_confidence "
+        f"SELECT {cols} FROM ("
+        f"SELECT {cols}, ROW_NUMBER() OVER (PARTITION BY ip ORDER BY dt DESC) rn "
         f"FROM entity_context WHERE ip IN ({ip_list})"
+        ") WHERE rn = 1"
     )
     return await _athena_query(sql, "entity_ctx")
 
