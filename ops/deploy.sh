@@ -8,6 +8,7 @@
 # It deliberately preserves the box-authoritative files that are NOT in git:
 #   .env .env.s3  (LLM + S3 + OTEL secrets, injected AWS creds)   node_modules/ venv/
 #   *.log *.pid  .git/   (and never touches /etc/letsencrypt, which nginx mounts)
+#   nginx/nginx-ssl.conf  (rendered below from its .template with ORIGIN_SECRET)
 #
 # Safe to run by hand on the box too:  APP_DIR=/opt/nocgentic/app bash ops/deploy.sh
 set -euo pipefail
@@ -32,6 +33,7 @@ rsync -a --delete \
   --exclude='venv/' \
   --exclude='.venv/' \
   --exclude='dist/' \
+  --exclude='nginx/nginx-ssl.conf' \
   --exclude='*.log' \
   --exclude='*.log.*' \
   --exclude='*.pid' \
@@ -55,6 +57,29 @@ if [ -f scripts/refresh-env-creds.sh ]; then
   echo "==> Refreshing AWS credentials from instance role"
   bash scripts/refresh-env-creds.sh "$ENV_FILE"
 fi
+
+# Render nginx-ssl.conf from its template, injecting ORIGIN_SECRET from .env.s3.
+# The rendered file is gitignored and rsync-excluded, so the secret never lands in
+# git and a deploy can't clobber it with a placeholder.
+echo "==> Rendering nginx config"
+ORIGIN_SECRET="$(grep -E '^ORIGIN_SECRET=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+if [ -z "$ORIGIN_SECRET" ]; then
+  echo "!! ORIGIN_SECRET is not set in $APP_DIR/$ENV_FILE. Without it the CloudFront" >&2
+  echo "   origin lock cannot be rendered, and the security group already admits the" >&2
+  echo "   whole shared CloudFront IP range — refusing to deploy an unprotected origin." >&2
+  exit 1
+fi
+python3 - "$ORIGIN_SECRET" <<'PY'
+import sys
+secret = sys.argv[1]
+src = 'nginx/nginx-ssl.conf.template'
+dst = 'nginx/nginx-ssl.conf'
+body = open(src).read()
+if '__ORIGIN_SECRET__' not in body:
+    sys.exit(f'{src} has no __ORIGIN_SECRET__ placeholder')
+open(dst, 'w').write(body.replace('__ORIGIN_SECRET__', secret))
+print(f'    rendered {dst}')
+PY
 
 # Rebuild changed images and restart. --remove-orphans cleans up any renamed services.
 echo "==> Bringing up the compose stack"

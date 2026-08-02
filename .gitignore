@@ -49,3 +49,7 @@ tests/python/.venv/
 bench/results/*.json
 
 bench/prompt_eval/results/*.json
+
+### rendered nginx config — generated from nginx-ssl.conf.template by ops/deploy.sh
+### with ORIGIN_SECRET injected from .env.s3. Never commit it (it holds the secret).
+nginx/nginx-ssl.conf

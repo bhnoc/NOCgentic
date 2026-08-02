@@ -25,6 +25,33 @@ http {
     # which forces re-resolution via the docker DNS on every request
     # (cached for `valid=10s`).
 
+    # ---- Origin protection for the CloudFront alias (ngremote.bhnoc.com) ----
+    # Clients on the Black Hat / operator allow-list reach us directly and are
+    # trusted by source IP. Everyone else arrives via CloudFront, whose whole
+    # origin-facing IP range is allowed to :443 by a security group — and that
+    # range is SHARED BY EVERY AWS CUSTOMER. So a request from it must also
+    # present the shared secret to prove it came through OUR distribution.
+    # Without this check, anyone's distribution can reach this origin.
+    geo $direct_trusted {
+        default 0;
+        69.8.253.0/24     1;  # Black Hat USA
+        66.205.200.64/29  1;  # L34n
+        136.36.99.230/32  1;  # John Gillis
+        136.59.5.6/32     1;  # James
+        208.93.179.62/32  1;  # Spicer
+        136.38.201.241/32 1;  # Spicer2
+        204.228.156.49/32 1;  # klipper
+        69.8.253.15/32    1;
+        10.20.0.0/16      1;  # VPC (health checks, container-to-nginx)
+        127.0.0.1/32      1;
+    }
+
+    map "$direct_trusted:$http_x_origin_secret" $origin_denied {
+        default                    1;
+        "~^1:"                     0;  # trusted source IP — no header needed
+        "0:__ORIGIN_SECRET__"      0;  # untrusted source — must present the secret
+    }
+
     # Redirect HTTP -> HTTPS
     server {
         listen 80;
@@ -44,6 +71,9 @@ http {
     server {
         listen 443 ssl;
         server_name _;
+
+        # Enforced on 443 only — port 80 must stay open for the ACME challenge.
+        if ($origin_denied) { return 403; }
 
         ssl_certificate     /etc/letsencrypt/live/current/fullchain.pem;
         ssl_certificate_key /etc/letsencrypt/live/current/privkey.pem;
