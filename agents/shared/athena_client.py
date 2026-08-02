@@ -68,7 +68,7 @@ _CACHE_ENABLED: bool = os.getenv("ATHENA_CACHE_ENABLED", "true").strip().lower()
 )
 _CACHE_TTL_SECONDS: float = float(os.getenv("ATHENA_CACHE_TTL_SECONDS", "300"))
 _CACHE_MAX_ENTRIES: int = int(os.getenv("ATHENA_CACHE_MAX_ENTRIES", "200"))
-_CACHE_HIT_DELAY_SECONDS: float = float(os.getenv("ATHENA_CACHE_HIT_DELAY_SECONDS", "1.5"))
+_CACHE_HIT_DELAY_SECONDS: float = float(os.getenv("ATHENA_CACHE_HIT_DELAY_SECONDS", "0.0"))
 
 # sql -> (expires_at_monotonic, rows, metadata). OrderedDict gives us cheap
 # oldest-first eviction (popitem(last=False)) once we exceed the size bound.
