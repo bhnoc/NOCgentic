@@ -275,29 +275,29 @@ Single-page app served from `packages/web-server/static/index.html`. Dark theme,
 ### 8.1 Environment Variables (.env on EC2)
 
 ```
-OPENROUTER_API_KEY=sk-or-v1-...         # Set ✅
-OPENSEARCH_INTERNAL_URL=http://opensearch:9200  # Docker internal
-OPENSEARCH_API_URL=https://<EC2-PUBLIC-IP>
-OPENSEARCH_API_KEY=                      # Optional (OpenSearch runs without auth internally)
+# Historical OpenSearch vars above are obsolete. Live stack uses `.env.s3` — see .env.example.
 PORT=3000
 NODE_ENV=production
 ORCHESTRATOR_URL=http://orchestrator:8001
-THREAT_HUNTER_URL=http://threat-hunter:8002
 ALERT_TRIAGE_URL=http://alert-triage:8003
+THOUSANDEYES_ANALYST_URL=http://thousandeyes-analyst:8004
+ATHENA_HUNTER_URL=http://athena-hunter:8005
 ```
 
 ### 8.2 Deploy Agents to EC2
 
-Run from a machine with SSH access (requires `~/.ssh/blackhat` key):
+Canonical deploy (CI and on-box) is `ops/deploy.sh`. Prefer pushing to `main` so
+`.github/workflows/deploy.yml` runs it, or on the box:
 
 ```bash
 cd NOCgentic
+APP_DIR=/opt/nocgentic/app bash ops/deploy.sh
+# Compatibility wrapper (same script):
 ./scripts/deploy-agents.sh
-# or with explicit key:
-./scripts/deploy-agents.sh --ssh-key ~/.ssh/blackhat --ec2-ip <EC2-PUBLIC-IP>
 ```
 
-The script: rsync code → EC2, `docker compose up -d --build`, health-check loop, summary.
+`ops/deploy.sh` mirrors the checkout into `APP_DIR`, preserves on-box secrets /
+rendered nginx SSL config, rebuilds compose, and health-checks.
 
 ### 8.3 Seed Test Data
 
@@ -327,7 +327,7 @@ Well within the $200/month budget.
 
 | Priority | Item | Owner |
 |----------|------|-------|
-| CRITICAL | Deploy agents to EC2 — run `deploy-agents.sh` | Board (needs SSH key) |
+| CRITICAL | Deploy via `ops/deploy.sh` / GitHub Actions on the nocgentic box | Board |
 | HIGH | Confirm NOC data feed format + credentials | Board / Black Hat NOC team |
 | HIGH | Distribute API keys to Corelight, Palo Alto, Partners | Board |
 | MEDIUM | Confirm SNS subscription (check <BILLING-EMAIL>) | Board |
@@ -340,35 +340,31 @@ Well within the $200/month budget.
 
 ## 11. File Map
 
+> **Note (2026-08-02):** Sections above retain historical OpenSearch / early-agent
+> context. The **live** tree is documented in `README.md` and `CLAUDE.md`. Summary:
+
 ```
 NOCgentic/
-├── design.md                        # This file
-├── PROGRESS.md                      # Chronological build log
-├── SETUP.md                         # AWS infrastructure setup guide
-├── CLAUDE.md                        # Development guide and coding standards
-├── PRIVATE_NOTES.md                 # API keys (never commit)
-├── .env                             # Runtime secrets (never commit)
-├── docker-compose.yml               # OpenSearch + Ingestion API + Nginx
-├── docker-compose.agents.yml        # Orchestrator + Agents + Web Server
-├── nginx/nginx.conf                 # TLS termination + routing
-│
+├── docker-compose.agents.yml        # Full live stack
 ├── agents/
-│   ├── shared/
-│   │   └── opensearch_tools.py      # 6 async OpenSearch query functions
-│   ├── orchestrator/                # Intent classifier + router (claude-3-5-sonnet)
-│   ├── threat-hunter/               # IOC + threat detection (claude-3-haiku)
-│   └── alert-triage/                # Alert scoring (claude-3-haiku)
-│
+│   ├── shared/                      # llm_client, athena_client, telemetry, scrubbers
+│   ├── orchestrator/                # Intent classifier + router + guardrails
+│   ├── alert-triage/                # Athena alerts triage
+│   ├── athena-hunter/               # NL→SQL primary hunt agent
+│   └── thousandeyes-analyst/        # ThousandEyes network quality
 ├── packages/
 │   ├── shared/                      # TypeScript types + Zod schemas
-│   ├── agent-sdk/                   # LLM client + prompt sanitization
-│   └── web-server/                  # Fastify HTTP + WebSocket + chat UI
-│
-├── infrastructure/
-│   └── scripts/
-│       └── setup-organization.sh    # AWS Org setup (already run)
-│
+│   └── web-server/                  # Fastify BFF + static UI (index.html, app.css, app.js)
+├── ops/
+│   ├── deploy.sh                    # Canonical deploy (CI + on-box)
+│   └── run-tests.sh
+├── nginx/                           # TLS + reverse proxy
+├── lambda/                          # Athena refresh / materialized views
+├── tools/audit-monitor/             # Trace swim-lane UI
+├── infrastructure/scripts/          # Org/IAM setup
 └── scripts/
-    ├── deploy-agents.sh             # rsync + remote docker compose
-    └── seed-opensearch.py           # Synthetic test data generator
+    └── deploy-agents.sh             # Wrapper → ops/deploy.sh
 ```
+
+Historical artifacts (OpenSearch compose, removed `threat-hunter`, deleted
+`@bhnoc/agent-sdk`) are intentionally absent from the live map above.

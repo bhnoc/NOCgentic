@@ -1,13 +1,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
-import { z } from 'zod';
-import { AgentResponse } from '@bhnoc/shared';
+import { AgentResponse, ChatQuerySchema } from '@bhnoc/shared';
 import { alertCache } from '../services/alertCache';
-
-const QuerySchema = z.object({
-  query: z.string().min(1).max(5000),
-  sessionId: z.string().optional(),
-});
 
 interface ClientInfo {
   ip?: string;
@@ -84,7 +78,7 @@ export function registerChatRoutes(server: FastifyInstance) {
 
   // Submit a query → returns job ID
   server.post('/api/v1/chat', async (request, reply) => {
-    const parseResult = QuerySchema.safeParse(request.body);
+    const parseResult = ChatQuerySchema.safeParse(request.body);
     if (!parseResult.success) {
       // Log the detail server-side; return a generic message so we don't leak schema internals.
       request.log.warn({ issues: parseResult.error.issues }, 'chat query validation failed');

@@ -6,10 +6,10 @@ import { FastifyRequest } from 'fastify';
 export const SINGLE_IP_RE =
   /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^[0-9a-fA-F:]+$/;
 
-// Content-Security-Policy for the served UI. The page uses an inline <style>,
-// an inline <script>, and inline onclick handlers, so 'unsafe-inline' is
-// required for style-src and script-src (acceptable: the UI is first-party and
-// static). Google Fonts is the only external origin (stylesheet + font files).
+// Content-Security-Policy for the served UI. CSS/JS live in static/app.css and
+// static/app.js ('self'). Inline onclick handlers still need 'unsafe-inline' on
+// script-src (acceptable: first-party static UI). Google Fonts is the only
+// external origin (stylesheet + font files).
 export const CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",

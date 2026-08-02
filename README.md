@@ -202,14 +202,21 @@ agents/
 
 packages/
   shared/             TS types / validation (Zod)
-  web-server/         Fastify + Zod + WebSocket; static/index.html
+  web-server/         Fastify + Zod + WebSocket; static/{index.html,app.css,app.js}
 
 tools/
   audit-monitor/      FastAPI + SSE swim-lane dashboard (Docker)
 
+ops/
+  deploy.sh           Canonical deploy (CI + on-box)
+  run-tests.sh        Pre-deploy test runner
+
 infrastructure/
-  cloudformation/     IaC for VPC/EC2/CloudWatch
-  scripts/            deploy-agents.sh, refresh-env-creds.sh, seed-s3.py
+  scripts/            Org/IAM setup helpers only
+
+scripts/
+  deploy-agents.sh    Thin wrapper → ops/deploy.sh
+  refresh-env-creds.sh, seed-s3.py
 
 nginx/                TLS + reverse proxy config
 docker-compose.agents.yml   full stack (7 containers)
