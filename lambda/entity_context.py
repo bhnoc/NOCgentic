@@ -216,6 +216,11 @@ def _present(value_col: str) -> str:
     return f"{value_col} IS NOT NULL AND {value_col} NOT IN {_EMPTY}"
 
 
+def _q(literal: str) -> str:
+    """A SQL string literal with embedded quotes doubled."""
+    return "'" + literal.replace("'", "''") + "'"
+
+
 # An instance-named mDNS record: label 1 does not begin with '_'. Bare browse queries
 # like '_companion-link._tcp.local' are on 1,903 IPs and name nobody, and they fail
 # this structurally rather than by a blocklist. 484,407 of the in-scope .local rows
@@ -313,18 +318,24 @@ def _fqdn_labels(database: str, date_str: str, alias: str, out_col: str,
     not redundant with the CASE -- it prunes ~99% of rows before a 200-arm CASE is
     evaluated over them, which is the difference between a cheap scan and a slow one.
     """
-    label_case = "\n                 ".join(
-        f"WHEN {tool_taxonomy._any_pred('fqdn', domains)} THEN '{label}'"
-        for label, domains in rules
-    )
-    # The rule's position, carried as a column so ORDER BY can use it without
-    # restating a 200-arm CASE. First match wins, exactly as the table is written.
-    rank_case = "\n                 ".join(
-        f"WHEN {tool_taxonomy._any_pred('fqdn', domains)} THEN {i}"
-        for i, (_, domains) in enumerate(rules)
-    )
-    any_match = " OR ".join(
-        f"({tool_taxonomy._any_pred('fqdn', domains)})" for _, domains in rules
+    # A VALUES table of (needle, label, rank), joined rather than a CASE.
+    #
+    # WHY NOT A CASE. The obvious shape emits the whole predicate set THREE times --
+    # once for the label, once for the rank, once for the pre-filter -- so the 203
+    # security products became 406 WHEN arms over 891 LIKEs, and Athena answered with
+    # INTERNAL_ERROR_QUERY_ENGINE: not a syntax error, the planner simply gave up. The
+    # ai table (108 products) survived at half that size, which is what made the
+    # failure look mysterious rather than structural.
+    #
+    # Joining on a generated suffix means the needle set is materialised ONCE and each
+    # fqdn is matched by equality against an indexable key instead of by hundreds of
+    # LIKEs. Same semantics, because `_domain_pred` only ever tested "equals the domain
+    # or ends with .domain" -- which is exactly "one of this fqdn's own registrable
+    # suffixes equals the needle".
+    needles = ",\n      ".join(
+        f"({_q(d)}, {_q(label)}, {i})"
+        for i, (label, domains) in enumerate(rules)
+        for d in domains
     )
     sources = [f"""        SELECT id_orig_h ip, LOWER(server_name) fqdn
         FROM {database}.ssl
@@ -341,25 +352,50 @@ def _fqdn_labels(database: str, date_str: str, alias: str, out_col: str,
           AND query NOT LIKE '%.local%' AND query NOT LIKE '%.arpa%'
           AND query LIKE '%.%'""")
     union = "\n        UNION ALL\n".join(sources)
+    # The longest needle is the deepest suffix worth testing: a 3-label needle can only
+    # be matched by a 3-label suffix, so generating more is wasted work.
+    max_labels = max(d.count(".") + 1 for _, domains in rules for d in domains)
+    # Every registrable-suffix candidate of the fqdn, shortest first. SPLIT once and
+    # rebuild, rather than N REGEXP calls.
+    #
+    # THE CARDINALITY GUARD IS LOAD-BEARING: Trino arrays are 1-indexed and SLICE
+    # rejects a start index below 1 with INVALID_FUNCTION_ARGUMENT, so a short name --
+    # 'localhost' has one label, and the dns source can carry plenty -- would fail the
+    # whole query rather than simply not matching. Emit NULL for a suffix deeper than
+    # the fqdn has labels; CONTAINS never matches NULL, which is the desired outcome.
+    suffixes = ", ".join(
+        f"CASE WHEN CARDINALITY(parts) >= {n} THEN "
+        f"ARRAY_JOIN(SLICE(parts, CARDINALITY(parts) - {n} + 1, {n}), '.') END"
+        for n in range(2, max_labels + 1)
+    )
     return f"""{alias} AS (
   SELECT ip, ARRAY_JOIN(SLICE(ARRAY_AGG(label ORDER BY {order}), 1, {_TOP_N}), ' | ')
            {out_col}
   FROM (
+    -- MIN(rank) is what preserves first-match-wins: an fqdn under two needles of
+    -- different products takes the one written earlier in the table.
     SELECT ip, label, SUM(n) n, MIN(rank) rank
     FROM (
-      SELECT ip, n,
-             CASE {label_case}
-             END label,
-             CASE {rank_case}
-             END rank
+      SELECT h.ip, h.n, t.label, t.rank
       FROM (
-        SELECT ip, fqdn, COUNT(*) n
+        SELECT ip, n, ARRAY[{suffixes}] cands
         FROM (
+          SELECT ip, SPLIT(fqdn, '.') parts, n
+          FROM (
+            SELECT ip, fqdn, COUNT(*) n
+            FROM (
 {union}
-        ) WHERE ({any_match})
-        GROUP BY ip, fqdn
-      )
-    ) WHERE label IS NOT NULL
+            )
+            GROUP BY ip, fqdn
+          )
+        )
+      ) h
+      -- INNER JOIN is the pre-filter: an fqdn matching no needle produces no row at
+      -- all, so the ~99% of traffic that is not a tool never reaches the aggregation.
+      JOIN (VALUES
+      {needles}
+      ) AS t (needle, label, rank) ON CONTAINS(h.cands, t.needle)
+    )
     GROUP BY ip, label
   )
   GROUP BY ip

@@ -1144,20 +1144,59 @@ class TestSniNeedlesAreDomainAnchored:
             for needle in ("okta", "cursor", "jamf", "claude", "gemini"):
                 assert f"LIKE '%{needle}" not in pred, needle
 
-    def test_the_shipped_sql_anchors_every_new_needle(self):
-        """Only the MATCHING predicates are in scope. `fqdn LIKE` is a needle; the
-        `query LIKE '%.local%'` source filters are exclusions that prune rows before
-        matching, and a bare wildcard is correct there.
+    def test_the_shipped_sql_matches_needles_by_equality_never_by_substring(self):
+        """The needles reach SQL as a VALUES table joined on CONTAINS against the
+        fqdn's own registrable suffixes, so matching is EQUALITY -- a substring can no
+        longer match by construction, which is a stronger guarantee than checking that
+        every LIKE happens to be anchored.
+
+        The only LIKEs left in these CTEs are the source-side row filters
+        (`query NOT LIKE '%.local%'`), which are exclusions and correctly wildcarded.
         """
         sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
         for alias in ("ai", "sec"):
             body = _cte(sql, alias)
-            needles = re.findall(r"fqdn LIKE '([^']+)'", body)
-            assert needles, f"{alias} has no fqdn needles at all"
-            # Every needle is boundary-anchored ('%.<domain>'), never '%needle%'.
-            for like in needles:
-                assert not (like.startswith("%") and like.endswith("%")), like
-                assert like.startswith("%."), like
+            assert "fqdn LIKE" not in body, f"{alias} still pattern-matches the fqdn"
+            assert "JOIN (VALUES" in body, f"{alias} has no needle table"
+            # Every needle is a bare domain literal: no wildcards, no regex.
+            needles = re.findall(r"\('([^']+)', '[^']*', \d+\)", body)
+            assert needles, f"{alias} has no needles at all"
+            for n in needles:
+                assert "%" not in n and "*" not in n, f"{n} is a pattern, not a domain"
+                assert "." in n, f"{n} is not a domain"
+
+    @pytest.mark.parametrize("alias,classify", [
+        ("ai", "classify_ai"), ("sec", "classify_security")])
+    def test_the_suffix_join_agrees_with_the_python_reference(self, alias, classify):
+        """Reimplements the emitted join and compares it to tool_taxonomy.classify.
+        The SQL and the reference are separate implementations of one rule, so this is
+        what stops them drifting -- including the traps that started all of this."""
+        rules = (tt.ai_label_rules() if alias == "ai"
+                 else tt.security_label_rules())
+        max_labels = max(d.count(".") + 1 for _, ds in rules for d in ds)
+
+        def sql_match(fqdn):
+            parts = fqdn.split(".")
+            cands = {".".join(parts[-n:]) for n in range(2, max_labels + 1)
+                     if n <= len(parts)}
+            hits = [(i, label) for i, (label, ds) in enumerate(rules)
+                    for d in ds if d in cands]
+            return min(hits)[1] if hits else None
+
+        for host in ("api.anthropic.com", "downloads.claude.ai", "ollama.com",
+                     "appsgenaiserver-pa.clients6.google.com", "ts01-b.cloudsink.net",
+                     "agents.manage.microsoft.com", "derp3f.tailscale.com",
+                     "http-intake.logs.us5.datadoghq.com", "zdxcloud.net",
+                     # The traps: none may match anything.
+                     "mail.google.com", "sync.programmaticx.ai", "github.com",
+                     "www.crowdstrike.com", "events.data.microsoft.com",
+                     "doh.opendns.com", "localhost", "m365.cloud.microsoft"):
+            ref = getattr(tt, classify)(host)
+            if ref and alias == "sec":
+                want = f"{tt._sec_display(ref[1])}:{ref[0]}"
+            else:
+                want = ref[0] if ref else None
+            assert sql_match(host) == want, f"{host}: join disagrees with reference"
 
     def test_okta_is_never_matched_on_an_azure_hostname(self):
         """okta-featureflag-edge.azureedge.net is Azure, not Okta. The taxonomy
@@ -1452,7 +1491,18 @@ class TestSniColumnsDoNotFanOut:
     def test_each_cte_collapses_to_one_row_per_host(self, alias):
         body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
         assert "GROUP BY ip" in body
-        assert " JOIN " not in body, f"{alias} joins raw rows"
+        # The only JOIN permitted is the needle lookup, and it is joined AFTER the
+        # traffic has already collapsed to one row per (ip, fqdn) -- so it cannot fan
+        # out raw log rows, which is the invariant this class protects. Matched as a
+        # CLAUSE, not the substring: ARRAY_JOIN is a function, not a join.
+        code = "\n".join(l for l in body.splitlines()
+                         if not l.strip().startswith("--"))
+        joins = re.findall(r"(?:^|\s)(?:INNER |LEFT |RIGHT |FULL |CROSS )?JOIN\s",
+                           code)
+        assert len(joins) <= 1, f"{alias} has {len(joins)} joins; expected only VALUES"
+        if joins:
+            assert body.index("GROUP BY ip, fqdn") < body.index("JOIN (VALUES"), (
+                "the needle join happens before the per-fqdn collapse")
 
     @pytest.mark.parametrize("alias", ["ai", "sec"])
     def test_each_cte_pins_the_partition(self, alias):
@@ -1465,14 +1515,21 @@ class TestSniColumnsDoNotFanOut:
         assert "'(empty)'" in body
 
     @pytest.mark.parametrize("alias", ["ai", "sec"])
-    def test_the_case_only_runs_on_prefiltered_rows(self, alias):
-        """The WHERE that repeats the match predicate is NOT redundant with the CASE:
-        it prunes ~99% of rows before a 200-arm CASE is evaluated over them. Losing it
-        turns a cheap scan into a slow one across two of the largest tables."""
+    def test_traffic_collapses_per_fqdn_before_matching(self, alias):
+        """ssl and dns are the two largest tables in the catalog. Matching must run over
+        DISTINCT (ip, fqdn) pairs, not over every raw row: a host hitting one CDN name
+        10,000 times should cost one match, not 10,000."""
         body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
         assert "GROUP BY ip, fqdn" in body, (
-            "rows must collapse per (ip, fqdn) before the CASE, not after")
-        assert re.search(r"\)\s*WHERE \(\(", body), "the pre-CASE filter is gone"
+            "rows must collapse per (ip, fqdn) before matching")
+
+    @pytest.mark.parametrize("alias", ["ai", "sec"])
+    def test_non_matching_traffic_is_dropped_by_the_join(self, alias):
+        """The INNER JOIN is the pre-filter: ~99% of traffic is not a tool and must
+        produce no row at all rather than a NULL label to be filtered later."""
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert "JOIN (VALUES" in body
+        assert "LEFT JOIN" not in body, "a LEFT JOIN would keep every unmatched fqdn"
 
 
 class TestToolingColumnsMatchDnsAndSni:
@@ -1491,10 +1548,15 @@ class TestToolingColumnsMatchDnsAndSni:
         assert "UNION ALL" in body
 
     @pytest.mark.parametrize("alias", ["ai", "sec"])
-    def test_the_sources_are_unioned_not_joined(self, alias):
-        """A join would multiply SSL handshakes by DNS queries per host."""
+    def test_the_two_log_sources_are_unioned_not_joined(self, alias):
+        """A join BETWEEN THE SOURCES would multiply SSL handshakes by DNS queries per
+        host. (The needle table is separately joined -- see TestToolingMatchesByJoin --
+        but that is a lookup, not a second traffic source.)"""
         body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
-        assert " JOIN " not in body
+        srcs = body[body.index("SELECT ip, fqdn, COUNT(*) n"):]
+        srcs = srcs[:srcs.index("GROUP BY ip, fqdn")]
+        assert "UNION ALL" in srcs
+        assert " JOIN " not in srcs, "the traffic sources are joined, not unioned"
 
     @pytest.mark.parametrize("alias", ["ai", "sec"])
     def test_the_dns_name_is_stripped_of_its_trailing_dot(self, alias):
