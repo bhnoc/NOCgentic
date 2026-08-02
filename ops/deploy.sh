@@ -69,7 +69,7 @@ docker compose -f "$COMPOSE_FILE" ps
 
 HEALTHY=false
 for i in $(seq 1 30); do
-  if curl -sk --fail -o /dev/null "https://127.0.0.1/health" ; then
+  if curl -sk --fail -H "Host: ng.bhnoc.com" -o /dev/null "https://127.0.0.1/health" || curl -sk --fail -o /dev/null "https://127.0.0.1/health" ; then
     HEALTHY=true
     break
   fi
