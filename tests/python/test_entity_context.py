@@ -467,6 +467,21 @@ def _is_instance_named(query):
     return re.match(pat, query) is not None
 
 
+def _stopword_hit(label):
+    """Which stopword rejects this label, mirroring _not_appliance's emitted SQL.
+
+    Single words are WORD-anchored; multi-word stopwords ('apple tv', 'hp ') already
+    carry their own boundary and stay substring tests.
+    """
+    for w in ec._OWNER_STOPWORDS:
+        if w != w.strip() or " " in w:
+            if w in label:
+                return w
+        elif re.search(rf"(?:^|[^a-z]){w}(?:[^a-z]|$)", label):
+            return w
+    return None
+
+
 def _owner_emitted(label, n_ips, *, query=None):
     """The full owner_name gate as the SQL applies it, in order."""
     if query is not None and (".", "_sub.")[1] in query:
@@ -475,7 +490,7 @@ def _owner_emitted(label, n_ips, *, query=None):
         return None
     if label in ("", "-", "(empty)"):
         return None
-    if any(w in label for w in ec._OWNER_STOPWORDS):
+    if _stopword_hit(label):
         return None
     if n_ips > ec._OWNER_MAX_IPS:
         return None
@@ -553,6 +568,100 @@ class TestOwnerNameGrammar:
     def test_a_label_naming_nobody_yields_nothing(self):
         for label in ("macbook pro", "iphone", "living room", "hp officejet"):
             assert _extract_stem(label) is None, label
+
+
+class TestStopwordsAreWordAnchored:
+    """A bare '%nest%' rejected "ernest's macbook pro" -- a real person's device. The
+    resulting NULL reads as ABSENT EVIDENCE rather than a stopword collision, so the
+    loss is invisible: nobody reviewing owner_name coverage would know why it is low."""
+
+    @pytest.mark.parametrize("label,stem", [
+        ("ernest's macbook pro", "ernest"),   # 'nest'
+        ("delaborde-iphone", "delaborde"),    # 'lab'
+        ("associate-mbp", "associate"),       # 'soc'
+        ("echols-ipad", "echols"),            # 'echo'
+        ("protester-pc", "protester"),        # 'test'
+        ("socorro-iphone", "socorro"),        # 'soc'
+        ("testarossa-air", "testarossa"),     # 'test'
+        ("nesta-iphone", "nesta"),            # 'nest'
+    ])
+    def test_a_persons_label_is_not_eaten_by_a_substring(self, label, stem):
+        hit = _stopword_hit(label)
+        assert hit is None, f"{label!r} rejected by stopword {hit!r}"
+
+    @pytest.mark.parametrize("label,word", [
+        ("conference room tv", "conference"),
+        ("apple tv (lobby)", "apple tv"),
+        ("boardroom display", "boardroom"),
+        ("noc kiosk", "kiosk"),
+        ("soc workstation", "soc"),
+        ("training lab pc", "training"),
+        ("test bench", "test"),
+        ("hp laserjet 400", "hp "),
+    ])
+    def test_real_appliances_are_still_rejected(self, label, word):
+        """Tightening must not stop the gate working: these are the shared endpoints
+        that _OWNER_MAX_IPS and the stopwords exist to keep out of owner_name."""
+        assert _stopword_hit(label) is not None, f"{label!r} would become an owner"
+
+    def test_the_sql_anchors_single_word_stopwords(self):
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        for w in ("nest", "lab", "soc", "echo", "test"):
+            assert f"NOT LIKE '%{w}%'" not in own, f"'{w}' is an unanchored substring"
+            assert f"(?:^|[^a-z]){w}(?:[^a-z]|$)" in own, f"'{w}' is not anchored"
+
+    def test_multi_word_stopwords_stay_substring_tests(self):
+        """'apple tv' and 'hp ' already carry their own boundary, and word-anchoring a
+        phrase containing a space would not match at all."""
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert "NOT LIKE '%apple tv%'" in own
+        assert "NOT LIKE '%hp %'" in own
+
+
+class TestClientCertClassIsWordAnchored:
+    """'cisco' as a bare substring matches the issuer O=City and County of San
+    FranCISCO, reporting a municipal employer CA as a SASE vendor's inspection CA --
+    inverting the strongest employer-attribution signal in the module."""
+
+    def _cls(self, io):
+        """Mirror the emitted CASE, in table order (mdm, sase, public_ca)."""
+        vend = {
+            "mdm": ("jamf", "kandji", "microsoft", "intune", "apple", "airwatch",
+                    "workspace one", "vmware", "mosyle", "addigy", "jumpcloud"),
+            "sase": ("zscaler", "netskope", "palo alto", "cloudflare", "cisco",
+                     "fortinet", "forcepoint"),
+            "public_ca": ("digicert", "sectigo", "globalsign", "entrust",
+                          "let's encrypt", "godaddy", "amazon", "verisign",
+                          "thawte", "comodo"),
+        }
+        for k, words in vend.items():
+            if re.search(f"(?:^|[^a-z])(?:{'|'.join(words)})(?:[^a-z]|$)", io):
+                return k
+        return "employer_specific"
+
+    @pytest.mark.parametrize("io,expected", [
+        # The measured trap and its neighbours.
+        ("city and county of san francisco", "employer_specific"),
+        ("franciscan health system", "employer_specific"),
+        ("appleseed research ltd", "employer_specific"),
+        ("vmwareish consulting", "employer_specific"),
+        # Real vendors must still classify.
+        ("cisco systems, inc.", "sase"),
+        ("cisco umbrella", "sase"),
+        ("zscaler inc", "sase"),
+        ("palo alto networks", "sase"),
+        ("jamf software llc", "mdm"),
+        ("microsoft corporation", "mdm"),
+        ("apple inc.", "mdm"),
+        ("digicert inc", "public_ca"),
+    ])
+    def test_the_issuer_org_is_classified_on_word_boundaries(self, io, expected):
+        assert self._cls(io) == expected
+
+    def test_the_sql_does_not_use_a_bare_alternation(self):
+        mtls = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "mtls")
+        assert "'zscaler|netskope" not in mtls, "bare substring alternation remains"
+        assert "(?:^|[^a-z])" in mtls, "the word boundary is missing"
 
 
 class TestOwnerNameExcludesNonPeople:

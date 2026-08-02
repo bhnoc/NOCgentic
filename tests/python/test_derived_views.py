@@ -11,6 +11,7 @@ These lock the two properties that keep that from recurring:
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -120,6 +121,58 @@ class TestSeverityVocabulary:
         """A YARA match is a positive malware signature, not informational."""
         src = next(s for s in dv.ALERT_SOURCES if s["table"] == "yara_corelight")
         assert src["severity"] == "'high'"
+
+    def test_no_source_passes_its_raw_severity_through(self):
+        """notice was the only arm shipping its source's string verbatim
+        (COALESCE(severity_name,'unknown')), and Zeek does not use this app's
+        vocabulary. Every arm must map into the closed set."""
+        for src in dv.ALERT_SOURCES:
+            sev = src["severity"]
+            if sev.startswith("'"):
+                continue  # a literal is already in-vocabulary
+            assert "CASE" in sev.upper(), (
+                f"{src['table']} passes its raw severity through: {sev}")
+
+    @pytest.mark.parametrize("raw,expected", [
+        # The three values MEASURED in alerts on dt=2026-08-01 that were outside the
+        # vocabulary: 'error' 2,965 rows, 'informational (default)' 239,
+        # 'notification' 22. severity IN ('critical','high') skipped every one, so
+        # 2,965 real high-severity notices were invisible to every correct filter.
+        ("error", "high"),
+        ("notification", "low"),
+        ("informational (default)", "informational"),
+        # Already-canonical values pass through.
+        ("critical", "critical"), ("high", "high"), ("medium", "medium"),
+        ("low", "low"), ("informational", "informational"),
+        # Anything unrecognised becomes 'unknown', NOT 'low', so a new Zeek severity
+        # stays visible instead of being buried at the bottom of a sorted feed.
+        ("Notice::Tally", "unknown"), ("", "unknown"), ("weird_new_value", "unknown"),
+    ])
+    def test_notice_severity_is_folded_into_the_vocabulary(self, raw, expected):
+        """Mirrors the emitted CASE. The mapping matches alert-triage._norm_sev /
+        athena-hunter._WORD_SEV, which are the source of truth."""
+        mapping = {
+            "error": "high", "notification": "low",
+            "informational (default)": "informational",
+            "critical": "critical", "high": "high", "medium": "medium",
+            "low": "low", "informational": "informational",
+        }
+        assert mapping.get(raw.strip().lower(), "unknown") == expected
+
+    def test_the_notice_arm_maps_every_measured_out_of_vocabulary_value(self):
+        src = next(s for s in dv.ALERT_SOURCES if s["table"] == "notice")
+        sev = src["severity"].lower()
+        for raw in ("'error'", "'notification'", "'informational (default)'"):
+            assert raw in sev, f"notice does not fold {raw}"
+        assert "else 'unknown'" in sev, "an unrecognised severity must stay visible"
+
+    def test_the_emitted_alerts_sql_only_contains_valid_severities(self):
+        """The whole point: a consumer filtering severity IN ('critical','high') must
+        not silently miss rows."""
+        sql = dv.build_alerts_sql(DB, _catalog())
+        valid = {"critical", "high", "medium", "low", "informational", "unknown"}
+        emitted = set(re.findall(r"THEN '([a-z][a-z ()]*)'", sql))
+        assert emitted <= valid, f"out-of-vocabulary severities emitted: {emitted - valid}"
 
 
 class TestDiscovery:

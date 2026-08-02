@@ -298,9 +298,51 @@ class TestSQLGeneration:
 
 class TestManagementTooling:
     def test_known_mdm_and_edr_vendors_are_matched(self):
+        """By TELEMETRY domain, not vendor name. crowdstrike.com is deliberately
+        absent -- see test_vendor_marketing_traffic_is_not_management_tooling."""
         sql = ac.build_asset_classification_sql(DB, DATE, _catalog())
-        for vendor in ("jamf", "crowdstrike", "intune"):
-            assert vendor in sql
+        for domain in ("jamfcloud.com", "cloudsink.net", "manage.microsoft.com"):
+            assert domain in sql, f"{domain} is not matched"
+
+    def test_the_needles_are_boundary_anchored(self):
+        """A bare '%crowdstrike%' matched crowdstrikeinc.demdex.net -- ADOBE AD
+        TRACKING -- plus www./go./ir.crowdstrike.com, all measured on dt=2026-08-02.
+        Each was setting mgmt_tooling ("someone's IT owns this device") for a person
+        browsing a vendor booth. Same class as 'cros' matching Microsoft-CryptoAPI."""
+        sql = ac.build_asset_classification_sql(DB, DATE, _catalog())
+        for needle in ("crowdstrike", "carbonblack", "jamf", "kandji", "intune",
+                       "1password", "duosecurity", "netskope"):
+            assert f"LIKE '%{needle}%'" not in sql, (
+                f"'%{needle}%' is an unanchored substring")
+        for domain in ac._MGMT_SNI:
+            assert f"LIKE '%.{domain}'" in sql, f"{domain} is not anchored on a dot"
+
+    def test_vendor_marketing_traffic_is_not_management_tooling(self):
+        """The Black Hat problem: thousands of people browse vendor websites here.
+        crowdstrike.com proves nothing about the host; cloudsink.net proves the Falcon
+        sensor is running. tool_taxonomy makes the same call for security_tools."""
+        assert "cloudsink.net" in ac._MGMT_SNI
+        for marketing in ("crowdstrike.com", "sentinelone.com", "carbonblack.com",
+                          "microsoft.com", "demdex.net"):
+            assert marketing not in ac._MGMT_SNI, f"{marketing} is booth browsing"
+
+    @pytest.mark.parametrize("sni,managed", [
+        # Real agent telemetry -> managed.
+        ("ts01-b.cloudsink.net", True),
+        ("bhnoc.jamfcloud.com", True),
+        ("agents.manage.microsoft.com", True),
+        ("web-api.kandji.io", True),
+        # Booth browsing and lookalikes -> NOT managed.
+        ("crowdstrikeinc.demdex.net", False),
+        ("www.crowdstrike.com", False),
+        ("go.crowdstrike.com", False),
+        ("ir.crowdstrike.com", False),
+        ("m365.cloud.microsoft", False),
+    ])
+    def test_the_matcher_agrees_with_the_measured_traffic(self, sni, managed):
+        """Reimplements the emitted predicate: exact domain or a dotted subdomain."""
+        hit = any(sni == d or sni.endswith("." + d) for d in ac._MGMT_SNI)
+        assert hit is managed, f"{sni} -> managed={hit}, expected {managed}"
 
     def test_mgmt_is_not_treated_as_a_threat_signal(self):
         """It says someone's IT owns the device, which changes how a finding on it

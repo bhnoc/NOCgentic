@@ -34,6 +34,24 @@ _NOISE_PREFIXES: tuple[str, ...] = ("ET INFO", "ETPRO INFO")
 # useful in an answer, small enough that a busy host does not blow up the row.
 _TOP_N = 6
 
+def _dom(*domains: str) -> str:
+    """Match a registrable domain at a label boundary, never as a bare substring.
+
+    MEASURED TRAPS, all from one sweep of dt=2026-08-01: 'cros' matched
+    "Microsoft-CryptoAPI", 'cato' matched lcdn-locator.apple.com (950 IPs), 'eset'
+    matched sync.resetdigital.co (78) and bare 'okta' matched
+    okta-featureflag-edge.azureedge.net (13), which is Azure, not Okta. On 08-02,
+    '%crowdstrike%' matched crowdstrikeinc.demdex.net -- Adobe ad tracking.
+
+    tool_taxonomy._domain_pred is the same rule for the ai_tools/security_tools
+    tables; this one stays because it emits the bare `sni` column name that _ORG_SNI's
+    predicates are written against, rather than a caller-supplied expression.
+    """
+    return "(" + " OR ".join(
+        f"sni = '{d}' OR sni LIKE '%.{d}'" for d in domains
+    ) + ")"
+
+
 # SNI families for org attribution, as (kind, tenant-naming?, SQL predicate).
 # Measured on dt=2026-08-01, in-scope only: okta+o365 alone reached 806 hosts.
 # Broadening to these families reaches ~1,206 (jamf 583, webex 580, slack 496,
@@ -72,31 +90,17 @@ _ORG_SNI: tuple[tuple[str, bool, str], ...] = (
     ("zscaler", False, "(sni LIKE '%zscaler%' OR sni LIKE '%.zscloud.net')"),
     ("cloudflare_zt", False, "sni LIKE '%.cloudflareaccess.com'"),
     ("palo_sase", False, "(sni LIKE '%.prismaaccess.com' OR sni LIKE '%gpcloudservice%')"),
-    ("edr", False, "(" + " OR ".join(
-        f"sni LIKE '%{s}%'"
-        for s in ("crowdstrike", "carbonblack", "conferdeploy", "sentinelone")
-    ) + ")"),
+    # Telemetry domains, boundary-anchored. A bare '%crowdstrike%' matched
+    # crowdstrikeinc.demdex.net (Adobe ad tracking) and www./go./ir.crowdstrike.com
+    # (booth browsing) on dt=2026-08-02 -- none of which say anyone's IT owns the box,
+    # yet each added a distinct `kind` that can lift org_confidence medium -> high.
+    ("edr", False, _dom("cloudsink.net", "conferdeploy.net", "carbonblack.io",
+                        "sentinelone.net")),
     ("webex", False, "sni LIKE '%webex%'"),
     # 268 hosts but only 6 distinct SNIs, so this is one shared Google endpoint that
     # every Workspace tenant hits. It corroborates managed-ness and names no company.
     ("gworkspace", False, "(sni LIKE '%.google.com' AND sni LIKE '%workspace%')"),
 )
-
-def _dom(*domains: str) -> str:
-    """Match a registrable domain at a label boundary, never as a bare substring.
-
-    MEASURED TRAPS, all from one sweep of dt=2026-08-01: 'cros' matched
-    "Microsoft-CryptoAPI", 'cato' matched lcdn-locator.apple.com (950 IPs), 'eset'
-    matched sync.resetdigital.co (78) and bare 'okta' matched
-    okta-featureflag-edge.azureedge.net (13), which is Azure, not Okta.
-
-    tool_taxonomy._domain_pred is the same rule for the ai_tools/security_tools
-    tables; this stays because _ORG_SNI above predates it and uses the bare `sni`
-    column name rather than a caller-supplied expression.
-    """
-    return "(" + " OR ".join(
-        f"sni = '{d}' OR sni LIKE '%.{d}'" for d in domains
-    ) + ")"
 
 # The tenant is label 1 of the SNI in every family except autodiscover. Verified
 # against the real distinct shapes rather than assumed:
@@ -240,9 +244,23 @@ def _owner_stem(label_col: str) -> str:
 
 
 def _not_appliance(label_col: str) -> str:
-    return " AND ".join(
-        f"{label_col} NOT LIKE '%{w}%'" for w in _OWNER_STOPWORDS
-    )
+    """No stopword appears in the label, matched at a WORD boundary.
+
+    A bare '%nest%' rejected "ernest's macbook pro" -- a real person's device, and the
+    NULL that results reads as absent evidence rather than a stopword collision, so
+    nobody would ever know. 'lab' hits "delaborde", 'soc' hits "associate", 'test' hits
+    "protester', 'echo' hits "echols". Multi-word stopwords ("apple tv", "google home")
+    already carry their own boundary, so this only tightens the single-word ones.
+    """
+    terms = []
+    for w in _OWNER_STOPWORDS:
+        if w != w.strip() or " " in w:
+            # Already boundary-bearing ('hp ', 'apple tv'): a substring test is right.
+            terms.append(f"{label_col} NOT LIKE '%{w}%'")
+        else:
+            terms.append(
+                f"NOT REGEXP_LIKE({label_col}, '(?:^|[^a-z]){w}(?:[^a-z]|$)')")
+    return " AND ".join(terms)
 
 
 def _not_infra(expr: str) -> str:
@@ -854,8 +872,19 @@ def build_entity_context_sql(database: str, date_str: str, tables: dict[str, set
                           "let''s encrypt", "godaddy", "amazon", "verisign",
                           "thawte", "comodo"),
         }
+        # WORD-ANCHORED, not substring. `io` is an ORGANISATION name, so the boundary
+        # is a word boundary rather than a domain one: 'cisco' as a bare substring
+        # matches the issuer O=City and County of San Fran-CISCO, which would report a
+        # municipal employer CA as a SASE vendor's inspection CA -- inverting the single
+        # strongest employer-attribution signal in this module. Same class as 'cros'
+        # matching Microsoft-CryptoAPI. \b is not portable across Trino's regex modes,
+        # so the boundary is spelled as an explicit non-letter lookaround.
+        def _word_alt(words):
+            alts = "|".join(words)
+            return f"(?:^|[^a-z])(?:{alts})(?:[^a-z]|$)"
+
         cls_case = "\n                    ".join(
-            f"WHEN REGEXP_LIKE(io, '{'|'.join(v)}') THEN '{k}'"
+            f"WHEN REGEXP_LIKE(io, '{_word_alt(v)}') THEN '{k}'"
             for k, v in vend.items()
         )
         ctes.append(f"""mtls AS (

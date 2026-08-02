@@ -56,7 +56,28 @@ ALERT_SOURCES: tuple[dict, ...] = (
         "alert_type": "notice",
         "name": "note",
         "detail": "msg",
-        "severity": "COALESCE(severity_name, 'unknown')",
+        # NORMALIZED, not passed through. This was the only arm that shipped its
+        # source's raw string, and Zeek notice does not use the app's vocabulary:
+        # measured in alerts on dt=2026-08-01, severity held 'error' (2,965 rows),
+        # 'informational (default)' (239) and 'notification' (22). None of them are in
+        # the closed set, so entity_context's `severity IN ('critical','high')` skipped
+        # every one, query_alerts(severity='high') missed them, and an LLM writing SQL
+        # against the documented vocabulary could not find them either -- 2,965 real
+        # high-severity notices invisible to every consumer that filtered correctly.
+        #
+        # The mapping mirrors alert-triage._norm_sev / athena-hunter._WORD_SEV, which
+        # are the source of truth. Anything unrecognised becomes 'unknown' rather than
+        # 'low', so a new Zeek severity stays VISIBLE instead of being buried.
+        "severity": (
+            "CASE LOWER(TRIM(COALESCE(severity_name, ''))) "
+            "WHEN 'error' THEN 'high' "
+            "WHEN 'notification' THEN 'low' "
+            "WHEN 'informational (default)' THEN 'informational' "
+            "WHEN 'critical' THEN 'critical' WHEN 'high' THEN 'high' "
+            "WHEN 'medium' THEN 'medium' WHEN 'low' THEN 'low' "
+            "WHEN 'informational' THEN 'informational' "
+            "ELSE 'unknown' END"
+        ),
     },
     {
         "table": "corelight_ml_results",

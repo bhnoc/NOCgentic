@@ -353,11 +353,30 @@ _PRL_DEVICE_RULES: tuple[tuple[str, str], ...] = ()
 # collapses the spaces a future sensor build might start emitting.
 _PRL_NORM = "',' || REGEXP_REPLACE({col}, '[^0-9,]+', '') || ','"
 
-# SNI substrings that indicate a centrally managed endpoint. Not a threat signal:
+# Registrable domains that indicate a centrally managed endpoint. Not a threat signal:
 # it says someone's IT owns this device, which changes how you treat a finding on it.
+#
+# DOMAINS, NOT SUBSTRINGS, and the reason is measured. `%crowdstrike%` matched 140 SNI
+# rows on dt=2026-08-02, of which the honest agent traffic was on cloudsink.net (601
+# rows, a separate domain entirely) while the substring caught:
+#   crowdstrikeinc.demdex.net  -- ADOBE AD TRACKING, not CrowdStrike at all
+#   www./go./ir./get.crowdstrike.com -- marketing, downloads, investor relations
+# Every one of those is a person with a browser at a vendor booth, and each was setting
+# mgmt_tooling ("someone's IT owns this device") and lifting org_confidence.
+#
+# The telemetry-vs-marketing split is the same call lambda/tool_taxonomy.py makes for
+# the security_tools column; see its SECURITY_TOOLS docstring. cloudsink.net is
+# CrowdStrike's dedicated sensor cloud and nothing else lives there, so it is the needle
+# and crowdstrike.com is deliberately absent.
 _MGMT_SNI: tuple[str, ...] = (
-    "jamf", "kandji", "crowdstrike", "carbonblack", "conferdeploy",
-    "1password", "duosecurity", "netskope", "intune", "workspaceone",
+    "jamfcloud.com", "jamf.com", "kandji.io",
+    "cloudsink.net",                                  # CrowdStrike Falcon sensor
+    "conferdeploy.net", "carbonblack.io",             # Carbon Black sensor
+    "sentinelone.net",
+    "1password.com", "1passwordservices.com",
+    "duosecurity.com", "goskope.com",                 # Netskope client
+    "manage.microsoft.com",                           # Intune; NOT bare microsoft.com
+    "awmdm.com", "vmwareidentity.com",                # Workspace ONE
 )
 
 
@@ -439,7 +458,12 @@ def build_asset_classification_sql(database: str, date_str: str, tables: dict[st
 
     os_case = _case_from_rules("ua.user_agent", _OS_RULES, "unknown")
     device_case = _case_from_rules("ua.user_agent", _DEVICE_RULES, "unknown")
-    mgmt_pred = " OR ".join(f"LOWER(server_name) LIKE '%{s}%'" for s in _MGMT_SNI)
+    # Boundary-anchored: exactly the domain, or a subdomain of it. The leading dot is
+    # what stops 'crowdstrikeinc.demdex.net' from matching a crowdstrike needle.
+    mgmt_pred = " OR ".join(
+        f"LOWER(server_name) = '{s}' OR LOWER(server_name) LIKE '%.{s}'"
+        for s in _MGMT_SNI
+    )
 
     # Host-side traffic totals. A responder-only host (a booth box that only
     # receives) has zero rows as id_orig_h, so filtering one direction reports it

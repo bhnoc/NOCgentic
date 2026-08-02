@@ -246,7 +246,8 @@ SQL_GEN_PROMPT = (
     "high_alert_count, alert_types, top_alerts, last_alert_at, observed_users, "
     "user_count, user_protocols, service_count, services, listening_ports, "
     "observed_hostnames, announced_domains, session_count, log_type_count, log_types, "
-    "org_confidence, org_reasons, org_tenant, org_tenant_sources, owner_name, "
+    "org_confidence, org_reasons, org_tenant, org_tenant_sources, ai_tools, "
+    "security_tools, owner_name, "
     "owner_name_source, owner_name_confidence, internal_domain, "
     "internal_domain_confidence, internal_domain_reasons, client_cert_issuer_org, "
     "client_cert_class, client_cert_subject_hash, client_cert_reasons, "
@@ -282,7 +283,21 @@ SQL_GEN_PROMPT = (
     "guess. client_cert_subject_hash is a SHA-256 ONLY: the raw certificate subject "
     "is deliberately never stored because it contains a person's name, work email and "
     "employer in one string. Use the hash solely to match two sightings of the same "
-    "certificate; never claim to know who it names.)\n"
+    "certificate; never claim to know who it names. "
+    "TOOLING COLUMNS: ai_tools is a ' | '-delimited count-ranked list of AI "
+    "assistants this host made a TLS handshake to (ChatGPT, Claude, Copilot, Gemini, "
+    "Cursor, Perplexity) and security_tools the same for security/management "
+    "endpoints, each labelled with its CLASS as EDR:CrowdStrike | MDM:Intune | "
+    "ZTNA:Zscaler | MFA:Okta | Vault:1Password. BOTH ARE OBSERVATIONS OF WHAT THE "
+    "HOST CONTACTED, NOT PROOF OF WHAT IS INSTALLED: say 'contacted' or 'talks to', "
+    "never 'is running' or 'is enrolled in'. A NULL means no such SNI was seen, "
+    "which is not evidence the host is unmanaged or AI-free -- it may simply not "
+    "have used it today. observed_hostnames is a comma list of names the host "
+    "claimed, best source first (known_names, then its DHCP host_name, then its mDNS "
+    "instance names). announced_domains likewise falls back to the mDNS `.local` "
+    "SERVICE TYPES the host advertises (_rdlink, _companion-link, _airplay, "
+    "_googlecast), which say what protocols it speaks and are the device-linking "
+    "signal, not real DNS domains.)\n"
     # Device linking. The answer to "what ELSE does this person have", which no
     # single log can express -- it is a correlation across ssl/ssh/dns/dhcp.
     "- device_links: ip, mac, dt, owner_cluster_id, linked_ips, linked_macs, "
@@ -611,11 +626,22 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
                 s = re.sub(r"(?i)\bblackhat_pope_logs\.", f"{ATHENA_DATABASE}.", s)
             return s
 
-        # Inject date partition if missing
+        # Inject date partition if missing.
+        #
+        # THE TEST IS FOR A dt PREDICATE, NOT THE LETTERS "dt". `"dt" not in sql.lower()`
+        # is satisfied by any query that happens to contain the substring anywhere:
+        # `SUM(orig_bytes) AS banDwidTh`, `service = 'dtls'`, `created_dt`, a table
+        # aliased `dt`. Such a query skips injection entirely and then runs UNPARTITIONED
+        # across the whole projected range (2026-04-01..12-31), so a question about
+        # "today" silently returns all-time rows -- and it is the expensive kind of wrong,
+        # scanning every partition. Require an actual `dt =` / `dt IN` / `dt >` predicate
+        # at a word boundary.
+        _DT_PREDICATE = re.compile(
+            r"(?:^|[^a-z0-9_])dt\s*(?:=|<|>|!=|<>|\bIN\b|\bBETWEEN\b)", re.IGNORECASE)
         validated = []
         for sql in queries[:3]:
             sql = _sub_tokens(sql)
-            if "dt" not in sql.lower():
+            if not _DT_PREDICATE.search(sql):
                 # Try to add dt filter
                 if "WHERE" in sql.upper():
                     sql = re.sub(
