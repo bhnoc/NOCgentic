@@ -87,7 +87,14 @@ _MAX_LINKS = 12
 
 # Zeek writes '-' for an absent field and the raw loader types every column as
 # string, so the empty marker has to be filtered as a value, not as NULL.
-_EMPTY = "('', '-')"
+# '(empty)' is Zeek's marker for a present-but-empty SET/VECTOR field. It is absent
+# from every column this module reads today (verified 0 rows on dt=2026-08-01 for
+# ssl.ja3, ssh.hassh, known_devices.mac, known_users.user_), but it appears on 2,376
+# in-scope IPs in ssl's client-cert columns, so the loader does emit it. Filtered
+# pre-emptively: a fingerprint of "(empty)" would be a single shared key, and the
+# popularity ceiling cannot save us because it would sit in the 2-10 band on a quiet
+# day and link strangers as one owner's devices.
+_EMPTY = "('', '-', '(empty)')"
 
 
 def _present(col: str) -> str:

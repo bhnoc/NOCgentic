@@ -561,3 +561,29 @@ class TestDDL:
         would just be another chance for it to arrive NULL."""
         sql = dl.build_device_links_sql(DB, DATE, _catalog())
         assert f"'{DATE}' dt" in sql
+
+
+class TestZeekEmptyMarker:
+    """Zeek writes '(empty)' for a present-but-empty SET/VECTOR field, and the raw
+    loader types every column as string, so it arrives as a VALUE rather than NULL.
+
+    It is absent from every column this module reads today (0 rows on dt=2026-08-01
+    for ssl.ja3, ssh.hassh, known_devices.mac, known_users.user_) but the loader
+    does emit it -- 2,376 in-scope IPs carry it in ssl's client-cert columns, and
+    entity_context had a real bug from exactly this. Filtered pre-emptively because
+    the popularity ceiling CANNOT catch it: a shared "(empty)" fingerprint would sit
+    inside the 2-10 IP gold band on a quiet day and link strangers as one owner.
+    """
+
+    def test_empty_marker_is_filtered(self):
+        assert "(empty)" in dl._EMPTY, "Zeek's '(empty)' marker would be a link key"
+
+    def test_all_three_absent_markers_are_filtered(self):
+        for marker in ("''", "'-'", "'(empty)'"):
+            assert marker in dl._EMPTY
+
+    def test_every_fingerprint_source_applies_the_filter(self):
+        """A source that skips it reintroduces the bug for its own column only,
+        which is the hardest version to notice."""
+        sql = dl.build_device_links_sql(DB, DATE, _catalog())
+        assert sql.count("NOT IN ('', '-', '(empty)')") >= 4
