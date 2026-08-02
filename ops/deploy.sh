@@ -68,12 +68,12 @@ echo "==> Post-deploy health"
 docker compose -f "$COMPOSE_FILE" ps
 
 HEALTHY=false
-for i in $(seq 1 12); do
+for i in $(seq 1 30); do
   if curl -sk --fail -o /dev/null "https://127.0.0.1/health" ; then
     HEALTHY=true
     break
   fi
-  echo "  waiting for /health... ($i/12)"
+  echo "  waiting for /health... ($i/30)"
   sleep 5
 done
 
