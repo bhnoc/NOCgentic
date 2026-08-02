@@ -13,6 +13,7 @@ Full OpenTelemetry tracing sent to Manifold.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
