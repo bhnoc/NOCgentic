@@ -11,6 +11,7 @@ what a SOC analyst needs to see.
 """
 
 import os
+import json
 import sys
 
 import pytest
@@ -127,3 +128,52 @@ class TestTelemetryUsesTheSharedScrubber:
         src = inspect.getsource(telemetry)
         for name in ("_RE_SECRET_TOKEN", "_RE_PASSWORD", "_RE_API_KEY", "_RE_BEARER"):
             assert name not in src, f"{name} is back in telemetry.py; use credscrub"
+
+
+class TestJsonShapedSecrets:
+    """Athena rows reach the LLM as json.dumps output, so the JSON-quoted form is
+    the shape that actually occurs in production -- and it was the one shape not
+    covered. `password=x` matched; `"password":"x"` did not.
+
+    This is not hypothetical: both `ftp` and `http` carry a real `password` column
+    in this catalog, so a credential the sensor captured off the wire could reach
+    an external LLM verbatim (LLM_PROVIDER=gemini in prod).
+    """
+
+    @pytest.mark.parametrize("key", [
+        "password", "passwd", "pwd", "secret", "api_key", "api-key", "apikey",
+        "token", "authorization",
+    ])
+    def test_json_quoted_secret_is_redacted(self, key):
+        payload = '{"id_orig_h":"10.220.31.5","%s":"s3kr3t-value"}' % key
+        assert "s3kr3t-value" not in scrub_secrets(payload)
+
+    def test_case_insensitive(self):
+        assert "s3kr3t" not in scrub_secrets('{"PassWord":"s3kr3t"}')
+
+    def test_value_containing_a_colon_or_space_is_fully_redacted(self):
+        """A bare-word rule stops at whitespace, so a value with a space used to
+        leak its tail. Anchoring on the closing quote covers the whole value."""
+        out = scrub_secrets('{"password":"two words: and a colon"}')
+        for leak in ("two words", "and a colon"):
+            assert leak not in out
+
+    def test_output_is_still_parseable_json(self):
+        """The redaction must not eat a quote. Invalid JSON is worse than a
+        redacted value: the model silently misreads the remaining fields."""
+        rows = [{"id_orig_h": "10.220.31.5", "user_": "svc", "password": "p"}]
+        out = scrub_secrets(json.dumps(rows))
+        assert json.loads(out)[0]["password"] == "[REDACTED]"
+        assert json.loads(out)[0]["user_"] == "svc", "a non-secret field was damaged"
+
+    def test_hash_iocs_still_survive_in_json(self):
+        """The entire reason this module exists: an MD5/SHA is evidence, not a
+        secret, and redacting it destroys the analyst's pivot."""
+        payload = '{"md5":"%s","sha256":"%s"}' % (MD5, SHA256)
+        out = scrub_secrets(payload)
+        assert MD5 in out and SHA256 in out
+
+    def test_a_username_is_not_treated_as_a_secret(self):
+        """user_ is identity, not a credential, and the analyst needs it."""
+        out = scrub_secrets('{"user_":"alice","password":"x"}')
+        assert "alice" in out

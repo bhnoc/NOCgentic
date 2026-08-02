@@ -156,7 +156,7 @@ SQL_GEN_PROMPT = (
     "    (alerts has NO resp_network_name — only orig side)\n"
     "    Using `id_orig_h` on these → COLUMN_NOT_FOUND error.\n\n"
     "(C) HOST-KEYED tables → the host column is `ip` or `host_ip`, NOT orig_h:\n"
-    "    entity_context, asset_classification  -> ip\n"
+    "    entity_context, asset_classification, device_links  -> ip\n"
     "    known_users, known_devices, known_names, known_domains,\n"
     "    known_hosts, known_services, known_certs -> host_ip\n"
     "    These are one row PER HOST, not per session. To attach them to a session\n"
@@ -201,11 +201,16 @@ SQL_GEN_PROMPT = (
     "(DHCP leases. NO id_orig_h / id_resp_h on this table: the host is "
     "`client_addr` or `assigned_addr`. host_name is the device's self-reported name.)\n"
     "- asset_classification: ip, mac, vendor_mac, hostname, os_name, device_type, "
+    "os_source, device_source, "
     "user_agent, org_name, mgmt_tooling, randomized_mac, connections, mb_in, mb_out, "
     "first_seen, last_seen, network_name, room_name, confidence, dt (device inventory, "
     "one row per host per day). Use for 'what/whose device is this'. Notes: os_name and "
-    "device_type come from the HTTP User-Agent, and most hosts are TLS-only, so they are "
-    "'unknown' for the majority; mac/hostname/traffic are still populated. org_name is the "
+    "device_type are inferred from several signals in precedence order, and "
+    "os_source/device_source name WHICH one won ('user_agent' is direct evidence; "
+    "'software' and 'dhcp_hostname' are weaker inference; 'unknown' means no signal "
+    "landed). Cite the source when reporting an OS, and never present an inferred "
+    "value as certain. mac/hostname/traffic are populated even when the OS is unknown. "
+    "org_name is the "
     "SharePoint or Okta tenant, the strongest attribution signal available. "
     "randomized_mac=true explains an unknown vendor_mac as privacy behaviour rather than "
     "missing data. confidence says how many signals backed the row: prefer high/medium "
@@ -240,13 +245,60 @@ SQL_GEN_PROMPT = (
     "first_seen, last_seen, id_confidence, alert_count, alert_count_all, "
     "high_alert_count, alert_types, top_alerts, last_alert_at, observed_users, "
     "user_count, user_protocols, service_count, services, listening_ports, "
-    "observed_hostnames, announced_domains, session_count, log_type_count, log_types, dt "
+    "observed_hostnames, announced_domains, session_count, log_type_count, log_types, "
+    "org_confidence, org_reasons, org_tenant, org_tenant_sources, owner_name, "
+    "owner_name_source, owner_name_confidence, internal_domain, "
+    "internal_domain_confidence, internal_domain_reasons, client_cert_issuer_org, "
+    "client_cert_class, client_cert_subject_hash, client_cert_reasons, "
+    "home_region, home_confidence, home_reasons, "
+    "client_ja3, client_hassh, os_versions, domain_user, dt "
     "(ONE ROW PER HOST PER DAY: identity + accounts + exposure + alert risk + session "
     "reach already joined together. Use this for 'what is this host / who is on it / "
     "is it risky' instead of joining asset_classification, alerts and known_* by hand. "
     "alert_count EXCLUDES informational ET INFO noise so it matches the live feed; "
     "alert_count_all is the raw total, much higher on DNS resolvers. To go from a "
-    "session to its host: JOIN uid_lookup ul ON ul.orig_h = entity_context.ip.)\n"
+    "session to its host: JOIN uid_lookup ul ON ul.orig_h = entity_context.ip. "
+    "PROFILING COLUMNS: org_reasons and home_reasons carry '|'-delimited EVIDENCE "
+    "for the attribution above them -- quote them so an analyst can audit the "
+    "claim, and never state an org or region without them. home_region is a "
+    "two-letter country code inferred from destination-traffic majority share, so "
+    "treat it as a hint and always cite the percentage in home_reasons. client_ja3 "
+    "and client_hassh are this host's dominant TLS/SSH client fingerprints -- the "
+    "key for finding the SAME device on another IP. os_versions comes from the "
+    "software log, domain_user from ntlm/kerberos and is populated for very few "
+    "hosts. Any of these can be NULL; say 'not known' rather than guessing. "
+    "ATTRIBUTION COLUMNS: owner_name is a first-name/hostname stem extracted from an "
+    "mDNS instance name or a known_names hostname, emitted ONLY when that label is "
+    "rare (few distinct IPs) because person-looking labels on many IPs are SHARED "
+    "AirPlay/cast endpoints in session rooms -- always quote owner_name_source, which "
+    "names the label and how many IPs carried it, and never present owner_name as a "
+    "confirmed legal identity. org_tenant is the tenant label from an SSO/collab "
+    "hostname (org_tenant_sources names which families agreed) and is the employer "
+    "string; generic infra labels are already excluded. internal_domain is an "
+    "employer's internal AD domain leaked by wpad/_ldap._tcp/_msdcs queries -- high "
+    "confidence means the AD-specific records, medium means wpad only. "
+    "client_cert_issuer_org/client_cert_class come from an mTLS client certificate "
+    "this device was ENROLLED with, so they are enrolment evidence rather than an SNI "
+    "guess. client_cert_subject_hash is a SHA-256 ONLY: the raw certificate subject "
+    "is deliberately never stored because it contains a person's name, work email and "
+    "employer in one string. Use the hash solely to match two sightings of the same "
+    "certificate; never claim to know who it names.)\n"
+    # Device linking. The answer to "what ELSE does this person have", which no
+    # single log can express -- it is a correlation across ssl/ssh/dns/dhcp.
+    "- device_links: ip, mac, dt, owner_cluster_id, linked_ips, linked_macs, "
+    "link_methods, link_evidence, confidence (ONE ROW PER HOST PER DAY: the other "
+    "IPs believed to belong to the SAME PERSON. linked_ips is a ' | '-delimited "
+    "list, capped at 12. link_methods is a comma list drawn from same_mac, "
+    "same_ja3, same_hassh, same_rdfp, same_vpn_ja3, mdns_companion, shared_cast, "
+    "shared_account. link_evidence is human-readable and should be quoted VERBATIM "
+    "to the analyst rather than paraphrased -- it names the fingerprint and how "
+    "many IPs shared it. owner_cluster_id is stable across a rebuild, so hosts "
+    "sharing it are one cluster. confidence reflects the WEAKEST edge in the "
+    "cluster, so 'high' means every link is solid. Use this for 'are these the "
+    "same person', 'what other devices does this host's owner have', and to follow "
+    "a laptop that roamed networks with a randomized MAC. It answers device "
+    "linking that ja3 alone cannot: query it directly instead of self-joining ssl "
+    "on ja3, which is expensive and will match stock browsers.)\n"
     # Authentication logs. Low volume today but the highest-signal data on the
     # network for credential attacks, so the model must know they exist.
     "- kerberos: uid, id_orig_h, id_resp_h, request_type, client, service, success, "
@@ -852,7 +904,14 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
         if context.get("errors"):
             results_str += f"\n**Query Errors:** {json.dumps(context['errors'], default=str)[:500]}\n"
 
-        context_str = results_str[:6000]
+        # Sanitize the ROWS, not just the question. Only `query` was scrubbed here,
+        # so raw Athena output went to an external LLM (LLM_PROVIDER=gemini in prod)
+        # carrying whatever the columns held. entity_context now surfaces
+        # owner_name, observed_hostnames and observed_users — real attendee names off
+        # a conference network — and ipscope's allowlist never got a say either, so an
+        # out-of-scope address in a JOIN result egressed too. sanitize() applies both
+        # scrubbers before the 6000-char cut, matching every other agent.
+        context_str = sanitize(results_str[:6000])
         span.set_attribute("context.length", len(context_str))
 
         # When any query hit its LIMIT the row count is a capped sample, not a

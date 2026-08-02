@@ -20,6 +20,14 @@ __all__ = ["scrub_secrets"]
 _RE_SECRET_TOKEN = re.compile(r"\b(?![A-Fa-f0-9]{40,}\b)[A-Za-z0-9+/]{40,}\b")
 _RE_PASSWORD = re.compile(r"(?i)password\s*[:=]\s*\S+")
 _RE_API_KEY = re.compile(r"(?i)api[_-]?key\s*[:=]\s*\S+")
+# JSON-quoted form. `password=x` was covered but `"password":"x"` was not, and query
+# results reach the LLM as json.dumps of Athena rows — the one shape that actually
+# occurs. Both `ftp` and `http` carry a real `password` column on this network, so a
+# credential the sensor captured could egress verbatim. Keyed on the quoted name so a
+# value containing ':' or a space still matches to its closing quote.
+_RE_JSON_SECRET = re.compile(
+    r'(?i)"(password|passwd|pwd|secret|api[_-]?key|token|authorization)"\s*:\s*"[^"]*"'
+)
 _RE_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
 # Provider-prefixed keys, which are shorter than the generic 40-char rule.
 _RE_PREFIXED_KEY = re.compile(r"\b(?:sk|pk|rk|xoxb|xoxp|ghp|gho|AKIA)[-_A-Za-z0-9]{12,}\b")
@@ -31,6 +39,9 @@ def scrub_secrets(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
     text = _RE_AWS_SECRET.sub("aws_secret_access_key: [REDACTED]", text)
+    # Before the bare-word rules: those would eat the opening quote and leave the
+    # value's closing quote behind, producing invalid JSON the model then misreads.
+    text = _RE_JSON_SECRET.sub(lambda m: f'"{m.group(1)}":"[REDACTED]"', text)
     text = _RE_PASSWORD.sub("password: [REDACTED]", text)
     text = _RE_API_KEY.sub("api_key: [REDACTED]", text)
     text = _RE_BEARER.sub("bearer [REDACTED]", text)

@@ -15,6 +15,7 @@ Event shapes
 import boto3
 
 import asset_classification
+import device_links
 import entity_context
 import derived_views
 import json
@@ -368,6 +369,23 @@ def _catalog_columns():
     return catalog
 
 
+def _table_column_order(table):
+    """Column names for one table in CATALOG ORDER.
+
+    _catalog_columns returns sets, which is fine for presence tests but useless for
+    building a positional UNION — the arms have to agree on order, and a set does
+    not have one.
+    """
+    try:
+        t = glue.get_table(DatabaseName=GLUE_DATABASE, Name=table)['Table']
+    except Exception as exc:  # table may not exist yet on a first run
+        print(f"  column order unavailable for {table}: {exc}")
+        return []
+    cols = [c['Name'] for c in t.get('StorageDescriptor', {}).get('Columns', [])]
+    cols += [p['Name'] for p in t.get('PartitionKeys', [])]
+    return cols
+
+
 def rebuild_derived_views():
     """Regenerate alerts / uid_lookup / fuid_lookup from the live catalog.
 
@@ -394,6 +412,48 @@ def rebuild_derived_views():
             print(f"  VIEW REBUILD FAILED {view}: {(reason or '')[:200]}")
     print(f"derived views rebuilt={rebuilt} failed={[f['view'] for f in failed]}")
     return {'rebuilt': rebuilt, 'failed': failed}
+
+
+def _stable_view_ddl(stable, newest_table):
+    """CREATE OR REPLACE VIEW over EVERY daily partition table, newest included.
+
+    Pinning the view at a single day is a silent-wrong-answer bug, not a staleness
+    bug. `asset_classification` pointed only at 2026_08_02, so a perfectly
+    reasonable `WHERE dt = '2026-08-01'` returned ZERO rows while 108,686 sat in
+    asset_classification_2026_08_01 — no error, just an empty result an agent
+    reports as "no data". Three QA validators lost queries to it.
+
+    Each arm names its columns EXPLICITLY, in the newest partition's order, with
+    CAST(NULL AS VARCHAR) for any column that partition lacks. `UNION ALL BY NAME`
+    would express this directly but Athena rejects it ("mismatched input 'BY'"), and
+    a bare `SELECT *` union is positional: the per-day tables are built from a
+    discovered catalog, so an older partition can have fewer columns than today's
+    and positional matching would silently transpose values between columns. A
+    wrong value under a right column name is the worst outcome available here.
+    """
+    catalog = _catalog_columns()
+    tables = sorted(t for t in catalog if t.startswith(f"{stable}_"))
+    if newest_table not in tables:
+        tables.append(newest_table)
+        tables.sort()
+    if not tables:
+        return None
+
+    # The newest partition defines the column set and its order.
+    order = _table_column_order(newest_table) or sorted(catalog.get(newest_table, ()))
+    if not order:
+        return None
+
+    arms = []
+    for t in tables:
+        have = catalog.get(t, set())
+        cols = ", ".join(
+            (f'"{c}"' if c in have else f'CAST(NULL AS VARCHAR) AS "{c}"')
+            for c in order
+        )
+        arms.append(f"SELECT {cols} FROM {GLUE_DATABASE}.{t}")
+    return (f"CREATE OR REPLACE VIEW {GLUE_DATABASE}.{stable} AS "
+            + " UNION ALL ".join(arms))
 
 
 def rebuild_asset_classification(date_str):
@@ -469,10 +529,13 @@ def rebuild_asset_classification(date_str):
         print(f"  asset_classification FAILED: {(reason or '')[:200]}")
         return {'built': False, 'reason': (reason or '')[:200]}
 
-    # Point the stable `asset_classification` name at the newest partition so the
-    # agents query one name instead of guessing the date suffix.
-    view = (f"CREATE OR REPLACE VIEW {GLUE_DATABASE}.asset_classification AS "
-            f"SELECT * FROM {GLUE_DATABASE}.{table}")
+    # Point the stable `asset_classification` name at EVERY partition so the agents
+    # query one name instead of guessing the date suffix, and so a dt filter for any
+    # retained day still finds rows.
+    view = _stable_view_ddl('asset_classification', table)
+    if not view:
+        print("  asset_classification view skipped: no partition tables")
+        return {'built': True, 'view': False, 'reason': 'no partition tables'}
     _, v_state, v_reason = run_athena_query(view, timeout=120, retries=1)
     if v_state != 'SUCCEEDED':
         print(f"  asset_classification view FAILED: {(v_reason or '')[:200]}")
@@ -541,9 +604,10 @@ def _rebuild_materialized(module, label, date_str, timeout=900):
         print(f"  {label} FAILED: {(reason or '')[:250]}")
         return {'built': False, 'reason': (reason or '')[:200]}
 
-    stable = label
-    view = (f"CREATE OR REPLACE VIEW {GLUE_DATABASE}.{stable} AS "
-            f"SELECT * FROM {GLUE_DATABASE}.{table}")
+    view = _stable_view_ddl(label, table)
+    if not view:
+        print(f"  {label} view skipped: no partition tables")
+        return {'built': True, 'view': False, 'reason': 'no partition tables'}
     _, v_state, v_reason = run_athena_query(view, timeout=120, retries=1)
     if v_state != 'SUCCEEDED':
         print(f"  {label} view FAILED: {(v_reason or '')[:200]}")
@@ -587,6 +651,9 @@ def dispatch_for_date(date_str):
     # LAST: entity_context aggregates over alerts, uid_lookup and
     # asset_classification, so all of those must already be current.
     entities = _rebuild_materialized(entity_context, 'entity_context', date_str)
+    # device_links reads only raw logs (ssl/ssh/dns/dhcp/known_*), so it does not
+    # depend on the two above and its position here is not load-bearing.
+    links = _rebuild_materialized(device_links, 'device_links', date_str)
 
     result = {
         'date': date_str,
@@ -597,6 +664,7 @@ def dispatch_for_date(date_str):
         'derived_views': views,
         'asset_classification': assets,
         'entity_context': entities,
+        'device_links': links,
     }
     print(json.dumps(result))
     return result

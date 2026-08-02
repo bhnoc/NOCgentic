@@ -14,6 +14,7 @@ source must collapse to one row per host before anything is joined.
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -42,6 +43,80 @@ def _catalog(**extra):
     }
     cat.update(extra)
     return cat
+
+
+# The profiling sources are deliberately NOT in _catalog(): every gate above was
+# written against that shape, and the base catalog doubles as the partial-catalog
+# case proving the new columns degrade to NULL rather than vanishing.
+_PROFILING = {
+    "ssl": {"id_orig_h", "ja3", "ja3s", "server_name", "client_subject",
+            "client_issuer", "client_cert_chain_fps", "dt"},
+    "ssh": {"id_orig_h", "hassh", "hasshserver", "dt"},
+    # `host` is a VARCHAR ip and the ONLY key on this table. Not id_orig_h.
+    "software": {"ts_datetime", "ts", "host", "host_p", "software_type", "name",
+                 "version_major", "version_minor", "version_minor2",
+                 "version_minor3", "version_addl", "unparsed_version", "dt"},
+    "conn": {"id_orig_h", "id_resp_h", "ts_datetime", "remote_country",
+             "remote_city", "remote_asn", "remote_organization", "dt"},
+    "ntlm": {"id_orig_h", "username", "hostname", "domainname", "dt"},
+    "kerberos": {"id_orig_h", "client", "service", "dt"},
+    "dns": {"id_orig_h", "query", "qtype_name", "rcode_name", "answers", "dt"},
+    "dhcp": {"mac", "assigned_addr", "host_name", "client_fqdn", "domain", "dt"},
+}
+
+# Every CTE alias the full profiling catalog folds together, in join order. The
+# top-level fold must be exactly one FULL OUTER JOIN per alias after the first.
+_ALL_ALIASES = ("ac", "al", "ku", "ks", "kn", "kdom", "ul", "org", "own",
+                "idom", "mtls", "home", "j3", "hsh", "sw", "du")
+
+# column -> every catalog table that could populate it. domain_user has two because
+# it merges ntlm and kerberos, so it only goes null when BOTH are gone.
+_PROFILE_COLUMNS = {
+    "org_confidence": ("ssl",),
+    "org_reasons": ("ssl",),
+    "home_region": ("conn",),
+    "home_confidence": ("conn",),
+    "home_reasons": ("conn",),
+    "client_ja3": ("ssl",),
+    "client_hassh": ("ssh",),
+    "os_versions": ("software",),
+    "domain_user": ("ntlm", "kerberos"),
+    "org_tenant": ("ssl",),
+    "org_tenant_sources": ("ssl",),
+    # owner_name merges mDNS instance names with known_names hostnames, so it only
+    # goes null when BOTH are gone.
+    "owner_name": ("dns", "known_names"),
+    "owner_name_source": ("dns", "known_names"),
+    "owner_name_confidence": ("dns", "known_names"),
+    "internal_domain": ("dns",),
+    "internal_domain_confidence": ("dns",),
+    "internal_domain_reasons": ("dns",),
+    "client_cert_issuer_org": ("ssl",),
+    "client_cert_class": ("ssl",),
+    "client_cert_subject_hash": ("ssl",),
+    "client_cert_reasons": ("ssl",),
+}
+
+
+def _profiling_catalog(**extra):
+    cat = _catalog(**_PROFILING)
+    cat.update(extra)
+    return cat
+
+
+def _cte(sql, alias):
+    """The text of one CTE, so a gate can assert about that source alone."""
+    start = sql.index(f"\n{alias} AS (") if f"\n{alias} AS (" in sql else sql.index(f"WITH {alias} AS (")
+    tail = sql[start:]
+    depth = 0
+    for i, ch in enumerate(tail):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return tail[:i + 1]
+    raise AssertionError(f"CTE {alias} is unterminated")
 
 
 class TestNoFanOut:
@@ -161,3 +236,611 @@ class TestDDL:
 
     def test_ctas_is_none_when_unsatisfiable(self):
         assert ec.build_ctas(DB, DATE, {}) is None
+
+
+class TestProfileColumns:
+    """The profile columns: org attribution WITH reasons, home-base inference, and
+    the device fingerprints that link one device across networks."""
+
+    @pytest.mark.parametrize("col", sorted(_PROFILE_COLUMNS))
+    def test_column_is_present(self, col):
+        assert col in ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+
+    @pytest.mark.parametrize("col,sources", sorted(_PROFILE_COLUMNS.items()))
+    def test_column_degrades_to_null_when_its_source_is_absent(self, col, sources):
+        """PostCog is presence-gated on the column, not the table, so a dropped
+        column breaks it where a null column just reads as 'not known'."""
+        cat = _profiling_catalog()
+        for source in sources:
+            del cat[source]
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        assert f"CAST(NULL AS VARCHAR) {col}" in sql, "column vanished instead of NULL"
+        for source in sources:
+            assert f"{DB}.{source}" not in sql
+
+    def test_every_profile_column_is_null_on_the_base_catalog(self):
+        """None of ssl/ssh/software/conn/ntlm/kerberos/dns exist there, so every
+        column sourced from them must still ship, as NULL.
+
+        owner_name is excluded because the base catalog DOES have known_names, which
+        is one of its two sources -- it is covered by the parametrized degradation
+        gate instead."""
+        sql = ec.build_entity_context_sql(DB, DATE, _catalog())
+        for col, sources in _PROFILE_COLUMNS.items():
+            if "known_names" in sources:
+                continue
+            assert f"CAST(NULL AS VARCHAR) {col}" in sql
+
+    def test_a_source_present_without_its_column_is_not_read(self):
+        """The gate is column-level: an `ssl` predating ja3 would otherwise build a
+        CTAS that fails, and one failed statement loses the whole rebuild."""
+        cat = _profiling_catalog(ssl={"id_orig_h", "server_name", "dt"})
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        assert "CAST(NULL AS VARCHAR) client_ja3" in sql
+        assert "org_reasons" in sql, "server_name evidence should still be read"
+
+    def test_reasons_are_pipe_delimited_evidence(self):
+        """PostCog shows these verbatim, so the separator is a contract."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        org = _cte(sql, "org")
+        assert "' | '" in org
+        assert "'okta'" in org and "'o365'" in org
+        # The tenant is spliced in when one survived the denylist, so the evidence
+        # reads okta:<tenant>@<tenant>.okta.com rather than just the SNI.
+        assert "kind || ':' || COALESCE(tenant || '@', '') || sni" in org, (
+            "reasons must name WHY, not just the SNI"
+        )
+
+    def test_org_confidence_is_a_bucket_not_a_number(self):
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        for bucket in ("'high'", "'medium'", "'low'"):
+            assert bucket in org
+
+    def test_home_region_comes_from_conn_not_the_geo_table(self):
+        """The `geo` table has 4 rows. Using it would null out 13,000 hosts."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog(geo={"ip", "country", "dt"}))
+        assert "remote_country" in _cte(sql, "home")
+        assert f"{DB}.geo" not in sql
+
+    def test_home_reasons_carries_the_percentage(self):
+        """An inference an analyst cannot audit is worse than no inference."""
+        home = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "home")
+        assert "'% conns to '" in home
+        assert "100.0" in home, "share must be a percentage, not a raw count"
+
+    def test_remote_country_is_constrained_to_iso2(self):
+        """`remote_country` is an unvalidated VARCHAR. Measured on dt=2026-08-01, only
+        6.96M of 44.3M in-scope rows hold a real country code: 22.1M rows across 3,249
+        IPs carry a 40-char hex hash and the rest stringified floats. Without this
+        guard the majority share is usually a hash, so home_region shipped a hex blob
+        as a host's country at medium or high confidence."""
+        home = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "home")
+        assert "REGEXP_LIKE(remote_country, '^[A-Z]{2}$')" in home, (
+            "the ISO2 guard is gone; hashes will be reported as countries"
+        )
+
+    def test_home_reasons_makes_no_timezone_claim(self):
+        """A UTC peak hour was tried and measured: it moves 4.12h between consecutive
+        days for the same host, and 0 of 96 APAC-ccTLD hosts peaked in the APAC
+        business day. It tracks the venue's schedule, not residency, so it is an
+        unfalsifiable claim about where a real attendee lives."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        assert "tz:" not in sql, "timezone inference is back in home_reasons"
+        assert "peak_hour" not in sql
+
+    def test_fingerprints_are_the_dominant_value_per_host(self):
+        """A device emits a dozen ja3s across its apps; only the top one is stable
+        enough to match the same device on another network."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        for alias in ("j3", "hsh"):
+            body = _cte(sql, alias)
+            assert "ROW_NUMBER() OVER (PARTITION BY id_orig_h ORDER BY COUNT(*) DESC)" in body
+            assert "WHERE rn = 1" in body
+
+
+class TestSoftwareJoinsOnHost:
+    """`software` keys on `host`, a VARCHAR ip. Nothing else in the catalog does
+    this. Joining it on id_orig_h parses fine and returns an all-null column, so
+    the regression is silent -- hence a gate rather than a comment."""
+
+    def test_software_cte_keys_on_host(self):
+        sw = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "sw")
+        assert '"host" ip' in sw
+        assert 'GROUP BY "host"' in sw
+
+    def test_software_cte_never_mentions_id_orig_h(self):
+        sw = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "sw")
+        assert "id_orig_h" not in sw, "software has no id_orig_h; this yields all nulls"
+
+    def test_host_is_double_quoted_because_it_is_reserved(self):
+        """Backticks only work in DDL. In a SELECT they are a parse error."""
+        sw = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "sw")
+        assert "`host`" not in sw
+        assert "FROM " + DB + ".software" in sw
+
+    def test_daily_churning_build_numbers_are_left_out(self):
+        """version_minor2/minor3 are browser build numbers that roll every day, so
+        including them rewrites the cell nightly without telling anyone anything."""
+        sw = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "sw")
+        assert "version_minor2" not in sw
+        assert "version_minor3" not in sw
+
+
+class TestProfileSourcesDoNotFanOut:
+    """The new sources are the biggest tables in the catalog: ssl is ~7M rows and
+    conn ~40M. Each must collapse to one row per host in its own CTE before the
+    FULL OUTER JOIN, exactly like the original seven."""
+
+    def test_group_by_count_grows_with_the_new_ctes(self):
+        base = ec.build_entity_context_sql(DB, DATE, _catalog())
+        full = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        assert full.count("GROUP BY") > base.count("GROUP BY"), (
+            "a new source joined raw rows instead of aggregating first"
+        )
+
+    def test_every_profiling_cte_aggregates_or_takes_one_row(self):
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        for alias in ("org", "home", "j3", "hsh", "sw", "du"):
+            body = _cte(sql, alias)
+            assert "GROUP BY" in body, f"{alias} does not aggregate"
+
+    def test_join_shape_is_unchanged(self):
+        """One FULL OUTER JOIN per source after the first, and nothing else. The
+        owner-name CTE joins internally to gate on label rarity, so the assertion is
+        scoped to the top-level fold rather than counting every JOIN in the file."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        top = sql[sql.index("\nSELECT\n  COALESCE("):]
+        assert "LEFT JOIN" not in top
+        assert top.count("FULL OUTER JOIN") == len(_ALL_ALIASES) - 1
+
+    def test_new_ctes_pin_the_partition(self):
+        """Unpinned, ssl and conn would scan every day in the catalog per rebuild."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        for alias in ("org", "home", "j3", "hsh", "sw", "du"):
+            assert f"dt = '{DATE}'" in _cte(sql, alias), f"{alias} scans every partition"
+
+    def test_evidence_lists_stay_bounded(self):
+        """A host hitting hundreds of managed-endpoint SNIs must not make one
+        enormous cell."""
+        for alias in ("org", "sw", "du"):
+            body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+            assert "SLICE(ARRAY_AGG" in body
+
+
+class TestOpportunisticIdentity:
+    """ntlm has 1 row and kerberos 20 at this show. Both are wired up anyway, but a
+    populated domain_user is a gift, not something anything may depend on."""
+
+    def test_either_source_alone_is_enough(self):
+        for present, absent in (("ntlm", "kerberos"), ("kerberos", "ntlm")):
+            cat = _profiling_catalog()
+            del cat[absent]
+            sql = ec.build_entity_context_sql(DB, DATE, cat)
+            assert f"{DB}.{present}" in _cte(sql, "du")
+            assert f"{DB}.{absent}" not in sql
+
+    def test_both_sources_are_unioned_not_joined(self):
+        """A join would multiply the two, and would drop hosts seen in only one."""
+        du = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "du")
+        assert "UNION ALL" in du
+        assert " JOIN " not in du
+
+    def test_ntlm_is_normalized_to_the_kerberos_principal_shape(self):
+        """One column, two source formats. A backslash in a Trino literal is not
+        escape-processed, so every consumer would have to guess if it was doubled."""
+        du = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "du")
+        assert "username || '@' || domainname" in du
+        assert "\\" not in du
+
+
+def _stem_rules():
+    """The owner-stem regexes as Python patterns.
+
+    The SQL ships them as Trino literals, so the '' escaping and the \\x{2019}
+    unicode escape have to be undone to exercise the same grammar here. This is how
+    a gate can assert on the RULE rather than on the presence of a substring.
+    """
+    out = []
+    for rule in ec._OWNER_STEM_RULES:
+        pat = rule.strip("'").replace("''", "'").replace(r"\x{2019}", "’")
+        out.append(re.compile(pat))
+    return out
+
+
+def _extract_stem(label):
+    for rx in _stem_rules():
+        m = rx.match(label)
+        if m and m.group(1):
+            return m.group(1)
+    return None
+
+
+def _is_instance_named(query):
+    pat = ec._MDNS_INSTANCE.strip("'")
+    return re.match(pat, query) is not None
+
+
+def _owner_emitted(label, n_ips, *, query=None):
+    """The full owner_name gate as the SQL applies it, in order."""
+    if query is not None and (".", "_sub.")[1] in query:
+        return None
+    if query is not None and not _is_instance_named(query):
+        return None
+    if label in ("", "-", "(empty)"):
+        return None
+    if any(w in label for w in ec._OWNER_STOPWORDS):
+        return None
+    if n_ips > ec._OWNER_MAX_IPS:
+        return None
+    return _extract_stem(label)
+
+
+class TestOwnerNameRarityCeiling:
+    """The measured failure this whole gate exists to prevent.
+
+    Person-looking mDNS labels on 11-50 in-scope IPs (max 60 measured on
+    dt=2026-08-01) are SHARED AirPlay / companion-link endpoints in session rooms --
+    every single label above the ceiling resolved to _airplay or _companion-link.
+    Emitting one there would attribute a staffer's name to up to 60 strangers.
+    """
+
+    def test_the_ceiling_is_a_documented_constant(self):
+        assert isinstance(ec._OWNER_MAX_IPS, int)
+        assert 1 <= ec._OWNER_MAX_IPS <= 10, "a ceiling above 10 admits shared AirPlay"
+
+    def test_a_label_on_48_ips_yields_no_owner_name(self):
+        """The exact shared-AirPlay case from the sweep."""
+        assert _owner_emitted("firstname’s macbook pro", 48) is None
+
+    def test_a_label_on_60_ips_yields_no_owner_name(self):
+        """The worst measured spread."""
+        assert _owner_emitted("firstname’s macbook pro", 60) is None
+
+    def test_a_label_just_over_the_ceiling_is_refused(self):
+        assert _owner_emitted("firstname’s mbp", ec._OWNER_MAX_IPS + 1) is None
+
+    def test_a_rare_label_is_allowed(self):
+        assert _owner_emitted("firstname’s mbp", 1) == "firstname"
+
+    def test_the_sql_gates_on_the_ceiling(self):
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert f"<= {ec._OWNER_MAX_IPS}" in own, "the rarity ceiling is not enforced"
+        assert "COUNT(DISTINCT ip) nip" in own
+
+    def test_the_ceiling_binds_the_emitted_stem_not_just_the_label(self):
+        """Measured: gating labels alone leaked. Two individually-rare labels
+        ("<first>’s mbp" and "<first>s-iphone") share ONE stem, so 3 stems still
+        reached 14 IPs -- above the ceiling -- until the stem was gated too."""
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert "COUNT(DISTINCT ip) snip" in own
+        assert f"snip <= {ec._OWNER_MAX_IPS}" in own
+
+
+class TestOwnerNameGrammar:
+    """mDNS instance names are the naming backbone, but only some shapes name a human."""
+
+    def test_unicode_apostrophe_possessives_are_matched(self):
+        """MEASURED: 58,170 in-scope .local rows use U+2019 and only 2,992 use ASCII.
+        A rule written with "'s" alone silently misses 95% of the evidence."""
+        assert _extract_stem("firstname’s macbook pro") == "firstname"
+
+    def test_ascii_apostrophe_possessives_are_also_matched(self):
+        assert _extract_stem("firstname's macbook pro") == "firstname"
+
+    def test_the_unicode_codepoint_is_in_the_shipped_sql(self):
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert r"\x{2019}" in own, "only ASCII apostrophes would be matched"
+
+    def test_possessive_hostname_shape_is_matched(self):
+        assert _extract_stem("firstnames-iphone") == "firstname"
+
+    def test_hyphenated_device_shape_is_matched(self):
+        assert _extract_stem("firstname-macbook") == "firstname"
+
+    def test_desktop_tag_shape_is_matched(self):
+        """DESKTOP-<tag> is a Windows default. The tag is not a person's name, but it
+        is a stable per-device label, so it is emitted at low confidence rather than
+        thrown away."""
+        assert _extract_stem("desktop-a1b2c3d") == "a1b2c3d"
+
+    def test_a_label_naming_nobody_yields_nothing(self):
+        for label in ("macbook pro", "iphone", "living room", "hp officejet"):
+            assert _extract_stem(label) is None, label
+
+
+class TestOwnerNameExcludesNonPeople:
+    def test_a_bare_service_type_is_not_instance_named(self):
+        """'_companion-link._tcp.local' is a browse query on 1,903 in-scope IPs and
+        names nobody. 484,407 of the in-scope .local rows are that one query."""
+        assert not _is_instance_named("_companion-link._tcp.local")
+        assert _owner_emitted("_companion-link", 1,
+                              query="_companion-link._tcp.local") is None
+
+    def test_an_instance_named_record_is_accepted(self):
+        q = "firstname’s mbp._companion-link._tcp.local"
+        assert _is_instance_named(q)
+        assert _owner_emitted("firstname’s mbp", 1, query=q) == "firstname"
+
+    def test_sub_subtype_records_yield_no_owner_name(self):
+        """'._sub.' records are subtype registrations: 38,023 in-scope .local rows."""
+        q = "_printer._sub._http._tcp.local"
+        assert _owner_emitted("_printer", 1, query=q) is None
+
+    def test_the_sql_excludes_sub_and_requires_an_instance_name(self):
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert "NOT LIKE '%._sub.%'" in own
+        assert "[^_.][^.]*" in own, "bare service types are not excluded structurally"
+
+    @pytest.mark.parametrize("label", [
+        "conference room speaker", "apple tv", "chromecast-1234", "lobby display",
+        "hp laserjet printer", "guest ipad", "shared macbook",
+    ])
+    def test_appliance_and_room_labels_yield_no_owner_name(self, label):
+        assert _owner_emitted(label, 1) is None, label
+
+    def test_confidence_is_a_bucket_with_a_source(self):
+        """Invariant 4: an inferred field an analyst cannot audit is not shippable."""
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        for bucket in ("'high'", "'medium'", "'low'"):
+            assert bucket in own
+        assert "owner_name_source" in own
+        assert "' ip, stem '" in own, "the source must show HOW RARE the label was"
+
+
+class TestOrgInfraLabelDenylist:
+    """Label 1 of an SSO hostname is the tenant, but only when it is not an infra
+    word. Measured: 3 of slack's label-1 values, 4 of zoom's and 2 of okta's are
+    infra words, and duo's real shapes are <t>.sso.duosecurity.com (55 hosts) and
+    <t>.login.duosecurity.com (48) -- so a naive rule fills org with "sso"/"login".
+    """
+
+    @pytest.mark.parametrize("label", ["login", "sso", "www", "auth", "id", "portal",
+                                       "mail", "vpn", "autodiscover", "outlook"])
+    def test_generic_labels_are_denied(self, label):
+        assert label in ec._INFRA_LABELS
+
+    def test_the_denylist_is_applied_in_the_sql(self):
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        for label in ("'login'", "'sso'", "'www'"):
+            assert label in org, f"{label} would be emitted as a company name"
+        assert "NOT IN (" in org
+
+    def test_a_real_tenant_is_not_denied(self):
+        for t in ("acmecorp", "contoso", "initech"):
+            assert t not in ec._INFRA_LABELS
+
+    def test_very_short_and_numeric_tenants_are_refused(self):
+        """A 1-2 char label and a pure-digit label are shard ids, not companies."""
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        assert "LENGTH(raw_tenant) >= 3" in org
+        assert "'^[0-9]+$'" in org
+
+
+class TestOrgBroadening:
+    """okta+sharepoint alone reached 806 hosts. These families were each measured
+    present on dt=2026-08-01 before being added."""
+
+    @pytest.mark.parametrize("kind", [
+        "okta", "o365", "entra", "ping", "onelogin", "duo", "jumpcloud", "auth0",
+        "slack", "zoom", "atlassian", "jamf", "kandji", "intune", "workspaceone",
+        "netskope", "zscaler", "cloudflare_zt", "autodiscover",
+    ])
+    def test_family_is_recognised(self, kind):
+        assert any(k == kind for k, _, _ in ec._ORG_SNI), kind
+
+    def test_there_are_at_least_sixteen_families(self):
+        assert len(ec._ORG_SNI) >= 16
+
+    def test_only_tenant_naming_families_set_org_tenant(self):
+        """An EDR/MDM/SASE endpoint proves someone's IT owns the box; it does not name
+        the company, so it must corroborate rather than attribute."""
+        naming = {k for k, n, _ in ec._ORG_SNI if n}
+        assert "okta" in naming and "o365" in naming
+        for corroborating in ("jamf", "intune", "netskope", "zscaler", "edr", "duo"):
+            assert corroborating not in naming, corroborating
+
+    def test_gworkspace_names_no_company(self):
+        """268 hosts but only 6 distinct SNIs: one shared Google endpoint every
+        Workspace tenant hits, so label 1 is Google's, not the employer's."""
+        naming = {k for k, n, _ in ec._ORG_SNI if n}
+        assert "gworkspace" not in naming
+
+    def test_autodiscover_takes_the_domain_after_the_prefix(self):
+        """autodiscover.<corp>.tld puts the employer in label 2, so label 1 is
+        literally the word "autodiscover" -- the one family needing an override."""
+        assert "autodiscover" in ec._TENANT_OVERRIDE
+        expr = ec._TENANT_OVERRIDE["autodiscover"]
+        assert expr != ec._TENANT, "label 1 here is the word 'autodiscover'"
+        assert "^autodiscover" in expr, "the prefix must be stripped, not captured"
+
+    def test_reasons_name_the_family_and_the_tenant(self):
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        assert "org_tenant" in org and "org_tenant_sources" in org
+
+    def test_confidence_counts_tenant_naming_evidence(self):
+        org = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "org")
+        assert "tenant IS NOT NULL THEN kind" in org
+
+
+class TestInternalDomain:
+    """A laptop still configured for its employer's AD leaks that domain via
+    wpad / _ldap._tcp / _msdcs. Measured in-scope: 206 hosts, 485 domains. Genuinely
+    additive -- these are overwhelmingly NXDOMAIN, so no TLS handshake ever happens
+    and no server_name can ever produce them."""
+
+    def test_the_three_leak_shapes_are_matched(self):
+        idom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "idom")
+        assert "wpad" in idom
+        assert "_ldap" in idom
+        assert "_msdcs" in idom
+
+    def test_local_is_excluded(self):
+        """mDNS .local is not an employer's AD domain; it is every Apple device."""
+        idom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "idom")
+        pat = re.search(r"\(\^\|[^)]*\)\(([a-z|]+)\)\$", idom)
+        assert pat, "the exclusion regex is gone"
+        excluded = pat.group(1).split("|")
+        assert "local" in excluded
+        for junk in ("arpa", "lan", "internal"):
+            assert junk in excluded, junk
+
+    def test_the_venues_own_domain_is_excluded(self):
+        idom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "idom")
+        assert "blackhat" in idom, "the venue's own domain would be read as an employer"
+
+    def test_ad_evidence_outranks_wpad(self):
+        """_msdcs / _ldap are Active Directory itself and only a domain member emits
+        them. wpad is a plain DHCP search-suffix artifact, so it is weaker."""
+        idom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "idom")
+        assert "'msdcs','ldap'" in idom
+        assert "'high'" in idom and "'medium'" in idom
+
+    def test_a_reasons_column_names_the_leak_kind(self):
+        idom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "idom")
+        assert "kind || ':' || dom" in idom
+
+    def test_a_bare_tld_is_refused(self):
+        """The regex requires at least one dot, so a search suffix that is a single
+        label cannot become an "employer domain"."""
+        idom = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "idom")
+        assert "[a-z0-9-]+)+" in idom, "the domain regex no longer requires a dot"
+        assert "dom <> ''" in idom
+
+
+class TestClientCertPrivacy:
+    """A client_subject DN carries a person's name, work email, employer and office in
+    ONE string. Measured in-scope: 28 hosts have an emailAddress= in it and 175 an O=.
+    The raw DN must never land in a table an analyst can SELECT *."""
+
+    def test_the_raw_dn_is_never_selected(self):
+        mtls = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "mtls")
+        assert "SHA256" in mtls, "the DN is not hashed"
+        assert "client_subject" in mtls
+        # The ONLY appearances of client_subject are inside the hash and the presence
+        # guard -- never as a bare projected value.
+        assert "TO_UTF8(client_subject)" in mtls
+        assert " client_subject," not in mtls
+        assert "client_subject dn" not in mtls
+
+    def test_the_hash_is_the_shipped_column(self):
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        assert "client_cert_subject_hash" in sql
+        assert "client_cert_subject_dn" not in sql
+        assert "client_subject client" not in sql
+
+    def test_the_hash_is_stable_and_lowercase_hex(self):
+        """A consumer joining two sightings of one certificate needs a stable form,
+        and TO_HEX returns UPPERCASE, which measured as an inconsistent contract."""
+        mtls = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "mtls")
+        assert "LOWER(TO_HEX(SHA256(TO_UTF8(client_subject))))" in mtls
+
+    def test_an_absent_subject_hashes_to_null_not_to_a_hash_of_the_marker(self):
+        """Zeek writes '(empty)'. Hashing it would give every certless host the same
+        non-null "certificate", which reads as evidence where there is none."""
+        mtls = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "mtls")
+        assert "CASE WHEN client_subject IS NOT NULL" in mtls
+
+    def test_the_issuer_org_is_kept_because_it_names_no_human(self):
+        mtls = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "mtls")
+        assert "O=([^,]+)" in mtls
+        assert "client_cert_issuer_org" in mtls
+
+    def test_the_class_is_coarse(self):
+        """Measured in-scope: 105 hosts / 48 orgs employer-specific, 106 SASE, 14 MDM.
+        A coarse class is what an analyst needs; a finer one just re-leaks the DN."""
+        mtls = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "mtls")
+        for cls in ("'mdm'", "'sase'", "'public_ca'", "'employer_specific'",
+                    "'unnamed_issuer'"):
+            assert cls in mtls
+
+    def test_a_reasons_column_exists(self):
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        assert "client_cert_reasons" in sql
+
+
+class TestEmptyMarkerIsAbsent:
+    """Zeek writes '-' AND the literal string '(empty)'. The latter appears on 1,910
+    in-scope IPs (2,376 in ssl's client-cert columns alone) and the old _present()
+    filter missed it, so every consumer treated the text "(empty)" as a real value."""
+
+    def test_present_filters_the_empty_marker(self):
+        assert "(empty)" in ec._present("x")
+
+    def test_present_still_filters_dash_and_blank(self):
+        p = ec._present("x")
+        assert "'-'" in p and "''" in p
+        assert "x IS NOT NULL" in p
+
+    def test_the_marker_is_filtered_everywhere_a_value_is_read(self):
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        assert sql.count("'(empty)'") >= 8, "a source still admits the empty marker"
+
+    def test_the_new_sources_filter_it(self):
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        for alias in ("own", "idom", "mtls", "org"):
+            assert "'(empty)'" in _cte(sql, alias), f"{alias} admits '(empty)'"
+
+
+class TestNewSourcesDoNotFanOut:
+    """dns is ~86M rows/day and ssl ~7M. Invariant 1: exactly one row per host."""
+
+    @pytest.mark.parametrize("alias", ["own", "idom", "mtls"])
+    def test_each_new_cte_aggregates_to_one_row_per_host(self, alias):
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert "GROUP BY ip" in body, f"{alias} does not collapse to one row per host"
+
+    @pytest.mark.parametrize("alias", ["own", "idom", "mtls"])
+    def test_each_new_cte_pins_the_partition(self, alias):
+        body = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), alias)
+        assert f"dt = '{DATE}'" in body, f"{alias} scans every partition"
+
+    def test_owner_name_is_one_value_not_a_list(self):
+        """A host announcing several instance names must still get ONE owner, chosen
+        by score, rather than a concatenation that reads as several people."""
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert "MAX_BY(stem, score) owner_name" in own
+
+    def test_the_dns_source_is_read_once_for_both_columns(self):
+        """owner_name and internal_domain both come from dns, in separate CTEs, so
+        neither can multiply the other."""
+        sql = ec.build_entity_context_sql(DB, DATE, _profiling_catalog())
+        assert _cte(sql, "own") != _cte(sql, "idom")
+
+    def test_dhcp_corroboration_cannot_multiply_rows(self):
+        """The DHCP stem join is the one inner join in the owner path. It is
+        aggregated to a MAX flag, so a mac with several leases cannot fan out."""
+        own = _cte(ec.build_entity_context_sql(DB, DATE, _profiling_catalog()), "own")
+        assert "MAX(CASE WHEN d.stem IS NOT NULL" in own
+
+
+class TestNewColumnsSurviveAPartialCatalog:
+    """Invariant 3: a missing column degrades to NULL, never a dropped column and
+    never a failing CTAS. One failed statement loses the whole rebuild."""
+
+    def test_ssl_without_client_cert_columns_still_builds(self):
+        cat = _profiling_catalog(ssl={"id_orig_h", "ja3", "server_name", "dt"})
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        assert "CAST(NULL AS VARCHAR) client_cert_subject_hash" in sql
+        assert "client_subject" not in sql
+        assert "org_reasons" in sql, "server_name evidence should still be read"
+
+    def test_dns_absent_leaves_owner_name_to_known_names(self):
+        cat = _profiling_catalog()
+        del cat["dns"]
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        assert "CAST(NULL AS VARCHAR) internal_domain" in sql
+        assert "owner_name" in sql
+        assert f"{DB}.known_names" in _cte(sql, "own")
+
+    def test_dhcp_absent_still_yields_owner_name_without_corroboration(self):
+        cat = _profiling_catalog()
+        del cat["dhcp"]
+        sql = ec.build_entity_context_sql(DB, DATE, cat)
+        own = _cte(sql, "own")
+        assert f"{DB}.dhcp" not in sql
+        assert "owner_name" in own
+        assert "0 corroborated" in own
+
+    def test_ctas_still_omits_external_location(self):
+        ddl = ec.build_ctas(DB, DATE, _profiling_catalog())
+        assert "external_location" not in ddl
