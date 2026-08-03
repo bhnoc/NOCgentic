@@ -144,6 +144,7 @@ http {
             allow 136.59.5.6;     # James
             allow 208.93.179.62;  # Spicer
             allow 136.38.201.241; # Spicer2
+            allow 69.8.253.0/28;  # Spicer roaming range (.0-.15), added 2026-08-03
             deny all;
 
             set $audit_upstream "audit-monitor";
