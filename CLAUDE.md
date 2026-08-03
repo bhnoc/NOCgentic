@@ -82,7 +82,9 @@ NOCgentic/
 ├── infrastructure/scripts/        # Org/IAM setup only (no CloudFormation tree)
 ├── tests/                         # pytest + UI smoke helpers
 ├── docs/                          # SETUP, design history, security sweeps, Athena guides
-└── .github/workflows/deploy.yml   # Deploy pipeline → ops/run-tests.sh → ops/deploy.sh
+└── .github/workflows/
+    ├── test.yml                   # CI test coverage on PRs to main → ops/run-tests.sh
+    └── deploy.yml                 # Deploy pipeline → ops/run-tests.sh → ops/deploy.sh
 ```
 
 There is **no** `packages/agent-sdk`, no CloudFormation under `infrastructure/`, and no `threat-analyzer` / `log-investigator` / `incident-responder` agents. A former `threat-hunter` agent was removed (QA sweep 2); intent `threat_hunter` remaps to `athena_hunter`.

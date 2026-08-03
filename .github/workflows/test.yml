@@ -1,0 +1,25 @@
+name: test
+
+# Run regression test suite on any pull requests targeting main or pushes to main.
+# Ensures CI test coverage for any changes going into main before merge.
+# Runs on the self-hosted runner installed on the nocgentic EC2 box (`nocgentic` label).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, nocgentic]
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Run regression suites
+        run: bash ops/run-tests.sh
