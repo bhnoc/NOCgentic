@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # acid.sh — full E2E validation of NOCgentic against acceptance criteria.
 set -uo pipefail
-BASE="${BASE:-https://aing.bhnoc.com}"
+BASE="${BASE:-https://ng.bhnoc.com}"
 HOSTHDR="${HOSTHDR:-}"
 CT="-H Content-Type:application/json"
 # Persist cookies across POST->poll: jobs are bound to the creator's bh_sid session

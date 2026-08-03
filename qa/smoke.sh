@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # smoke.sh — fast reachability check of the NOCgentic app.
 set -uo pipefail
-BASE="${BASE:-https://aing.bhnoc.com}"
+BASE="${BASE:-https://ng.bhnoc.com}"
 HOSTHDR="${HOSTHDR:-}"
 CURL="curl -sk --max-time 15 $HOSTHDR"
 pass=0; fail=0
