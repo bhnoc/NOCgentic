@@ -53,3 +53,9 @@ bench/prompt_eval/results/*.json
 ### rendered nginx config — generated from nginx-ssl.conf.template by ops/deploy.sh
 ### with ORIGIN_SECRET injected from .env.s3. Never commit it (it holds the secret).
 nginx/nginx-ssl.conf
+
+### Manifold policy dev (local tuning + API spec) — keep local, not part of NOCgentic
+.MANIFOLD/
+
+### TLS material pulled off the box for rotation — these archives contain privkey.pem
+*-ssl-*.tar.gz
