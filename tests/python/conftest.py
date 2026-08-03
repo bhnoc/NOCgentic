@@ -22,6 +22,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Env stubs; set before ANY agent import so module-level init_telemetry() is
 # a no-op and no code path reaches the network or real credentials.
@@ -48,6 +50,31 @@ if _SHARED not in sys.path:
 _SCRIPTS = str(_REPO / "scripts")
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
+
+
+@pytest.fixture(autouse=True)
+def _cold_te_cache():
+    """Start every test with an empty thousandeyes-analyst TTL cache.
+
+    That cache keys entries by `id(client)` for any non-httpx client, i.e. for
+    every test stub. CPython recycles object addresses, so once a stub is freed
+    a later, unrelated stub can be allocated at the same address and receive the
+    dead stub's cached value while the 30s TTL is still open. The stub's .get is
+    then never called and the test sees the *previous* test's payload.
+
+    That made test_thousandeyes.py allocator- and order-dependent: green locally
+    and in one CI run, red in the next, with test_fetch_all_tests_filters_disabled
+    getting the [] cached by test_fetch_all_tests_empty_success_*. Both files that
+    load the agent share one module (load_agent_main memoises via sys.modules), so
+    the pollution crosses files and this lives in conftest rather than one module.
+
+    Production is unaffected: a real httpx.AsyncClient takes the "" key prefix and
+    never goes near id(). Keying on id() is still unsound and worth replacing.
+    """
+    te = sys.modules.get("te_main")
+    if te is not None:
+        te._te_cache.clear()
+    yield
 
 
 def load_agent_main(agent_dir_name: str, module_alias: str):
