@@ -59,6 +59,25 @@ http {
         "0:__ORIGIN_SECRET__"      0;  # untrusted source — must present the secret
     }
 
+    # ---- Origin-lock exemption: the Manifold webhook receiver ----
+    # Manifold's control plane is SaaS. It is neither an allow-listed source IP
+    # nor able to present ORIGIN_SECRET, so the lock above would 403 it. For
+    # Manifold a 403 is PERMANENT — its retry table retries only 408/429/5xx, so
+    # every threat would be dropped silently and the receiver would look healthy
+    # while receiving nothing. Exempt the path; it enforces its own bearer token
+    # (MANIFOLD_WEBHOOK_TOKEN, constant-time compared, fails closed when unset).
+    map $uri $origin_lock_exempt {
+        default                          0;
+        "~^/api/v1/manifold/webhook/?$"  1;
+    }
+
+    map "$origin_denied:$origin_lock_exempt" $edge_denied {
+        default   1;
+        "0:0"     0;  # passed the origin lock normally
+        "0:1"     0;  # passed, and on an exempt path
+        "1:1"     0;  # failed the lock, but the path is exempt (bearer-authed)
+    }
+
     # Redirect HTTP -> HTTPS
     server {
         listen 80;
@@ -80,7 +99,8 @@ http {
         server_name _;
 
         # Enforced on 443 only — port 80 must stay open for the ACME challenge.
-        if ($origin_denied) { return 403; }
+        # $edge_denied is $origin_denied with the webhook-path exemption folded in.
+        if ($edge_denied) { return 403; }
 
         ssl_certificate     /etc/letsencrypt/live/current/fullchain.pem;
         ssl_certificate_key /etc/letsencrypt/live/current/privkey.pem;

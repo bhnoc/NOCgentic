@@ -887,6 +887,166 @@ async def set_athena_kill(body: KillSwitchBody, authorization: str | None = Head
     return dict(_kill_switches)
 
 
+# ---------------------------------------------------------------------------
+# Manifold-driven session quarantine
+# ---------------------------------------------------------------------------
+# Manifold scans our agent sessions and POSTs a threat to the web-server's
+# webhook receiver, which forwards it here. A threat names the SESSION it was
+# seen in (by trace id), so containment is per-session: the offending bh_sid is
+# quarantined and every SUBSEQUENT query from it gets the silent cover.
+#
+# This is containment, not prevention. Manifold dispatches asynchronously and
+# forward-only, so the turn that tripped the detector has already been answered
+# by the time we hear about it. What we stop is everything that comes next.
+
+QUARANTINE_TTL_SECONDS = float(os.getenv("QUARANTINE_TTL_SECONDS", "1800"))  # 30 min
+# Bound both maps so a long conference run cannot leak memory.
+_QUARANTINE_MAX_TRACES = 5000
+
+# normalised trace id -> (expires_at, session_id). Built as queries arrive; lets
+# a threat, which only names the trace, be resolved back to its bh_sid.
+_trace_sessions: dict[str, tuple[float, str]] = {}
+# session id (bh_sid) -> expires_at
+_quarantined: dict[str, float] = {}
+
+
+def normalize_trace_id(raw: str | None) -> str:
+    """Canonical form for cross-system trace-id comparison.
+
+    Manifold renders trace ids dashed, UUID-style ("8f3c1e02-..."); OTel emits
+    32 undashed lowercase hex. Both are the same 128 bits, so neither side is
+    wrong -- but a literal == between them never matches. Compare on this.
+    """
+    if not raw:
+        return ""
+    return raw.replace("-", "").strip().lower()
+
+
+def _prune_quarantine(now: float | None = None) -> None:
+    """Drop expired entries from both maps. Called on every read and write, so
+    expiry needs no background timer."""
+    now = time.time() if now is None else now
+    for tid, (expires_at, _sid) in list(_trace_sessions.items()):
+        if now >= expires_at:
+            _trace_sessions.pop(tid, None)
+    for sid, expires_at in list(_quarantined.items()):
+        if now >= expires_at:
+            _quarantined.pop(sid, None)
+            logger.info("quarantine EXPIRED for session=%s", sid)
+    # Hard cap as a backstop if TTLs are configured very long.
+    if len(_trace_sessions) > _QUARANTINE_MAX_TRACES:
+        for tid in list(_trace_sessions.keys())[: len(_trace_sessions) - _QUARANTINE_MAX_TRACES]:
+            _trace_sessions.pop(tid, None)
+
+
+def record_trace_session(trace_id: str | None, session_id: str | None) -> None:
+    """Remember which session a trace belongs to, so a later threat naming only
+    the trace can be mapped back to the session that has to be contained."""
+    tid = normalize_trace_id(trace_id)
+    if not tid or not session_id:
+        return
+    now = time.time()
+    # Keep the mapping well past the quarantine TTL: Manifold's scan runs after
+    # the session, so the threat can arrive long after the query was answered.
+    _trace_sessions[tid] = (now + max(QUARANTINE_TTL_SECONDS * 4, 3600.0), session_id)
+    # Prune AFTER inserting: pruning first trims to the cap and the insert then
+    # pushes it back over, so the map settles at cap+1 and the bound never holds.
+    # dicts iterate in insertion order and eviction takes from the front, so the
+    # entry just added is the last thing at risk.
+    _prune_quarantine(now)
+
+
+def quarantine_session(session_id: str, *, ttl_seconds: float | None = None) -> float:
+    """Quarantine one session. Returns the absolute expiry."""
+    ttl = QUARANTINE_TTL_SECONDS if ttl_seconds is None else float(ttl_seconds)
+    expires_at = time.time() + ttl
+    # Extend rather than shorten: a second threat on an already-contained
+    # session must never pull its release time closer.
+    _quarantined[session_id] = max(_quarantined.get(session_id, 0.0), expires_at)
+    return _quarantined[session_id]
+
+
+def resolve_trace_to_session(trace_id: str | None) -> str | None:
+    """Session a trace belongs to, or None if we never saw it."""
+    tid = normalize_trace_id(trace_id)
+    if not tid:
+        return None
+    _prune_quarantine()
+    entry = _trace_sessions.get(tid)
+    return entry[1] if entry else None
+
+
+def is_quarantined(session_id: str | None, now: float | None = None) -> bool:
+    if not session_id:
+        return False
+    now = time.time() if now is None else now
+    expires_at = _quarantined.get(session_id)
+    if expires_at is None:
+        return False
+    if now >= expires_at:
+        _quarantined.pop(session_id, None)
+        logger.info("quarantine EXPIRED for session=%s", session_id)
+        return False
+    return True
+
+
+class QuarantineBody(BaseModel):
+    """Either identifier works. trace_id is what a Manifold threat carries;
+    session_id is for an operator acting directly."""
+    trace_id:    str | None = None
+    session_id:  str | None = None
+    reason:      str | None = None
+    ttl_seconds: float | None = None
+
+
+@app.post("/admin/quarantine")
+async def add_quarantine(
+    body: QuarantineBody,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_admin(authorization)
+    session_id = body.session_id or resolve_trace_to_session(body.trace_id)
+    if not session_id:
+        # The trace is unknown to us: it may predate this process, or belong to
+        # a cookie-less client we never bound a session for. Report it plainly
+        # so the caller can 200 the webhook (retrying will not help) while the
+        # operator still sees that a threat could not be actioned.
+        logger.warning(
+            "quarantine UNRESOLVED: no session for trace=%s reason=%s",
+            normalize_trace_id(body.trace_id) or "-", body.reason or "-",
+        )
+        return {"quarantined": False, "reason": "unresolved_trace",
+                "trace_id": normalize_trace_id(body.trace_id) or None}
+    expires_at = quarantine_session(session_id, ttl_seconds=body.ttl_seconds)
+    logger.warning(
+        "quarantine ADDED session=%s trace=%s reason=%s expires_in=%.0fs",
+        session_id, normalize_trace_id(body.trace_id) or "-",
+        body.reason or "-", expires_at - time.time(),
+    )
+    return {"quarantined": True, "session_id": session_id,
+            "expires_at": expires_at, "reason": body.reason}
+
+
+@app.get("/admin/quarantine")
+async def list_quarantine(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_admin(authorization)
+    _prune_quarantine()
+    now = time.time()
+    return {"sessions": [{"session_id": sid, "expires_at": exp, "expires_in": exp - now}
+                         for sid, exp in sorted(_quarantined.items(), key=lambda kv: kv[1])]}
+
+
+@app.delete("/admin/quarantine/{session_id}")
+async def clear_quarantine(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_admin(authorization)
+    existed = _quarantined.pop(session_id, None) is not None
+    logger.warning("quarantine CLEARED session=%s (was_active=%s)", session_id, existed)
+    return {"cleared": existed, "session_id": session_id}
+
+
 def _serve_cover(
     query: str,
     *,
@@ -946,6 +1106,26 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
             (req.client.ip if req.client else "-"),
             (req.client.session_id if req.client else "-"),
         )
+
+        # Bind this trace to the caller's session. Manifold sees the trace (we
+        # export these spans to it) and a threat it raises names only the trace,
+        # so without this mapping a threat cannot be tied back to a bh_sid.
+        session_id = req.client.session_id if req.client else None
+        span_ctx = span.get_span_context()
+        trace_id_hex = format(span_ctx.trace_id, "032x") if span_ctx and span_ctx.trace_id else None
+        record_trace_session(trace_id_hex, session_id)
+
+        # 0a. Manifold quarantine — before the restricted filter, so a contained
+        # session burns no LLM budget and reaches no agent. Cover, not refusal:
+        # the caller cannot tell containment from the restricted-range filter.
+        if is_quarantined(session_id):
+            span.set_attribute("routing.intent", "cover")
+            span.set_attribute("filter.quarantined", True)
+            logger.warning(
+                "job=%s session=%s QUARANTINED (Manifold threat) — serving cover",
+                req.job_id, session_id,
+            )
+            return _serve_cover(req.query, start=start, salt="quarantine")
 
         # 0. Restricted-range soft filter — before we classify or hit any agent.
         # If the query references a restricted subnet or zone name, short-circuit

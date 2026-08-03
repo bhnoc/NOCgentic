@@ -6,6 +6,7 @@ import fastifyCookie from '@fastify/cookie';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import { registerChatRoutes } from './api/chat';
+import { registerManifoldRoutes } from './api/manifold';
 import { alertCache } from './services/alertCache';
 import {
   SECURITY_HEADERS,
@@ -88,6 +89,13 @@ async function main() {
 
   // Chat API routes
   registerChatRoutes(server);
+
+  // Manifold webhook receiver (threat -> session quarantine). Bearer-authed on
+  // its own token; exempted from nginx's CloudFront origin lock because
+  // Manifold's control plane is neither an allow-listed source IP nor able to
+  // present ORIGIN_SECRET. Left inside the rate limiter on purpose: a 429 is
+  // retryable for Manifold, so a burst is held rather than lost.
+  registerManifoldRoutes(server);
 
   // WebSocket endpoint for real-time updates (server pushes the shared alert feed).
   // @fastify/websocket v11 (required by fastify 5) passes the WebSocket DIRECTLY
