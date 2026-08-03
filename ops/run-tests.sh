@@ -28,6 +28,13 @@ if [ ! -d node_modules ] || [ ! -d packages/web-server/node_modules ]; then
   echo "    npm install (workspaces)"
   npm install --no-audit --no-fund
 fi
+# @bhnoc/shared resolves through its package.json "main": dist/index.js, and dist/
+# is gitignored -- so a fresh CI checkout has no built entry and vitest fails with
+# "Failed to resolve entry for package @bhnoc/shared" before a single test runs.
+# Build it first, exactly as packages/web-server/Dockerfile:17 already does for prod.
+echo "    building @bhnoc/shared (provides dist/index.js for the import)"
+npm run build --workspace=packages/shared
+
 npm run test --workspace=packages/web-server
 
 echo ""
