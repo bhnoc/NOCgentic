@@ -3,14 +3,14 @@ athena_client.py — Async Athena query client for Corelight/Zeek data.
 
 Queries pre-optimized Parquet tables in AWS Athena with full OTel tracing.
 
-Database: blackhat_pope_logs
-Workgroup: blackhat-pope-dev
-Region: us-west-2
+Database: blackhatnoc_glue
+Workgroup: blackhatnoc-usa2026
+Region: us-east-2
 
 Environment variables:
-    ATHENA_DATABASE   — default: blackhat_pope_logs
-    ATHENA_WORKGROUP  — default: blackhat-pope-dev
-    ATHENA_REGION     — default: us-west-2
+    ATHENA_DATABASE   — default: blackhatnoc_glue
+    ATHENA_WORKGROUP  — default: blackhatnoc-usa2026
+    ATHENA_REGION     — default: us-east-2
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-ATHENA_DATABASE: str = os.getenv("ATHENA_DATABASE", "blackhat_pope_logs")
-ATHENA_WORKGROUP: str = os.getenv("ATHENA_WORKGROUP", "blackhat-pope-dev")
-ATHENA_REGION: str = os.getenv("ATHENA_REGION", os.getenv("S3_REGION", "us-west-2"))
+ATHENA_DATABASE: str = os.getenv("ATHENA_DATABASE", "blackhatnoc_glue")
+ATHENA_WORKGROUP: str = os.getenv("ATHENA_WORKGROUP", "blackhatnoc-usa2026")
+ATHENA_REGION: str = os.getenv("ATHENA_REGION", os.getenv("S3_REGION", "us-east-2"))
 
 # Max rows accumulated by _fetch_results before we stop paginating. Hitting this
 # cap silently truncates the result set, so we log a WARNING when it triggers.

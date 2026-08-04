@@ -10,9 +10,9 @@ Run:
     python tools/audit-monitor/app.py
 
 Environment:
-    AUDIT_BUCKET          — default: blackhat-pope-dev-logs
+    AUDIT_BUCKET          — default: blackhatnoc
     AUDIT_PREFIX          — default: nocgentic/traces
-    AUDIT_REGION          — default: us-west-2
+    AUDIT_REGION          — default: us-east-2
     AUDIT_HOST            — default: 0.0.0.0
     AUDIT_PORT            — default: 8787
     AUDIT_POLL_S          — default: 2
@@ -60,9 +60,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 # --- Config ---------------------------------------------------------------
 
-BUCKET   = os.getenv("AUDIT_BUCKET", "blackhat-pope-dev-logs")
+BUCKET   = os.getenv("AUDIT_BUCKET", "blackhatnoc")
 PREFIX   = os.getenv("AUDIT_PREFIX", "nocgentic/traces").strip("/")
-REGION   = os.getenv("AUDIT_REGION", "us-west-2")
+REGION   = os.getenv("AUDIT_REGION", "us-east-2")
 HOST     = os.getenv("AUDIT_HOST", "0.0.0.0")
 PORT     = int(os.getenv("AUDIT_PORT", "8787"))
 POLL_S   = float(os.getenv("AUDIT_POLL_S", "2"))

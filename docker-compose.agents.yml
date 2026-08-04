@@ -65,15 +65,21 @@ services:
       - ALERT_TRIAGE_URL=http://alert-triage:8003
       - THOUSANDEYES_ANALYST_URL=http://thousandeyes-analyst:8004
       - ATHENA_HUNTER_URL=http://athena-hunter:8005
-      - S3_BUCKET=${S3_BUCKET:-blackhat-pope-dev-logs}
-      - S3_REGION=${S3_REGION:-us-west-2}
-      - S3_PREFIX=${S3_PREFIX}
+      # S3_REGION only. The orchestrator does not touch S3 itself; this is the
+      # documented fallback for TRACE_S3_REGION in s3_span_exporter.
+      #
+      # S3_BUCKET and S3_PREFIX used to be here too and were read by nothing:
+      # the span archive takes TRACE_S3_BUCKET/TRACE_S3_PREFIX, and the
+      # orchestrator has no other S3 path. S3_PREFIX also had no default, so an
+      # unset value made compose warn on every up. Do not re-add them without a
+      # reader.
+      - S3_REGION=${S3_REGION:-us-east-2}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
-      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhatnoc}
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
-      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
       # Public event-edition label (display only). Nation + year, e.g. "USA 2027".
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
@@ -125,15 +131,15 @@ services:
       - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
       - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
       - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
-      - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
-      - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
-      - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
+      - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhatnoc_glue}
+      - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhatnoc-usa2026}
+      - ATHENA_REGION=${ATHENA_REGION:-us-east-2}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
-      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhatnoc}
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
-      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-alert-triage
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     extra_hosts:
@@ -181,15 +187,15 @@ services:
       # synthesis stays on LLM_PROVIDER (Gemini). Unset -> SQL gen uses LLM_PROVIDER too.
       - SQLGEN_PROVIDER=${SQLGEN_PROVIDER:-}
       - SQLGEN_MODEL=${SQLGEN_MODEL:-}
-      - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
-      - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
-      - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
+      - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhatnoc_glue}
+      - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhatnoc-usa2026}
+      - ATHENA_REGION=${ATHENA_REGION:-us-east-2}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
-      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhatnoc}
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
-      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-athena-hunter
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     extra_hosts:
@@ -236,9 +242,9 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
-      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhat-pope-dev-logs}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhatnoc}
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
-      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-west-2}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-thousandeyes-analyst
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     extra_hosts:
@@ -252,9 +258,9 @@ services:
     expose:
       - "8787"
     environment:
-      - AUDIT_BUCKET=${AUDIT_BUCKET:-blackhat-pope-dev-logs}
+      - AUDIT_BUCKET=${AUDIT_BUCKET:-blackhatnoc}
       - AUDIT_PREFIX=${AUDIT_PREFIX:-nocgentic/traces}
-      - AUDIT_REGION=${AUDIT_REGION:-us-west-2}
+      - AUDIT_REGION=${AUDIT_REGION:-us-east-2}
       - AUDIT_ROOT_PATH=/bh/1337/thetraces
       - AUDIT_POLL_S=${AUDIT_POLL_S:-2}
       - AUDIT_LOOKBACK=${AUDIT_LOOKBACK:-300}

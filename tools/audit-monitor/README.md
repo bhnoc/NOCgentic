@@ -2,7 +2,7 @@
 
 Local-only live view of BHNOCgentic agent spans.
 
-Polls the S3 trace archive at `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/`
+Polls the S3 trace archive at `s3://blackhatnoc/bh-asia-26/aing-trace/`
 every 2 seconds, parses the gzipped NDJSON spans, and streams them over
 Server-Sent Events to a browser UI that renders one swim-lane per agent.
 
@@ -26,7 +26,7 @@ The browser will open at `http://localhost:8787`.
 
 | var | default | meaning |
 |---|---|---|
-| `AUDIT_BUCKET` | `blackhat-pope-dev-logs` | S3 bucket |
+| `AUDIT_BUCKET` | `blackhatnoc` | S3 bucket |
 | `AUDIT_PREFIX` | `bh-asia-26/aing-trace` | Key prefix for span objects |
 | `AUDIT_REGION` | `us-west-2` | bucket region |
 | `AUDIT_PORT` | `8787` | local HTTP port |

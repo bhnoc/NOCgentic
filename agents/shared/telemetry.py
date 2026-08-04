@@ -256,7 +256,7 @@ def init_telemetry(service_name: str | None = None) -> None:
         )
     )
 
-    # S3 audit-trail exporter → s3://blackhat-pope-dev-logs/nocgentic/traces/
+    # S3 audit-trail exporter → s3://blackhatnoc/nocgentic/traces/
     # Captures every span (FastAPI, httpx, Athena, and LangSmith LLM spans) as
     # gzipped NDJSON so we have a permanent record of every agent interaction.
     if os.getenv("TRACE_S3_ENABLED", "true").lower() in ("true", "1", "yes"):
@@ -271,7 +271,7 @@ def init_telemetry(service_name: str | None = None) -> None:
             )
             logger.info(
                 "S3 span exporter enabled — spans archived to s3://%s/%s/service=%s/",
-                os.getenv("TRACE_S3_BUCKET", "blackhat-pope-dev-logs"),
+                os.getenv("TRACE_S3_BUCKET", "blackhatnoc"),
                 os.getenv("TRACE_S3_PREFIX", "nocgentic/traces"),
                 svc_name,
             )
