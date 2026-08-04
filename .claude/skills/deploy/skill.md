@@ -326,16 +326,16 @@ curl -s -o /dev/null -w "HTTP %{http_code}\n" https://ng.bhnoc.com/health
 
 Expect HTTP 200 and a valid cert for `ng.bhnoc.com`.
 
-### 8. Seed a demo day (between conferences)
+### 8. Empty "last 24h" views outside a live event
 
-If you're standing this up outside a live event, the "last 24h" views will be empty
-because the capture data is frozen in the past. Seed a re-dated slice so the app looks
-live — full procedure (driver, sizing, verification) is in [[../ops/skill.md]] under
-"Seeding a re-dated demo day". TL;DR:
-```bash
-cd /Users/landbeforetime/Documents/dev/blackhat/NOCgentic
-AWS_PROFILE=VirtualPOC-users python3 scripts/redate_slice.py
-```
+If you stand this up between conferences, the "last 24h" views come back empty because
+the capture data is frozen in the past. That is correct behaviour, not a bug.
+
+There used to be a `scripts/redate_slice.py` driver here that copied an old capture window
+forward onto today's partition. It is deleted. It dropped the target `dt=` partition from
+Glue and S3 before every insert, and the only guard was a hardcoded bucket name, so the
+runbook amounted to "edit these constants and run a partition delete". If you need a
+populated demo lake, seed a SEPARATE throwaway bucket and point `ATHENA_DATABASE` at it.
 
 ## Public endpoints (once up)
 

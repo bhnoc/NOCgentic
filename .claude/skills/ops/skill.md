@@ -251,9 +251,10 @@ On show day, flip to live in this order:
 4. **Open 443 to the audience.** Add the audience CIDR(s) to the SG on port 443, keep SSH (22)
    restricted to operator IPs only (see allow-list below). Prod style: `--protocol tcp --port 443`,
    NOT all-protocols.
-5. **Live data.** At the conference real Corelight data flows into Athena, so the re-dated
-   "demo day" is NOT needed and should NOT be run (it would overwrite today's real partition).
-   The redate driver is a between-conferences / dev-demo tool only (see seeding section).
+5. **Live data.** At the conference real Corelight data flows into Athena, so today's
+   partition is already populated and there is nothing to seed. The old redate driver that
+   used to be documented here has been deleted precisely because running it on show day
+   would have deleted that partition first.
 6. **Trace viewer stays operator-only.** `/bh/1337/thetraces/` keeps its nginx IP allow-list
    (operator IPs) even after 443 opens to attendees. Do not add the audience CIDR to that path.
 
@@ -378,28 +379,18 @@ curl -sk -o /dev/null -w "HTTP %{http_code}\n" https://127.0.0.1/ -H 'Host: ng.b
 
 ---
 
-## Seeding a re-dated "demo day" (make the app look live between cons)
+## Athena data layout (bucket, partitions, views)
 
-> **DEV/DEMO ONLY. Do NOT run this at a live conference:** real Corelight data flows into
-> Athena during the event, so today's partition is already populated. Running the redate
-> driver on show day would clobber the real partition with the frozen April slice. This is
-> purely for making the app look live BETWEEN events. See the show-day runbook above.
+> The re-dated "demo day" seeding procedure that used to live here is GONE, along
+> with `scripts/redate_slice.py`. That driver deleted the target `dt=` partition from
+> Glue and S3 before every insert, and the only thing keeping it off real data was a
+> hardcoded bucket name pointing at a bucket that no longer exists. A runbook that
+> says "edit these constants and run it" one paragraph away from a partition delete
+> is a foot-gun, and at a live show the real capture already populates today's
+> partition, so there is nothing to seed. If a dev slice is ever wanted again, do it
+> against a SEPARATE throwaway bucket.
 
-The conference logs are frozen in the past (BH Asia = April 2026). Between events the
-dashboard's "last 24h" views look empty. Fix: copy a **contiguous window** of a real
-capture day and shift its timestamps to **today**, so the app queries "today" and sees
-live-looking traffic. Driver: **`scripts/redate_slice.py`** (in this repo). It ages out at
-UTC midnight (re-run to today when demoing); the driver refuses if DST_DT==SRC_DT or the
-bucket isn't the demo parquet bucket.
-
-> ⚠️ **The seeded slice goes stale every midnight UTC.** It's pinned to a fixed `DST_DT`,
-> so once the UTC date rolls over, single-day `dt = 'today'` queries return **0 rows** (the
-> data now sits in *yesterday's* partition). Tell-tale: `alert-triage` still answers
-> (it queries a today+yesterday window) but `athena-hunter`'s single-day queries come back
-> empty though the SQL runs clean. **Fix = re-run the driver with `DST_DT` = today.** Bump
-> `DST_DT` **and** `SHIFT_S`/`SHIFT_D` together (shift = days from `SRC_DT` 2026-04-24 to
-> today × 86400). On 2026-07-23 that was 90 days / 7_776_000 s. For a live multi-day demo,
-> consider a cron that re-dates daily rather than doing it by hand.
+The layout notes below are still accurate and worth reading before touching the lake.
 
 ### How the data is laid out (know this before touching it)
 - Athena DB `blackhatnoc_glue`, workgroup `blackhatnoc-usa2026`, region **`us-east-2`**. A
@@ -420,44 +411,16 @@ bucket isn't the demo parquet bucket.
 - **`corelight_raw` has no `ts_datetime`** → can't be windowed; the driver copies its whole
   partition (its `ts` is still shifted). Dashboard doesn't use it; ignore or drop after.
 
-### Run it
-```bash
-cd /Users/landbeforetime/Documents/dev/blackhat/NOCgentic
-AWS_PROFILE=VirtualPOC-users python3 scripts/redate_slice.py            # all physical tables
-AWS_PROFILE=VirtualPOC-users python3 scripts/redate_slice.py notice conn dns   # subset (test)
-```
-Edit the constants at the top for a new run: `SRC_DT`, `DST_DT`, `SHIFT_S`
-(= days×86400), `SHIFT_D` (days as string), `WIN_FROM`/`WIN_TO`. It's **idempotent** —
-drops the target `dt` partition (Glue + S3) before re-inserting, so re-running is safe.
-Uses `INSERT INTO … SELECT …, '<DST_DT>' AS dt`, which writes parquet into
-`s3://…/<table>/dt=<DST_DT>/` **and auto-registers the partition** (no manual `ADD PARTITION`).
-
-### Sizing (measured 2026-07-22)
-A **3-hour** window of the live BH-Asia 04-24 morning (`00:00–03:00`) → **1.70 GB**,
-68 tables, ~$0.08 Athena scan, a few minutes. `conn` is ~65% of it. Rough dial: ~0.5 GB/hour.
-Pick the window with a histogram first:
+### Picking a window with a histogram
+Useful for any windowed query, not just seeding. `conn` is ~65% of a day's bytes;
+rough dial ~0.5 GB/hour.
 ```sql
 SELECT substr(ts_datetime,1,13) AS date_hr, COUNT(*) rows
-FROM conn WHERE dt='<SRC_DT>' GROUP BY 1 ORDER BY 1;
+FROM conn WHERE dt='<DT>' GROUP BY 1 ORDER BY 1;
 ```
 
-### Future: bhusa26 (same recipe)
-When the US 2026 data lands in the same format, this driver runs verbatim — just set
-`SRC_DT` to the busiest US capture day and `DST_DT` to today. Naming convention going
-forward: this Asia dataset is the **"dev"** slice; each event gets its own show+year.
-
-### Verify the shift (don't trust it blind)
-```sql
--- ts and ts_datetime must agree to the second
-SELECT ts_datetime, date_format(from_unixtime(ts),'%Y-%m-%d %H:%i:%s') AS ts_fmt
-FROM conn WHERE dt='<DST_DT>' ORDER BY ts LIMIT 3;
--- window is clean and contiguous
-SELECT MIN(ts_datetime), MAX(ts_datetime), COUNT(*) FROM conn WHERE dt='<DST_DT>';
--- views lit up
-SELECT alert_type, COUNT(*) FROM alerts WHERE dt='<DST_DT>' GROUP BY 1;
-```
-> Gotcha: don't `SELECT from_unixtime(ts)` alone in Athena output — it serializes a
-> `timestamp(3)` and errors. Wrap in `date_format(...)` to return a string.
+> Athena gotcha: do not `SELECT from_unixtime(ts)` alone. It serializes a
+> `timestamp(3)` and errors. Wrap it in `date_format(...)` to get a string.
 
 ---
 

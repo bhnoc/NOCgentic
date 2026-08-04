@@ -34,7 +34,10 @@ os.environ.setdefault("GEMINI_API_KEY", "test-dummy-key")
 os.environ.setdefault("LLM_PROVIDER", "gemini")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
-os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
+# Match the prod region. These creds are deliberately fake so nothing here reaches AWS,
+# but a test that asserts on a default region should agree with the code's default rather
+# than pin the old value and quietly disagree with it.
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-2")
 # thousandeyes: leave the token UNSET by default so gather_te_context's
 # no-token guard is exercised where relevant; individual tests set it.
 
@@ -46,10 +49,10 @@ _SHARED = str(_AGENTS / "shared")
 if _SHARED not in sys.path:
     sys.path.insert(0, _SHARED)
 
-# Also expose the scripts/ dir for redate_slice.
-_SCRIPTS = str(_REPO / "scripts")
-if _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
+# NOTE: scripts/ used to be on sys.path so the tests could import redate_slice. That
+# script is deleted (it deleted an Athena partition guarded only by a hardcoded bucket
+# name) and nothing under scripts/ is importable Python any more, so the injection is
+# gone with it. Re-add it only alongside a test that actually needs it.
 
 
 @pytest.fixture(autouse=True)
