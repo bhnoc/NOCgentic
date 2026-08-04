@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -130,10 +131,23 @@ TE_CACHE_TTL_SECONDS = float(os.getenv("TE_CACHE_TTL_SECONDS", "30.0"))
 _te_cache: dict[str, tuple[float, Any]] = {}
 
 
+def _get_client_prefix(client: Any) -> str:
+    if client is None or isinstance(client, httpx.AsyncClient):
+        return ""
+    cache_id = getattr(client, "_te_cache_id", None)
+    if cache_id is None:
+        cache_id = uuid.uuid4().hex
+        try:
+            setattr(client, "_te_cache_id", cache_id)
+        except AttributeError:
+            cache_id = str(id(client))
+    return f"{cache_id}:"
+
+
 def _cache_get(key: str, client: Any = None) -> Any | None:
     if TE_CACHE_TTL_SECONDS <= 0:
         return None
-    prefix = "" if isinstance(client, httpx.AsyncClient) else f"{id(client)}:"
+    prefix = _get_client_prefix(client)
     entry = _te_cache.get(f"{prefix}{key}")
     if entry is None:
         return None
@@ -147,7 +161,7 @@ def _cache_get(key: str, client: Any = None) -> Any | None:
 def _cache_put(key: str, value: Any, client: Any = None) -> None:
     if TE_CACHE_TTL_SECONDS <= 0:
         return
-    prefix = "" if isinstance(client, httpx.AsyncClient) else f"{id(client)}:"
+    prefix = _get_client_prefix(client)
     _te_cache[f"{prefix}{key}"] = (time.monotonic() + TE_CACHE_TTL_SECONDS, value)
     if len(_te_cache) > 500:
         oldest_keys = list(_te_cache.keys())[:200]
