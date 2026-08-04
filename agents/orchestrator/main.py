@@ -46,6 +46,7 @@ import llm_client  # noqa: E402
 from llm_client import (  # noqa: E402
     llm_complete, LANE_CLOUD, LANE_LOCAL, lane_race_enabled,
 )
+import local_models  # noqa: E402
 import response_cache  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
@@ -916,6 +917,106 @@ async def set_athena_kill(body: KillSwitchBody, authorization: str | None = Head
     return dict(_kill_switches)
 
 
+class LaneModeBody(BaseModel):
+    """Settings-gear payload. Both fields optional so the UI can change one."""
+
+    # None means "leave it alone"; the literal string "env" means "drop the override
+    # and go back to whatever the env says", which is distinct from picking a mode
+    # that happens to match the env.
+    mode: str | None = None
+    side_by_side: bool | None = None
+
+
+@app.get("/admin/lanemode")
+async def get_lane_mode(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """Current lane mode, plus what the env default was and whether local can answer."""
+    _require_admin(authorization)
+    return llm_client.lane_mode_state()
+
+
+@app.post("/admin/lanemode")
+async def set_lane_mode(
+    body: LaneModeBody, authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Switch between hybrid / cloud-only / local-only, and toggle side-by-side.
+
+    Takes effect on the next query. Process state only, so a container restart
+    reverts to the env: whatever got set mid-demo does not silently outlive it.
+
+    The response cache is NOT purged. The mode is part of the cache key, so entries
+    from another mode simply miss, and the ones for THIS mode are still valid answers
+    that should keep being fast.
+    """
+    _require_admin(authorization)
+    mode: str | None
+    if body.mode is None:
+        mode = llm_client._lane_mode        # unchanged
+    elif body.mode == "env":
+        mode = None                         # drop the override
+    else:
+        mode = body.mode
+    try:
+        state = llm_client.set_lane_mode(mode, side_by_side=body.side_by_side)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.warning(
+        "ADMIN lane mode: mode=%s side_by_side=%s (env default %s)",
+        state["mode"], state["side_by_side"], state["env_mode"],
+    )
+    return state
+
+
+@app.get("/admin/models")
+async def get_models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """What the local endpoints are actually serving, and what could be served.
+
+    Two different questions, both needed by the gear: `served` is live discovery
+    against each llama-server's /v1/models, so the operator sees reality rather than
+    what the env claims, and `available` is the supervisor's allowlist of models it
+    can be asked to start.
+    """
+    _require_admin(authorization)
+    return await local_models.inventory()
+
+
+class ModelSwitchBody(BaseModel):
+    # Which llama-server to act on: "sqlgen" or "prose". Named by ROLE rather than by
+    # port because the role is what the operator is reasoning about.
+    role: str
+    # Allowlist key of the model to load. Never a path: see local_models.
+    model: str
+
+
+@app.post("/admin/models/start")
+async def start_model(
+    body: ModelSwitchBody, authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Ask the host supervisor to serve `model` for `role`.
+
+    The orchestrator is in a container and cannot spawn a process on the GPU host, so
+    this is a request to a small host-side supervisor (see ops/model-supervisor/) that
+    owns the systemd units. The allowlist lives there, not here: a compromised
+    orchestrator must not be able to name an arbitrary file to load.
+    """
+    _require_admin(authorization)
+    try:
+        return await local_models.start(body.role, body.model)
+    except local_models.ModelControlError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/admin/models/stop")
+async def stop_model(
+    body: ModelSwitchBody, authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Stop the llama-server serving `role`. Frees VRAM for another model."""
+    _require_admin(authorization)
+    try:
+        return await local_models.stop(body.role)
+    except local_models.ModelControlError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/admin/cache")
 async def get_cache_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """Response-cache state: reachable, how many entries, what the knobs are."""
@@ -1308,11 +1409,17 @@ async def _route_raced(
     would make the swap useless (nothing to swap to); the cost is one extra
     in-flight pipeline per raced query.
 
-    When racing is off this is a plain single call — the pre-lane behaviour, with
-    the same return shape.
+    When racing is off this is a plain single call on whichever lane the mode pins
+    (cloud-only / local-only), or on the ambient provider when nothing was pinned —
+    the pre-lane behaviour, with the same return shape.
     """
     if not racing:
-        return await call(None)
+        # single_lane() returns None unless somebody explicitly chose a mode, so a
+        # box that just has LANE_RACE=off keeps inheriting LLM_PROVIDER exactly as
+        # before rather than being silently switched to Gemini.
+        pinned = llm_client.single_lane()
+        result = await call(pinned)
+        return {**result, "_lane": pinned} if pinned else result
 
     started = time.monotonic()
     tasks: dict[str, asyncio.Task] = {
@@ -1357,8 +1464,17 @@ async def _route_raced(
                 # Hand the winner back immediately; the loser finishes in the
                 # background task below and files itself into the lane store.
                 if pending:
-                    _spawn_lane_drain(job_id, pending, lane_of, started, agent_used,
-                                      fallback_confidence)
+                    if llm_client.side_by_side_enabled():
+                        _spawn_lane_drain(job_id, pending, lane_of, started, agent_used,
+                                          fallback_confidence)
+                        return {**result, "_lane": winner_lane}
+                    # Side-by-side off: nobody will ever look at the loser, so let it
+                    # go rather than paying for a second Athena scan and a second
+                    # model's full generation to fill a store no UI reads. The race
+                    # itself stays on, because that is what makes a dead lane free.
+                    for task in pending:
+                        task.cancel()
+                    _lane_store.pop(job_id, None)
                     return {**result, "_lane": winner_lane}
                 break
 
@@ -1476,7 +1592,11 @@ def _serve_cover(
     elapsed_ms = round((time.monotonic() - start) * 1000, 1)
     _request_counter.add(1, {"agent.used": agent_used})
     _request_duration.record(elapsed_ms, {"agent.used": agent_used})
-    racing = lane_race_enabled()
+    # Must track what a REAL answer would show under the current mode, including
+    # side-by-side: a cover that offers a swap control when genuine answers have none
+    # (or vice versa) is distinguishable from a real answer on the lane surface alone,
+    # which is exactly what the cover exists to prevent.
+    racing = lane_race_enabled() and llm_client.side_by_side_enabled()
     return QueryResponse(
         answer=answer,
         agent_used=agent_used,
@@ -1711,9 +1831,19 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         # already what falls out; stated explicitly because a future edit that
         # seeds it earlier would silently start showing fabricated lane timings on
         # cached answers.)
+        # Side-by-side off suppresses the lane surface entirely, the same way a cache
+        # hit does. The race still ran (a dead lane is free that way) but the loser was
+        # cancelled, so there is nothing to swap to and reporting a winning lane would
+        # put a comparison affordance on screen with only one side of the comparison.
         served_from_cache = bool(result.get("_cached"))
-        lanes_available = racing and not served_from_cache
+        lanes_available = (racing and not served_from_cache
+                           and llm_client.side_by_side_enabled())
         winner_lane = result.get("_lane") if lanes_available else None
+        # Record the pinned lane on the span even when the UI gets no lane surface,
+        # so the audit monitor can still tell which provider stack answered in
+        # cloud-only / local-only mode.
+        if not lanes_available and result.get("_lane"):
+            span.set_attribute("lane.pinned", str(result["_lane"]))
         lane_entry = _lane_store.get(req.job_id) if lanes_available else None
         lanes_done = list(lane_entry.get("lanes", [])) if lane_entry else []
         lanes_racing = bool(lane_entry and lane_entry.get("status") == "racing")
@@ -1769,12 +1899,18 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
 def _lane_fingerprint() -> str:
     """Model config a cached answer was produced under.
 
-    Part of the key so that flipping LANE_RACE, or repointing the local lane at a
+    Part of the key so that changing the lane mode, or repointing the local lane at a
     different GGUF, misses instead of serving an answer whose lane metadata names
     a model this box no longer runs.
+
+    The mode is in here because it is the whole point of the settings gear: an
+    operator who switches to local-only wants to SEE the local models answer. Serving
+    them a cached Gemini answer, produced seconds earlier in hybrid mode, would make
+    the control look broken in the one situation where it is being demonstrated.
     """
+    mode = llm_client.lane_mode()
     if not lane_race_enabled():
-        return "single"
+        return f"{mode}:{llm_client.LOCAL_SQL_MODEL}/{llm_client.LOCAL_PROSE_MODEL}"
     return f"race:{llm_client.LOCAL_SQL_MODEL}/{llm_client.LOCAL_PROSE_MODEL}"
 
 

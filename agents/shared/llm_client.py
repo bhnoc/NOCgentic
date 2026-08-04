@@ -79,6 +79,31 @@ first; see agents/orchestrator/main.py. Lane env:
 
 Passing lane=None (the default) keeps the legacy single-provider behaviour
 exactly, so every existing call site is unaffected.
+
+LANE MODE (runtime override of the env above)
+---------------------------------------------
+The env vars are the BOOT default. An operator can change what the box does for the
+rest of the show without a redeploy, through the settings gear in the audit monitor:
+
+    hybrid   race both lanes                  (the env default where local exists)
+    cloud    Gemini only, no local calls      (a box with no GPU, or local is down)
+    local    local models only, no Gemini     (an all-local demo, or the API key is
+                                              gone, or someone will not allow
+                                              conference data to leave the box)
+
+and a separate `side_by_side` flag, default on, which decides whether hybrid RETAINS
+the losing lane and offers the swap. Turn it off and hybrid still races for
+resilience (first success wins, a dead lane costs nothing) but the analyst sees one
+answer and no swap control.
+
+The override is process state, deliberately not persisted. It reverts to the env on
+restart, which is the failure mode you want: whatever someone set at 2am during a
+demo does not silently outlive the container.
+
+`local` mode is honoured even when no local endpoint is configured. That looks wrong
+but is not: silently serving Gemini to someone who explicitly asked for local-only
+would be the worst possible failure of a control whose whole point may be "this data
+does not leave the box". It fails loudly instead.
 """
 
 from __future__ import annotations
@@ -300,18 +325,148 @@ def local_lane_available() -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Lane mode: runtime override of the env defaults
+# ---------------------------------------------------------------------------
+
+MODE_HYBRID = "hybrid"
+MODE_CLOUD = "cloud"
+MODE_LOCAL = "local"
+LANE_MODES = (MODE_HYBRID, MODE_CLOUD, MODE_LOCAL)
+
+# Plain module state, not a ContextVar: unlike _last_metrics and the base-url
+# override, this is one setting for the whole process rather than per-request, and a
+# ContextVar would not be visible to the request that reads it after the request
+# that set it.
+_lane_mode: str | None = None          # None = follow the env
+_side_by_side: bool | None = None      # None = follow the env
+
+
+def _env_lane_mode() -> str:
+    """The mode the env asks for, before any runtime override.
+
+    LANE_MODE, if set, wins outright. Otherwise it is derived from LANE_RACE so a box
+    that predates this control keeps behaving exactly as it did: "off" on a box with
+    no local endpoint is cloud-only, and "off" on a box that HAS one is still
+    cloud-only, because that is what "off" already meant (the local lane existed but
+    was not raced, and the cloud lane answered).
+    """
+    explicit = os.getenv("LANE_MODE", "").strip().lower()
+    if explicit in LANE_MODES:
+        return explicit
+    if LANE_RACE == "off":
+        return MODE_CLOUD
+    if LANE_RACE == "on":
+        return MODE_HYBRID
+    return MODE_HYBRID if local_lane_available() else MODE_CLOUD
+
+
+def _env_side_by_side() -> bool:
+    """Whether hybrid keeps the loser and offers the swap. On unless told otherwise."""
+    return os.getenv("LANE_SIDE_BY_SIDE", "true").strip().lower() not in (
+        "false", "0", "no", "off",
+    )
+
+
+def lane_mode() -> str:
+    """The mode in force right now: runtime override if set, else the env."""
+    return _lane_mode if _lane_mode in LANE_MODES else _env_lane_mode()
+
+
+def side_by_side_enabled() -> bool:
+    """Whether a raced query should retain the loser for the UI swap control."""
+    return _env_side_by_side() if _side_by_side is None else _side_by_side
+
+
+def set_lane_mode(mode: str | None, *, side_by_side: bool | None = None) -> dict[str, Any]:
+    """Override the mode for this process. Pass None to fall back to the env.
+
+    Returns the resulting state so a caller does not have to re-read it and risk
+    reporting something different from what it set.
+    """
+    global _lane_mode, _side_by_side
+    if mode is not None and mode not in LANE_MODES:
+        raise ValueError(f"unknown lane mode {mode!r}; expected one of {LANE_MODES}")
+    _lane_mode = mode
+    if side_by_side is not None:
+        _side_by_side = bool(side_by_side)
+    return lane_mode_state()
+
+
+def reset_lane_mode() -> None:
+    """Drop both overrides. Used by tests and by the admin reset control."""
+    global _lane_mode, _side_by_side
+    _lane_mode = None
+    _side_by_side = None
+
+
+def lane_mode_state() -> dict[str, Any]:
+    """Everything the settings UI needs to render itself honestly."""
+    mode = lane_mode()
+    return {
+        "mode": mode,
+        "side_by_side": side_by_side_enabled(),
+        "racing": lane_race_enabled(),
+        "env_mode": _env_lane_mode(),
+        "overridden": _lane_mode is not None or _side_by_side is not None,
+        "local_configured": local_lane_available(),
+        # Surfaced because the UI has to be able to explain a mode that cannot
+        # actually answer, rather than leaving the operator to discover it per query.
+        "local_missing": mode in (MODE_LOCAL, MODE_HYBRID) and not local_lane_available(),
+        "modes": list(LANE_MODES),
+        "roles": {
+            "sqlgen": {"base_url": LOCAL_SQL_BASE_URL, "model": LOCAL_SQL_MODEL},
+            "prose": {"base_url": LOCAL_PROSE_BASE_URL, "model": LOCAL_PROSE_MODEL},
+        },
+        "cloud_model": GEMINI_MODEL,
+    }
+
+
 def lane_race_enabled() -> bool:
     """Whether to run two lanes per query.
 
-    "off" never races. "on" races even if the local endpoints look unconfigured
-    (operator override — lets a misconfigured box fail loudly instead of silently
-    serving one lane). "auto" races only when the local lane can actually answer.
+    Only hybrid races. cloud and local are single-lane by definition, so this is
+    now a question about the mode rather than about LANE_RACE directly (LANE_RACE
+    still feeds the mode default; see _env_lane_mode).
+
+    Hybrid races even when the local endpoints look unconfigured, because "on" was
+    always an operator override that let a misconfigured box fail loudly instead of
+    silently serving one lane. A dead lane costs nothing: the race takes the first
+    SUCCESS, not the first completion.
     """
-    if LANE_RACE == "off":
-        return False
-    if LANE_RACE == "on":
-        return True
-    return local_lane_available()
+    return lane_mode() == MODE_HYBRID
+
+
+def mode_was_chosen() -> bool:
+    """True if somebody explicitly picked a mode, rather than it being derived.
+
+    The distinction matters for what single-lane means. A mode DERIVED from
+    LANE_RACE=off has to keep meaning what "off" always meant: run one pipeline on
+    the ambient LLM_PROVIDER. Pinning that to the cloud lane would force Gemini on a
+    box running LLM_PROVIDER=openrouter, which is a silent provider switch nobody
+    asked for.
+
+    A mode somebody CHOSE, in the env or through the gear, is a different statement:
+    they want that provider stack specifically, so pin it.
+    """
+    return _lane_mode is not None or os.getenv("LANE_MODE", "").strip().lower() in LANE_MODES
+
+
+def single_lane() -> str | None:
+    """The one lane to pin the pipeline to, or None to use the ambient provider.
+
+    None means both "we are racing" and "we are single-lane by inheritance", because
+    in both cases the caller should not override the provider: the racer passes real
+    lane names itself, and the inherited case wants LLM_PROVIDER.
+    """
+    if not mode_was_chosen():
+        return None
+    mode = lane_mode()
+    if mode == MODE_CLOUD:
+        return LANE_CLOUD
+    if mode == MODE_LOCAL:
+        return LANE_LOCAL
+    return None
 
 
 def resolve_lane(lane: str | None, role: str) -> tuple[str | None, str | None]:

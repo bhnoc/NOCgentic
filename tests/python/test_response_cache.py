@@ -539,9 +539,27 @@ class TestOrchestratorWiring:
     def test_lane_fingerprint_distinguishes_racing_from_single(self, monkeypatch):
         import llm_client
         monkeypatch.setattr(llm_client, "LANE_RACE", "off")
-        assert _orch._lane_fingerprint() == "single"
+        llm_client.reset_lane_mode()
+        single = _orch._lane_fingerprint()
         monkeypatch.setattr(llm_client, "LANE_RACE", "on")
-        assert _orch._lane_fingerprint() != "single"
+        assert _orch._lane_fingerprint() != single
+
+    def test_lane_fingerprint_tracks_the_lane_mode(self, monkeypatch):
+        """Switching to local-only must miss rather than replay a Gemini answer.
+
+        This is the case the settings gear exists for: an operator flips to
+        local-only specifically to watch the local models answer, and serving them a
+        cached cloud answer from ten seconds ago would make the control look broken.
+        """
+        import llm_client
+        monkeypatch.setattr(llm_client, "LANE_RACE", "off")
+        try:
+            llm_client.set_lane_mode("cloud")
+            cloud = _orch._lane_fingerprint()
+            llm_client.set_lane_mode("local")
+            assert _orch._lane_fingerprint() != cloud
+        finally:
+            llm_client.reset_lane_mode()
 
 
 # ---------------------------------------------------------------------------

@@ -29,7 +29,16 @@ services:
       # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
       # is the default. Defaulting the model name alone would ask AQLight's
       # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      #
+      # LANE_MODE overrides LANE_RACE outright: hybrid | cloud | local. Leave it
+      # unset and the mode is derived from LANE_RACE, which keeps every existing box
+      # behaving as before. An operator can change it at runtime from the settings
+      # gear in the audit monitor, which does NOT touch these values: the override is
+      # process state and a restart comes back to whatever is set here.
+      # LANE_SIDE_BY_SIDE=false keeps the race but shows one answer and no swap.
       - LANE_RACE=${LANE_RACE:-auto}
+      - LANE_MODE=${LANE_MODE:-}
+      - LANE_SIDE_BY_SIDE=${LANE_SIDE_BY_SIDE:-true}
       - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
       - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
       - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
@@ -44,6 +53,12 @@ services:
       - RESPONSE_CACHE_TTL_SECONDS=${RESPONSE_CACHE_TTL_SECONDS:-900}
       - RESPONSE_CACHE_HIT_DELAY_MIN=${RESPONSE_CACHE_HIT_DELAY_MIN:-2.0}
       - RESPONSE_CACHE_HIT_DELAY_MAX=${RESPONSE_CACHE_HIT_DELAY_MAX:-5.0}
+      # MODEL SUPERVISOR: lets the settings gear start and stop llama-server on the
+      # HOST. Unset on any box without a GPU, which makes the model controls read-only
+      # (discovery still works) rather than broken. Deliberately not a container: see
+      # ops/model-supervisor/README.md for why, and for the loopback/bridge binding.
+      - MODEL_SUPERVISOR_URL=${MODEL_SUPERVISOR_URL:-}
+      - MODEL_SUPERVISOR_TOKEN=${MODEL_SUPERVISOR_TOKEN:-}
       - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
       # How long a Manifold threat keeps a session quarantined, in seconds.
       - QUARANTINE_TTL_SECONDS=${QUARANTINE_TTL_SECONDS:-1800}
@@ -96,7 +111,16 @@ services:
       # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
       # is the default. Defaulting the model name alone would ask AQLight's
       # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      #
+      # LANE_MODE overrides LANE_RACE outright: hybrid | cloud | local. Leave it
+      # unset and the mode is derived from LANE_RACE, which keeps every existing box
+      # behaving as before. An operator can change it at runtime from the settings
+      # gear in the audit monitor, which does NOT touch these values: the override is
+      # process state and a restart comes back to whatever is set here.
+      # LANE_SIDE_BY_SIDE=false keeps the race but shows one answer and no swap.
       - LANE_RACE=${LANE_RACE:-auto}
+      - LANE_MODE=${LANE_MODE:-}
+      - LANE_SIDE_BY_SIDE=${LANE_SIDE_BY_SIDE:-true}
       - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
       - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
       - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
@@ -139,7 +163,16 @@ services:
       # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
       # is the default. Defaulting the model name alone would ask AQLight's
       # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      #
+      # LANE_MODE overrides LANE_RACE outright: hybrid | cloud | local. Leave it
+      # unset and the mode is derived from LANE_RACE, which keeps every existing box
+      # behaving as before. An operator can change it at runtime from the settings
+      # gear in the audit monitor, which does NOT touch these values: the override is
+      # process state and a restart comes back to whatever is set here.
+      # LANE_SIDE_BY_SIDE=false keeps the race but shows one answer and no swap.
       - LANE_RACE=${LANE_RACE:-auto}
+      - LANE_MODE=${LANE_MODE:-}
+      - LANE_SIDE_BY_SIDE=${LANE_SIDE_BY_SIDE:-true}
       - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
       - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
       - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
@@ -186,7 +219,16 @@ services:
       # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
       # is the default. Defaulting the model name alone would ask AQLight's
       # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      #
+      # LANE_MODE overrides LANE_RACE outright: hybrid | cloud | local. Leave it
+      # unset and the mode is derived from LANE_RACE, which keeps every existing box
+      # behaving as before. An operator can change it at runtime from the settings
+      # gear in the audit monitor, which does NOT touch these values: the override is
+      # process state and a restart comes back to whatever is set here.
+      # LANE_SIDE_BY_SIDE=false keeps the race but shows one answer and no swap.
       - LANE_RACE=${LANE_RACE:-auto}
+      - LANE_MODE=${LANE_MODE:-}
+      - LANE_SIDE_BY_SIDE=${LANE_SIDE_BY_SIDE:-true}
       - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
       - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
       - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}

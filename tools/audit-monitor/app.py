@@ -445,6 +445,61 @@ async def admin_set_athena(request: Request) -> Any:
         return r.json()
 
 
+@app.get("/admin/lanemode")
+async def admin_get_lanemode() -> Any:
+    """Current lane mode for the settings gear. Read-only, so cookie auth is enough."""
+    async with httpx.AsyncClient(timeout=5) as client:
+        r = await client.get(f"{ORCHESTRATOR_URL}/admin/lanemode", headers=_orch_admin_headers())
+        r.raise_for_status()
+        return r.json()
+
+
+@app.post("/admin/lanemode")
+async def admin_set_lanemode(request: Request) -> Any:
+    # Same defence-in-depth as the kill-switch: a state change needs a real Bearer
+    # HEADER, not just the viewer's session cookie. Switching the box to local-only
+    # mid-demo is not something a stolen cookie should be able to do.
+    if not _has_valid_bearer(request):
+        return JSONResponse({"error": "bearer token required"}, status_code=401)
+    body = await request.json()
+    async with httpx.AsyncClient(timeout=5) as client:
+        r = await client.post(f"{ORCHESTRATOR_URL}/admin/lanemode", json=body,
+                              headers=_orch_admin_headers())
+        # Pass the orchestrator's refusal through rather than raising: a 400 for an
+        # unknown mode should reach the panel as that message.
+        return JSONResponse(r.json(), status_code=r.status_code)
+
+
+@app.get("/admin/models")
+async def admin_get_models() -> Any:
+    """What each local endpoint is serving, plus the supervisor's allowlist."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(f"{ORCHESTRATOR_URL}/admin/models", headers=_orch_admin_headers())
+        r.raise_for_status()
+        return r.json()
+
+
+@app.post("/admin/models/{action}")
+async def admin_model_control(action: str, request: Request) -> Any:
+    """Start or stop a local model. Bearer header required.
+
+    `action` is checked against a literal set before it reaches the URL, so a path
+    segment from the request can never steer the proxied call somewhere else.
+    """
+    if action not in ("start", "stop"):
+        return JSONResponse({"error": "unknown action"}, status_code=404)
+    if not _has_valid_bearer(request):
+        return JSONResponse({"error": "bearer token required"}, status_code=401)
+    body = await request.json()
+    # Loading a GGUF is slow; the orchestrator's own timeout is 15s, so allow for it
+    # plus a margin rather than timing out the proxy first and reporting a failure
+    # for a start that actually succeeded.
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(f"{ORCHESTRATOR_URL}/admin/models/{action}", json=body,
+                              headers=_orch_admin_headers())
+        return JSONResponse(r.json(), status_code=r.status_code)
+
+
 @app.get("/api/recent")
 async def recent(limit: int = 200):
     # limit<=0 would slice as list[-0:] == whole buffer, so treat it as empty.

@@ -83,6 +83,152 @@
     transition: all 0.15s ease;
   }
   .kill-btn:hover:not(.armed) { background: rgba(255,107,53,0.12); color: var(--yellow); border-color: var(--yellow); }
+
+  /* Settings gear + modal. Deliberately quieter than the kill button: this is a
+     routine control, and giving it the same visual weight as the emergency one
+     would make the emergency one easier to hit by accident. */
+  .gear-btn {
+    background: transparent;
+    border: 1px solid var(--border-bright);
+    color: var(--muted);
+    padding: 3px 8px;
+    font-size: 13px;
+    line-height: 1;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.15s ease;
+  }
+  .gear-btn:hover { color: var(--frost); border-color: var(--frost); }
+  .modal-back {
+    position: fixed;
+    inset: 0;
+    background: rgba(3,7,18,0.82);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 60;
+    padding: 60px 16px 16px;
+    overflow-y: auto;
+  }
+  .modal-back.open { display: flex; }
+  .modal {
+    width: 560px;
+    max-width: 100%;
+    background: var(--bg-card);
+    border: 1px solid var(--border-bright);
+    border-radius: 3px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  }
+  .modal h2 {
+    margin: 0;
+    padding: 10px 14px;
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--frost);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-body { padding: 14px; }
+  .modal-sec { margin-bottom: 18px; }
+  .modal-sec:last-child { margin-bottom: 0; }
+  .modal-sec > h3 {
+    margin: 0 0 8px;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .mode-opt {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    margin-bottom: 6px;
+    cursor: pointer;
+  }
+  .mode-opt:hover { border-color: var(--border-bright); }
+  .mode-opt.sel { border-color: var(--frost); background: rgba(0,212,255,0.06); }
+  .mode-opt input { margin: 2px 0 0; }
+  .mode-opt .m-name { color: var(--text); font-weight: 700; }
+  .mode-opt .m-desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .sbs-row { display: flex; gap: 8px; align-items: flex-start; }
+  .sbs-row .m-desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .model-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .model-row .mr-main { min-width: 0; }
+  .model-row .mr-name { color: var(--text); }
+  .model-row .mr-sub { color: var(--muted); font-size: 10px; margin-top: 2px; word-break: break-all; }
+  .pill {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 2px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .pill.ok { color: var(--green); }
+  .pill.warn { color: var(--yellow); }
+  .pill.bad { color: var(--red); }
+  .mini-btn {
+    background: transparent;
+    border: 1px solid var(--border-bright);
+    color: var(--muted);
+    padding: 3px 8px;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .mini-btn:hover:not(:disabled) { color: var(--frost); border-color: var(--frost); }
+  .mini-btn:disabled { opacity: 0.4; cursor: default; }
+  .modal-foot {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+  }
+  .modal-note {
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.5;
+    margin: 0 0 8px;
+  }
+  .modal-warn { color: var(--yellow); font-size: 11px; margin: 0 0 8px; }
+  .modal-err { color: var(--red); font-size: 11px; margin: 0 8px 0 0; flex: 1; }
+  .save-btn {
+    background: var(--frost);
+    border: 1px solid var(--frost);
+    color: #041018;
+    padding: 4px 12px;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .save-btn:disabled { opacity: 0.4; cursor: default; }
   .kill-btn.armed {
     background: var(--red);
     color: #fff;
@@ -332,6 +478,7 @@
         <input type="checkbox" id="f-pause" /><label for="f-pause">PAUSE</label>
       </span>
       <span class="status-dot" id="dot" title="stream status"></span>
+      <button id="settings-open" class="gear-btn" title="Model settings: cloud, local or both">⚙</button>
       <button id="kill-athena" class="kill-btn" title="Emergency: stop routing user queries to the Athena agent. Users will see a generic 'nothing notable' response instead.">KILL ATHENA</button>
       <form method="POST" action="logout" style="margin:0;">
         <button type="submit" style="background:transparent;border:1px solid var(--border-bright);color:var(--muted);padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;letter-spacing:0.1em;text-transform:uppercase;">logout</button>
@@ -352,6 +499,49 @@
     </div>
     <div class="drawer-body" id="d-body"></div>
   </aside>
+
+  <div class="modal-back" id="settings-back">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h2 id="settings-title">
+        <span>Model settings</span>
+        <button class="mini-btn" id="settings-close">close</button>
+      </h2>
+      <div class="modal-body">
+        <div class="modal-sec">
+          <h3>Which models answer</h3>
+          <p class="modal-note">
+            Takes effect on the next question. Reverts to the deployed default if the
+            orchestrator restarts.
+          </p>
+          <div id="mode-opts"></div>
+          <div id="mode-warn"></div>
+        </div>
+        <div class="modal-sec" id="sbs-sec">
+          <h3>Comparison</h3>
+          <label class="sbs-row" for="sbs-check">
+            <input type="checkbox" id="sbs-check" checked />
+            <span>
+              <span class="m-name">Show both answers side by side</span>
+              <span class="m-desc">
+                Analysts get a swap button to read the other model's answer. Turn it
+                off and they see one answer, which is what you want for a clean demo.
+                Both models still run, so a model being down costs nothing.
+              </span>
+            </span>
+          </label>
+        </div>
+        <div class="modal-sec">
+          <h3>Models on this box</h3>
+          <div id="model-list"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="modal-err" id="settings-err"></span>
+        <button class="mini-btn" id="settings-reset" title="Go back to the deployed default">use default</button>
+        <button class="save-btn" id="settings-save">apply</button>
+      </div>
+    </div>
+  </div>
 
 <script>
   const FIXED_SERVICES = [
@@ -741,6 +931,278 @@
   document.getElementById('kill-athena').addEventListener('click', toggleKill);
   refreshKillState();
   setInterval(refreshKillState, 5000);
+
+  // ========== Model settings ==========
+  // Two independent controls that happen to share a panel: which models answer
+  // (cloud / local / both), and whether analysts get the side-by-side comparison.
+  //
+  // Model names come from the server, never from a hardcoded list, so the panel shows
+  // what the box is really serving rather than what somebody assumed at build time.
+  // Everything interpolated goes through escHtml: a served model alias is a string
+  // from llama-server, not something to trust into innerHTML.
+
+  const MODE_COPY = {
+    hybrid: {
+      name: 'Both (cloud and local)',
+      desc: 'Gemini and the local models both answer every question. Fastest answer wins.',
+    },
+    cloud: {
+      name: 'Cloud only',
+      desc: 'Gemini answers. Nothing is asked of the local models, so this is the mode for a box with no GPU.',
+    },
+    local: {
+      name: 'Local only',
+      desc: 'The models on this box answer. No question text leaves the box.',
+    },
+  };
+
+  let laneState = null;      // last /admin/lanemode payload
+  let modelState = null;     // last /admin/models payload
+  let pendingMode = null;    // what the operator has picked but not applied
+
+  const $ = (id) => document.getElementById(id);
+
+  function paintModes() {
+    const wrap = $('mode-opts');
+    if (!laneState) { wrap.textContent = 'loading…'; return; }
+    const modes = laneState.modes || ['hybrid', 'cloud', 'local'];
+    const current = pendingMode || laneState.mode;
+    wrap.innerHTML = modes.map((m) => {
+      const copy = MODE_COPY[m] || { name: m, desc: '' };
+      const sel = m === current ? ' sel' : '';
+      const isDefault = m === laneState.env_mode ? ' (deployed default)' : '';
+      return `<label class="mode-opt${sel}" data-mode="${escHtml(m)}">` +
+        `<input type="radio" name="lane-mode" value="${escHtml(m)}"${m === current ? ' checked' : ''} />` +
+        `<span><span class="m-name">${escHtml(copy.name)}${escHtml(isDefault)}</span>` +
+        `<span class="m-desc">${escHtml(copy.desc)}</span></span></label>`;
+    }).join('');
+
+    // Side-by-side only means anything when both stacks are running.
+    const sbsSec = $('sbs-sec');
+    sbsSec.style.display = current === 'hybrid' ? '' : 'none';
+
+    // A mode that cannot answer is worth saying out loud here rather than letting the
+    // operator find out one failed query at a time.
+    const warn = $('mode-warn');
+    if ((current === 'local' || current === 'hybrid') && !laneState.local_configured) {
+      warn.innerHTML = '<p class="modal-warn">No local endpoint is configured on this box. ' +
+        'Local-only will fail every question rather than quietly falling back to the cloud.</p>';
+    } else {
+      warn.innerHTML = '';
+    }
+  }
+
+  function modelRow(role, info) {
+    const serving = (info.serving || []);
+    let pill;
+    if (!info.reachable) {
+      pill = '<span class="pill bad">offline</span>';
+    } else if (info.healthy) {
+      pill = '<span class="pill ok">serving</span>';
+    } else {
+      // Reachable but not serving the model the lane asks for. This is the silent
+      // misconfiguration the panel exists to surface: every local call 404s.
+      pill = '<span class="pill warn">wrong model</span>';
+    }
+    const sub = info.reachable
+      ? `serving: ${escHtml(serving.join(', ') || 'nothing')}`
+      : escHtml(info.error || 'unreachable');
+    return `<div class="model-row">` +
+      `<span class="mr-main">` +
+        `<span class="mr-name">${escHtml(role)} → ${escHtml(info.configured_model || '(unset)')}</span>` +
+        `<span class="mr-sub">${escHtml(info.base_url || 'no endpoint')} · ${sub}</span>` +
+      `</span>${pill}</div>`;
+  }
+
+  function paintModels() {
+    const wrap = $('model-list');
+    if (!modelState) { wrap.textContent = 'loading…'; return; }
+    const roles = modelState.roles || {};
+    let html = Object.keys(roles).map((r) => modelRow(r, roles[r])).join('');
+    html += `<div class="model-row"><span class="mr-main">` +
+      `<span class="mr-name">cloud → ${escHtml(modelState.cloud_model || '(unset)')}</span>` +
+      `<span class="mr-sub">Gemini, via the API</span></span>` +
+      `<span class="pill ok">hosted</span></div>`;
+
+    const sup = modelState.supervisor || {};
+    if (!sup.available) {
+      html += `<p class="modal-note">Start and stop controls need the model supervisor ` +
+        `on the host. Not available here: ${escHtml(sup.reason || 'unknown')}.</p>`;
+      wrap.innerHTML = html;
+      return;
+    }
+    const units = sup.units || {};
+    html += '<h3 style="margin-top:12px;">Start or stop</h3>';
+    html += Object.keys(units).map((key) => {
+      const u = units[key];
+      const on = !!u.active;
+      const pill = on ? '<span class="pill ok">running</span>' : '<span class="pill">stopped</span>';
+      return `<div class="model-row"><span class="mr-main">` +
+        `<span class="mr-name">${escHtml(u.label || key)}</span>` +
+        `<span class="mr-sub">${escHtml(u.unit || '')} :${escHtml(u.port || '?')}` +
+        (u.note ? ` · ${escHtml(u.note)}` : '') + `</span></span>` +
+        `${pill}<button class="mini-btn model-ctl" data-key="${escHtml(key)}" ` +
+        `data-action="${on ? 'stop' : 'start'}">${on ? 'stop' : 'start'}</button></div>`;
+    }).join('');
+    // Loading a GGUF into VRAM is tens of seconds, so a click cannot report success
+    // as "ready". Say what actually happens instead of showing a lying spinner.
+    html += '<p class="modal-note">Starting a model takes up to a minute to map into ' +
+      'VRAM. The list refreshes on its own while this panel is open.</p>';
+    wrap.innerHTML = html;
+  }
+
+  async function refreshSettings() {
+    try {
+      const [laneR, modelR] = await Promise.all([
+        fetch('admin/lanemode', { credentials: 'same-origin' }),
+        fetch('admin/models', { credentials: 'same-origin' }),
+      ]);
+      if (laneR.ok) {
+        laneState = await laneR.json();
+        // Only adopt the server's side-by-side value when the operator has not
+        // touched the checkbox, otherwise the 5s poll would undo their click.
+        if (pendingMode === null) $('sbs-check').checked = !!laneState.side_by_side;
+      }
+      if (modelR.ok) modelState = await modelR.json();
+      paintModes();
+      paintModels();
+    } catch (e) {
+      $('settings-err').textContent = 'could not read settings: ' + e.message;
+    }
+  }
+
+  // Same step-up auth as the kill switch: state changes need the bearer token, not
+  // just a session cookie. Held for the life of the panel so applying a mode and then
+  // starting a model does not prompt twice.
+  let sessionToken = '';
+  function needToken() {
+    if (!sessionToken) {
+      sessionToken = (prompt('Enter the audit bearer token to change model settings:') || '').trim();
+    }
+    return sessionToken;
+  }
+
+  async function applyMode() {
+    const token = needToken();
+    if (!token) return;
+    const btn = $('settings-save');
+    btn.disabled = true;
+    $('settings-err').textContent = '';
+    try {
+      const r = await fetch('admin/lanemode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({
+          mode: pendingMode || (laneState && laneState.mode) || 'hybrid',
+          side_by_side: $('sbs-check').checked,
+        }),
+        credentials: 'same-origin',
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || body.error || ('HTTP ' + r.status));
+      laneState = body;
+      pendingMode = null;
+      // A wrong token is the likely failure, so do not keep a bad one around.
+      paintModes();
+    } catch (e) {
+      sessionToken = '';
+      $('settings-err').textContent = 'apply failed: ' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function resetMode() {
+    const token = needToken();
+    if (!token) return;
+    $('settings-err').textContent = '';
+    try {
+      const r = await fetch('admin/lanemode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        // "env" is distinct from picking a mode that happens to match the env: it
+        // drops the override so a redeploy's new default takes effect.
+        body: JSON.stringify({ mode: 'env' }),
+        credentials: 'same-origin',
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || body.error || ('HTTP ' + r.status));
+      laneState = body;
+      pendingMode = null;
+      $('sbs-check').checked = !!laneState.side_by_side;
+      paintModes();
+    } catch (e) {
+      sessionToken = '';
+      $('settings-err').textContent = 'reset failed: ' + e.message;
+    }
+  }
+
+  async function controlModel(key, action) {
+    const token = needToken();
+    if (!token) return;
+    if (action === 'stop' && !confirm(
+      'Stop ' + key + '?\n\nAny question mid-flight on that model will fail over to ' +
+      'the other lane, or fail outright in local-only mode.')) return;
+    $('settings-err').textContent = '';
+    document.querySelectorAll('.model-ctl').forEach((b) => { b.disabled = true; });
+    try {
+      const r = await fetch('admin/models/' + action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        // The unit decides its own port, so role is only a label in the host's audit
+        // log here. Sent as "prose" because that is the role an operator actually
+        // swaps models for; sqlgen is AQLight in every measured configuration.
+        body: JSON.stringify({ role: 'prose', model: key }),
+        credentials: 'same-origin',
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || body.error || ('HTTP ' + r.status));
+    } catch (e) {
+      sessionToken = '';
+      $('settings-err').textContent = action + ' failed: ' + e.message;
+    } finally {
+      await refreshSettings();
+    }
+  }
+
+  let settingsTimer = null;
+  function openSettings() {
+    $('settings-back').classList.add('open');
+    refreshSettings();
+    // Poll while open so a model that is still loading flips to "serving" on its own.
+    // Cleared on close: nothing should keep hitting admin routes behind a closed panel.
+    settingsTimer = setInterval(refreshSettings, 5000);
+  }
+  function closeSettings() {
+    $('settings-back').classList.remove('open');
+    if (settingsTimer) { clearInterval(settingsTimer); settingsTimer = null; }
+    // Drop the token with the panel rather than holding it for the tab's lifetime.
+    sessionToken = '';
+    pendingMode = null;
+  }
+
+  $('settings-open').addEventListener('click', openSettings);
+  $('settings-close').addEventListener('click', closeSettings);
+  $('settings-back').addEventListener('click', (ev) => {
+    if (ev.target === $('settings-back')) closeSettings();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && $('settings-back').classList.contains('open')) closeSettings();
+  });
+  // Delegated, because both lists are re-rendered on every poll and bound handlers
+  // would be lost each time.
+  $('mode-opts').addEventListener('click', (ev) => {
+    const opt = ev.target.closest('.mode-opt');
+    if (!opt) return;
+    pendingMode = opt.dataset.mode;
+    paintModes();
+  });
+  $('model-list').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.model-ctl');
+    if (btn) controlModel(btn.dataset.key, btn.dataset.action);
+  });
+  $('settings-save').addEventListener('click', applyMode);
+  $('settings-reset').addEventListener('click', resetMode);
 </script>
 </body>
 </html>

@@ -69,12 +69,13 @@ NOCgentic/
 │   ├── alert-triage/              # :8003 — Athena alerts triage
 │   ├── thousandeyes-analyst/      # :8004 — ThousandEyes network quality
 │   ├── athena-hunter/             # :8005 — NL→SQL hunt (primary data-lake agent)
-│   └── shared/                    # llm_client, athena_client, response_cache, telemetry, scrubbers
+│   └── shared/                    # llm_client, athena_client, response_cache, local_models, telemetry, scrubbers
 │
 ├── nginx/                         # TLS + reverse proxy (template → nginx-ssl.conf on box)
 ├── ops/                           # Canonical deploy + test runner (CI uses these)
 │   ├── deploy.sh
-│   └── run-tests.sh
+│   ├── run-tests.sh
+│   └── model-supervisor/          # HOST-side llama-server start/stop (NOT a container)
 ├── lambda/                        # Athena refresh / materialized views (data pipeline)
 ├── tools/
 │   └── audit-monitor/             # FastAPI swim-lane trace UI
@@ -199,8 +200,20 @@ Guardrails run first, then the Redis response cache, then the agent:
   cache miss → agent call → sanitise → cache write
 ```
 
+Lane mode decides which lanes run at all: `hybrid` (race), `cloud`, or `local`.
+`LANE_MODE` overrides `LANE_RACE`; empty derives from it. `LANE_SIDE_BY_SIDE=false`
+keeps the race but cancels the loser and reports no lane surface. Both are changeable
+at runtime from the ⚙ gear in the audit monitor, which is process state and reverts on
+restart. Local mode **never** falls back to the cloud. See
+[`docs/llm/lane-mode.md`](docs/llm/lane-mode.md).
+
 Agent ports are **internal-only** (`expose:` in compose). Only nginx 80/443 is public.
 Redis is `expose: 6379`, reachable only from the compose network.
+
+`ops/model-supervisor/` runs on the **host**, not in compose, and is the only thing
+that can start or stop a llama-server unit. The orchestrator names an allowlist key;
+the host file decides the command. Never give a container the docker socket, host PID
+namespace or an SSH key to do this instead.
 
 ---
 
@@ -254,7 +267,8 @@ GET    /ws                       # WebSocket (alerts + job_update)
 ```
 
 Orchestrator (internal): `POST /query`, `GET /hints/:id`, `GET /lanes/:id`,
-`GET /admin/killswitch`, `GET|DELETE /admin/cache` (all `/admin/*` behind bearer).
+`GET /admin/killswitch`, `GET|DELETE /admin/cache`, `GET|POST /admin/lanemode`,
+`GET /admin/models`, `POST /admin/models/{start,stop}` (all `/admin/*` behind bearer).
 
 `/lanes/:id` serves the losing lane of the dual-provider race (cloud Gemini vs
 local AQLight) so the UI can offer a swap. See
@@ -264,6 +278,11 @@ local AQLight) so the UI can offer a swap. See
 every guardrail in `handle_query` on purpose, because the key is the query text
 alone and entries are shared between callers. Do not move it earlier. See
 [`docs/cache/response-cache.md`](docs/cache/response-cache.md).
+
+`/admin/lanemode` and `/admin/models` back the ⚙ settings gear in the audit monitor.
+Reading the panel takes the audit cookie; changing anything takes the admin bearer.
+The model routes proxy to the host supervisor, which owns the allowlist. See
+[`docs/llm/lane-mode.md`](docs/llm/lane-mode.md).
 
 ---
 

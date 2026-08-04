@@ -144,6 +144,28 @@ local loses on both today: [`docs/llm/lane-race.md`](docs/llm/lane-race.md).
 
 ---
 
+## Lane mode (cloud only, local only, hybrid)
+
+The race is one of three modes. `hybrid` runs both lanes, `cloud` runs Gemini only,
+and `local` runs the box only. Local never falls back to the cloud when the endpoint
+is down: it fails loudly, because the reason to pick it is that the query text must
+not leave the network.
+
+The ⚙ gear in the audit monitor changes the mode without a redeploy, along with a
+side-by-side checkbox (on by default) that decides whether the losing lane is shown
+at all. That override is process state, so a restart comes back to whatever
+`LANE_MODE` and `LANE_SIDE_BY_SIDE` say in `.env.s3`.
+
+The same panel lists every local model, flags an endpoint that is serving the wrong
+alias, and can start or stop the llama-server units. Starting a process on the host
+goes through [`ops/model-supervisor/`](ops/model-supervisor/README.md), a small host
+process rather than a container, so the orchestrator can name a vetted model key and
+nothing more.
+
+Full write-up: [`docs/llm/lane-mode.md`](docs/llm/lane-mode.md).
+
+---
+
 ## Response cache (Redis)
 
 A question somebody already asked comes back without re-running the pipeline. Booth
@@ -221,6 +243,10 @@ docker compose -f docker-compose.agents.yml up -d --build
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite-preview` | LLM model (swap via env, no code change) |
 | `LLM_PROVIDER` | `gemini` | or `openrouter` |
 | `LANE_RACE` | `auto` | race cloud vs local: `auto` (only if a local endpoint is set) \| `on` \| `off` |
+| `LANE_MODE` | *(empty)* | `hybrid` \| `cloud` \| `local`; overrides `LANE_RACE`. Empty derives from it. |
+| `LANE_SIDE_BY_SIDE` | `true` | show the losing lane and the swap. `false` still races, just hides it. |
+| `MODEL_SUPERVISOR_URL` | *(empty)* | host model supervisor. Empty = model panel is read-only. |
+| `MODEL_SUPERVISOR_TOKEN` | *(empty)* | shared secret with the host supervisor unit |
 | `LOCAL_SQL_BASE_URL` | `LOCAL_LLM_BASE_URL` | local llama-server for NL→SQL |
 | `LOCAL_SQL_MODEL` | `LOCAL_LLM_MODEL` | served alias for the local SQL model |
 | `LOCAL_PROSE_BASE_URL` | `LOCAL_SQL_BASE_URL` | local llama-server for prose; unset = same one |

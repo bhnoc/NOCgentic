@@ -703,7 +703,16 @@ SYSTEM_PROMPT = (
     "- One line per bullet. No paraphrasing of data into prose.\n\n"
     "FORMAT (use these four headers only):\n"
     "## Answer\n"
-    "1–2 sentences, direct.\n\n"
+    # Scope citation: the lane bench scored answers against the triage_data they were
+    # built from, and the single biggest loss on every provider was an answer that was
+    # true but unjudgeable, because it never said how much data it came from. Naming
+    # the totals verbatim also anchors the model to the payload instead of a
+    # remembered order of magnitude.
+    "1–2 sentences, direct. State the SCOPE you analysed by citing the\n"
+    "triage_data totals verbatim: total_alerts, total_flows and total_dns\n"
+    "(e.g. \"7 alerts across 1204 flows and 88 DNS queries\"). An analyst\n"
+    "cannot judge a finding without knowing how much data it came from, so\n"
+    "omit a total only when it is absent from triage_data.\n\n"
     "## Key Entities\n"
     "Bullets: src IP (zone) → dst IP:port, signature, count. One line each.\n\n"
     "## Risk\n"
@@ -712,6 +721,11 @@ SYSTEM_PROMPT = (
     "Numbered imperatives: 'Block 1.2.3.4', 'Pivot on uid=ABC123', 'Check HTTP for uid X'.\n\n"
     "End with: ```json\n{\"confidence\": 0.XX}\n```\n"
     "Only cite data present in triage_data — never invent alerts, IPs, or UIDs. "
+    # Identifier fidelity: a uid the analyst cannot paste back into a search is worse
+    # than no uid. Every provider in the bench mangled at least one, and the local
+    # models also narrated the correction ("actually the uid is...") mid-answer.
+    "Copy every uid and IP as the EXACT string from triage_data; never abbreviate, "
+    "reformat or re-derive one, and never narrate a correction mid-answer. "
     "If data is empty, say so in one line and set confidence < 0.3.\n\n"
     "ALERT VALIDATION (when the analyst asks to validate/confirm/triage a specific alert):\n"
     "State a VERDICT in the first line: CONFIRMED (true positive), FALSE POSITIVE, or "
