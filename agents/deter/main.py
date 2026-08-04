@@ -278,16 +278,24 @@ async def _read_facet_live(name: str, dt_filter: str) -> dict[str, Any] | None:
     }
 
 
-async def gather_pool_context(query: str) -> dict[str, Any]:
+async def gather_pool_context(query: str, *, live_ok: bool = True) -> dict[str, Any]:
     """Assemble the safe-pool context for one query.
 
     Facet choice is keyword-driven and local; facet content is fixed. Nothing the
     caller wrote reaches Athena.
+
+    `live_ok=False` is the caller saying "do not touch the data lake for this
+    one", which is what the orchestrator sends while the admin kill-switch is
+    thrown. It can only ever subtract: DETER_ATHENA_ENABLED still has to be on
+    for a live read, so this is a veto and not a second way to enable one. Every
+    facet then serves the static roll-up it already carries, so the answer is
+    the same shape and the caller cannot tell which side of a pulled plug they
+    are on.
     """
     names = safe_pool.select_facets(query)
     tracer = get_tracer()
 
-    if DETER_ATHENA_ENABLED:
+    if DETER_ATHENA_ENABLED and live_ok:
         dt_filter = athena_client.date_filter(DETER_WINDOW_HOURS)
         with tracer.start_as_current_span("deter.pool_read") as pool_span:
             set_tool_span(pool_span, name="safe_pool.athena",
@@ -449,6 +457,12 @@ class DeterRequest(BaseModel):
     # very answer meant to deter them.
     reason: str | None = None
     lane: str | None = None
+    # False forbids live pool reads for this answer regardless of
+    # DETER_ATHENA_ENABLED. The orchestrator sends it while the admin
+    # kill-switch is thrown: "answer from deter" and "no live data" are only
+    # compatible if the ban travels with the request, because the env var is a
+    # property of this box and a pulled plug must not depend on it.
+    live_ok: bool = True
 
 
 class DeterResponse(BaseModel):
@@ -482,9 +496,10 @@ async def deter(req: DeterRequest) -> DeterResponse:
 
         with tracer.start_as_current_span("deter.gather_pool") as ctx_span:
             set_chain_span(ctx_span, input_value=req.query)
-            context = await gather_pool_context(req.query)
+            context = await gather_pool_context(req.query, live_ok=req.live_ok)
             ctx_span.set_attribute("pool.facet_count", len(context["facets"]))
             ctx_span.set_attribute("pool.live_facets", context["live_facets"])
+            ctx_span.set_attribute("pool.live_allowed", req.live_ok)
 
         answer, confidence = await llm_deter(req.query, context, lane=req.lane)
         ok, reason = screen_answer(answer)

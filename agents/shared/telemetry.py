@@ -571,6 +571,11 @@ class _NoOpSpan:
     def set_status(self, status): pass
     def record_exception(self, exc): pass
     def add_event(self, name, **kwargs): pass
+    # handle_query reads the span context to bind a trace to a bh_sid. Without
+    # this, turning telemetry OFF turned every query into an AttributeError —
+    # the shim has to cover the API the callers actually use, not just the
+    # write-only half of it. None is the honest answer: there is no trace.
+    def get_span_context(self): return None
     def __enter__(self): return self
     def __exit__(self, *args): pass
 

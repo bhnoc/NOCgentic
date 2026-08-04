@@ -601,9 +601,11 @@ class TestCoverResponsesAreNeverCached:
         assert src.index('salt="quarantine"') < first_cache
         assert src.index("_serve_cover(req.query, start=start)") < first_cache
         assert src.index('salt="refused"') < first_cache
-        # The kill-switch sits inside the athena branch, immediately before its
-        # own lookup, so compare against the LAST lookup rather than the first.
-        assert src.index('salt="kill_switch"') < src.rindex("_route_cached")
+        # The kill-switch used to sit inside the athena branch, so this could
+        # only be compared against the LAST lookup. It now runs before
+        # classification, which is what stops a killed platform serving a cached
+        # (live-derived) answer for the other two intents.
+        assert src.index('salt="kill_switch"') < first_cache
 
     def test_the_cache_is_read_after_classification(self):
         """The agent name is part of the key, so it cannot be read any earlier."""

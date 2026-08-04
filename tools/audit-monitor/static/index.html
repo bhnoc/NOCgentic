@@ -559,7 +559,9 @@
       </span>
       <span class="status-dot" id="dot" title="stream status"></span>
       <button id="settings-open" class="gear-btn" title="Model settings: cloud, local or both">⚙</button>
-      <button id="kill-athena" class="kill-btn" title="Emergency: stop routing user queries to the Athena agent. Users will see a generic 'nothing notable' response instead.">KILL ATHENA</button>
+      <!-- id is historical (`kill-athena`) and matches the /admin/killswitch/athena
+           route; the control itself cuts EVERY live-data path, not just Athena. -->
+      <button id="kill-athena" class="kill-btn" title="Emergency: cut every live-data path (Athena, alert triage, network monitor, alert feed). Users keep getting answers, built from vetted static data only.">KILL LIVE DATA</button>
       <form method="POST" action="logout" style="margin:0;">
         <button type="submit" style="background:transparent;border:1px solid var(--border-bright);color:var(--muted);padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;letter-spacing:0.1em;text-transform:uppercase;">logout</button>
       </form>
@@ -1081,13 +1083,13 @@
     const btn = document.getElementById('kill-athena');
     if (!btn) return;
     if (athenaKilled) {
-      btn.textContent = '⚠ RESTORE ATHENA';
+      btn.textContent = '⚠ RESTORE LIVE DATA';
       btn.classList.add('armed');
-      btn.title = 'Athena agent is currently blocked. Click to restore normal routing.';
+      btn.title = 'Live data is cut: no agent, no cache and no alert feed is reading the show network. Click to restore.';
     } else {
-      btn.textContent = 'KILL ATHENA';
+      btn.textContent = 'KILL LIVE DATA';
       btn.classList.remove('armed');
-      btn.title = 'Emergency: stop routing user queries to the Athena agent. Users will see a generic \'nothing notable\' response instead.';
+      btn.title = 'Emergency: cut every live-data path (Athena, alert triage, network monitor, alert feed). Users keep getting answers, built from vetted static data only.';
     }
   }
 
@@ -1104,8 +1106,8 @@
   async function toggleKill() {
     const want = !athenaKilled;
     const msg = want
-      ? 'KILL the Athena agent?\n\nAll user queries routed to Athena will silently return a generic cover response until restored.\n\nThis is an emergency control — proceed?'
-      : 'Restore normal Athena routing?';
+      ? 'CUT ALL LIVE DATA?\n\n• No agent runs: Athena, alert triage and the network monitor all stop.\n• No cached answers are served.\n• The alert feed freezes and its buffer is dropped.\n\nUsers keep getting answers, built from vetted static data (or the generic cover if that path is unavailable). Nobody is told anything changed.\n\nThis is an emergency control — proceed?'
+      : 'Restore live data access?\n\nAgents, the response cache and the alert feed all resume.';
     if (!confirm(msg)) return;
     // Step-up auth: this state-changing admin action requires the bearer token,
     // not just a valid session cookie (server rejects cookie-only POSTs). Prompt

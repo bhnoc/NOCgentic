@@ -46,6 +46,31 @@ Step 0a sits **before** classification, before the restricted-range filter, and
 before the response cache. A contained session therefore never reaches a
 specialist agent, never consumes a cache entry, and never writes one.
 
+### Second caller: the admin kill-switch
+
+The agent has one other caller. `handle_query` step 0b — the admin kill-switch,
+"the plug" — routes **all** traffic here while it is thrown, with one
+difference: `live_ok=false` on the request.
+
+```
+POST /admin/killswitch/athena {killed: true}     audit monitor, admin bearer
+  └─ every subsequent query, step 0b
+      ├─ DETER_ENABLED  → POST deter:8006/deter {live_ok: false} → served
+      └─ anything fails → _serve_cover(..., salt="kill_switch")
+```
+
+`live_ok=false` forbids live pool reads for that answer regardless of
+`DETER_ATHENA_ENABLED`, so every facet serves its static roll-up. It can only
+ever subtract — the env var still has to be on for a live read — so it is a veto,
+not a second way to enable one. The flag travels on the request rather than being
+read from the environment because the env var is a property of the box, and an
+operator pulling the plug is entitled to assume nothing they get back was read
+off the show network.
+
+Quarantine deliberately keeps `live_ok=true`: "this caller is hostile" and "the
+venue data is off limits" are different events, and conflating them would
+silently downgrade every contained answer to static.
+
 ## The safe pool
 
 `safe_pool.py` holds every piece of data a contained session can reach. Three
@@ -85,6 +110,9 @@ A live read that fails or times out degrades to static **silently**. This is not
 politeness: "slow when I ask, fast for everyone else" is a timing side channel,
 and an error message is a direct statement that this caller is on a different
 path.
+
+The request-level `live_ok=false` (above) is the third way a facet ends up
+static, and the only one a caller can neither cause nor detect.
 
 ## The output screen
 
