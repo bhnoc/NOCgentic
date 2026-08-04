@@ -8,6 +8,26 @@ const jobs = new Map();
 let n = 0;
 const received = [];
 
+// Lane-race fixtures. A raced query answers with the WINNER only (the loser is
+// still in flight in the real orchestrator), so the stub must serve the winner
+// first and the pair on a later poll — otherwise the swap control would appear
+// fully formed on the first render and the pending state would never be tested.
+const LANE_TRIGGER = 'lane race';
+const laneOf = (name, over = {}) => ({
+  lane: name,
+  label: name === 'cloud' ? 'Cloud (Gemini)' : 'Local (AQLight)',
+  answer: name === 'cloud'
+    ? 'CLOUD LANE: 3 hosts scanning port 445.'
+    : 'LOCAL LANE: three internal hosts are scanning SMB.',
+  confidence: name === 'cloud' ? 0.86 : 0.71,
+  agentUsed: 'athena-hunter',
+  data: { llm_metrics: { model: name === 'cloud' ? 'gemini-3.5-flash-lite' : 'AQLight' } },
+  elapsedMs: name === 'cloud' ? 1200 : 3400,
+  winner: name === 'cloud',
+  ...over,
+});
+const lanePolls = new Map();
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -17,13 +37,37 @@ const server = createServer(async (req, res) => {
     const { query } = JSON.parse(raw || '{}');
     const jobId = 'job-' + ++n;
     received.push({ jobId, query });
-    jobs.set(jobId, { jobId, status: 'done', answer: 'stub answer for: ' + query, agentUsed: 'stub', hints: [] });
+    if (String(query || '').toLowerCase().includes(LANE_TRIGGER)) {
+      jobs.set(jobId, {
+        jobId, status: 'done', agentUsed: 'athena-hunter', hints: [],
+        answer: laneOf('cloud').answer,
+        confidence: 0.86,
+        data: laneOf('cloud').data,
+        lane: 'cloud',
+        lanes: [laneOf('cloud')],
+        lanesRacing: true,
+      });
+      lanePolls.set(jobId, 0);
+    } else {
+      jobs.set(jobId, { jobId, status: 'done', answer: 'stub answer for: ' + query, agentUsed: 'stub', hints: [] });
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ jobId }));
   }
 
   if (url.pathname.startsWith('/api/v1/chat/')) {
-    const job = jobs.get(url.pathname.split('/').pop());
+    const jobId = url.pathname.split('/').pop();
+    const job = jobs.get(jobId);
+    // Second poll onwards: the loser has landed. Mirrors the web-server writing
+    // both lanes into the job once GET /lanes/<id> reports done.
+    if (job && lanePolls.has(jobId)) {
+      const seen = lanePolls.get(jobId) + 1;
+      lanePolls.set(jobId, seen);
+      if (seen >= 2) {
+        job.lanes = [laneOf('cloud'), laneOf('local')];
+        job.lanesRacing = false;
+      }
+    }
     res.writeHead(job ? 200 : 404, { 'content-type': 'application/json' });
     return res.end(JSON.stringify(job || { error: 'no such job' }));
   }

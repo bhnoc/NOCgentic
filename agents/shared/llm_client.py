@@ -37,10 +37,53 @@ Environment variables:
 Provider selection is per-box: a CPU/no-GPU host runs LLM_PROVIDER=gemini (cloud),
 the GPU box can run LLM_PROVIDER=local against an on-box llama.cpp server. Same image,
 different env. OpenRouter is the cloud fallback / alternative.
+
+LANES (dual-provider race)
+--------------------------
+On top of the single-provider config above, a request may nominate a *lane*: a
+named provider stack applied per ROLE within one pipeline run. Two lanes ship:
+
+    "cloud"  sqlgen -> Gemini            prose -> Gemini
+    "local"  sqlgen -> AQLight (local)   prose -> AQLight (local)   [default]
+
+The local lane defaults to ONE model doing both roles, because AQLight is the only
+local model that runs as a durable service on the box. Roles stay separate in the
+code (role="sqlgen" vs "prose") so a second model can be split off with env alone.
+
+Measured 2026-08-04 on the live g4dn.xlarge / Tesla T4
+(temp/lane-bench-2026-08-04/RESULTS.md, 28 cases via bench/run_bench.py):
+
+    Gemini everything          100.0% mean   8.7s   <- best on BOTH axes
+    Foundation-Sec everything   97.4%        18.7s  <- best fully local
+    AQLight SQL + Fnd-Sec       95.8%        13.4s
+    AQLight everything          93.0%        14.6s  <- the default here
+
+Two things that contradict the earlier design notes and are worth knowing before
+tuning this: local is SLOWER than cloud here (~25 tok/s vs ~194 — earlier docs
+assumed a 46GB L40S at 129 tok/s, not this 15GB T4), and Foundation-Sec beats
+AQLight at NL->SQL (97.5% vs 92.5%), the one job AQLight was fine-tuned for. The
+race is a comparison affordance on this hardware, not a latency win.
+
+The orchestrator runs both lanes concurrently and shows whichever finishes
+first; see agents/orchestrator/main.py. Lane env:
+
+    LANE_RACE               "auto" (default) | "on" | "off". auto races only when a
+                            local endpoint is actually configured, so a CPU-only box
+                            degrades to single-lane with no dead calls.
+    LOCAL_SQL_BASE_URL      llama-server for NL->SQL. Falls back to LOCAL_LLM_BASE_URL.
+    LOCAL_SQL_MODEL         served alias for the SQL role. Falls back to LOCAL_LLM_MODEL.
+    LOCAL_PROSE_BASE_URL    llama-server for prose. Falls back to LOCAL_SQL_BASE_URL
+                            (-> AQLight everything). Set it to split the roles across
+                            two ports; two GGUFs cannot share one llama-server.
+    LOCAL_PROSE_MODEL       served alias for the prose role. Falls back to LOCAL_SQL_MODEL.
+
+Passing lane=None (the default) keeps the legacy single-provider behaviour
+exactly, so every existing call site is unaffected.
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import time
@@ -112,23 +155,37 @@ def _record_otel_metrics(
 # ---------------------------------------------------------------------------
 # In-process metrics snapshot (used by agents for span attrs)
 # ---------------------------------------------------------------------------
+# Held in a ContextVar, NOT a module global. Lane racing runs two pipelines
+# concurrently in one process, and a plain dict is shared mutable state: both
+# lanes would write it and each would then read whichever finished last. The
+# reported model/latency/tok-per-sec is exactly what the UI's lane swap compares,
+# so a clobber here means the local lane can be labelled "gemini-3.5-flash-lite"
+# at the cloud lane's latency — a silently wrong benchmark rather than a crash.
+#
+# asyncio.Task copies the ambient context at creation, so each lane task gets its
+# own binding for free. The default is a shared sentinel that is never mutated in
+# place: _record_metrics always SETS a fresh dict, so no writer can reach across.
 
-_last_metrics: dict[str, Any] = {}
+_last_metrics: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "bhnoc_last_llm_metrics", default={},
+)
 
 
 def get_last_llm_metrics() -> dict[str, Any]:
-    """Return metrics from the most recent llm_complete call."""
-    return dict(_last_metrics)
+    """Return metrics from the most recent llm_complete call in THIS context."""
+    return dict(_last_metrics.get())
 
 
 def _record_metrics(
     provider: str, model: str, latency_ms: float,
     input_tokens: int, output_tokens: int,
     thinking_tokens: int, finish_reason: str,
+    lane: str | None = None, role: str | None = None,
 ) -> None:
     tok_per_sec = round(output_tokens / (latency_ms / 1000), 1) if latency_ms > 0 else 0
-    _last_metrics.clear()
-    _last_metrics.update({
+    _last_metrics.set({
+        "lane": lane,
+        "role": role,
         "provider": provider,
         "model": model,
         "latency_ms": round(latency_ms, 1),
@@ -181,6 +238,117 @@ LOCAL_LLM_API_KEY: str = os.getenv("LOCAL_LLM_API_KEY", "not-needed")
 # Set SQLGEN_PROVIDER=local (+ the LOCAL_LLM_* vars) to send only SQL gen to AQLight.
 SQLGEN_PROVIDER: str = os.getenv("SQLGEN_PROVIDER", "").lower()
 SQLGEN_MODEL: str = os.getenv("SQLGEN_MODEL", "")
+
+
+# ---------------------------------------------------------------------------
+# Lane config (dual-provider race) — see module docstring
+# ---------------------------------------------------------------------------
+# A lane is a provider stack keyed by ROLE. Roles are the two kinds of LLM work
+# this app does, and they have opposite requirements:
+#   "sqlgen" — structured output, temperature 0, correctness is binary
+#   "prose"  — free text for an analyst; hallucination is the failure mode
+# The roles exist so a box CAN serve them from two different models, not because it
+# must: by default both resolve to the same local model (see LOCAL_PROSE_* below).
+
+LANE_CLOUD = "cloud"
+LANE_LOCAL = "local"
+
+# AQLight (SQL specialist). Separate vars from LOCAL_LLM_* so the two local models
+# can live on different ports, but fall back to LOCAL_LLM_* so an existing
+# single-model box keeps working with no new env.
+LOCAL_SQL_BASE_URL: str = os.getenv("LOCAL_SQL_BASE_URL", "") or LOCAL_LLM_BASE_URL
+LOCAL_SQL_MODEL: str = os.getenv("LOCAL_SQL_MODEL", "") or LOCAL_LLM_MODEL
+
+# Prose model. Falls back to the SQL endpoint, which makes the local lane
+# AQLight-for-everything by default: AQLight is the only local model that runs as a
+# durable service (aqlight.service, Restart=always), so it is the only one a box
+# has on hand with no new infra. Set LOCAL_PROSE_* to split the roles across two
+# llama-servers.
+#
+# This fallback was deliberately absent until the 2026-08-04 measurement
+# (temp/lane-bench-2026-08-04/RESULTS.md), on the theory that AQLight prose was
+# dangerous enough that no-local-lane beat AQLight-prose. The bench does not
+# support that: AQLight-everything scores 93.0% mean vs 95.8% for the
+# AQLight-SQL + Foundation-Sec-prose split — a real but modest gap, not the
+# categorical failure the earlier relevance number (0.464) implied. A working
+# single-model lane is worth more than a two-model lane nobody has stood up.
+#
+# Foundation-Sec remains the better prose model (94.8% vs 86.5% summarize) and the
+# better SQL model (97.5% vs 92.5%). If you are willing to serve a second GGUF,
+# point BOTH vars at it rather than splitting the roles.
+LOCAL_PROSE_BASE_URL: str = os.getenv("LOCAL_PROSE_BASE_URL", "") or LOCAL_SQL_BASE_URL
+LOCAL_PROSE_MODEL: str = os.getenv("LOCAL_PROSE_MODEL", "") or LOCAL_SQL_MODEL
+
+# "auto" (default): race only when a local prose endpoint is configured. This is
+# what makes the same image safe on the CPU box (no local models -> single lane,
+# zero failed calls) and on the GPU box (both configured -> race).
+LANE_RACE: str = os.getenv("LANE_RACE", "auto").lower()
+
+
+def local_lane_available() -> bool:
+    """True if this box is actually configured to serve a local lane.
+
+    Tests the RAW env, not the resolved LOCAL_SQL_BASE_URL / LOCAL_PROSE_BASE_URL:
+    those fall back through LOCAL_LLM_BASE_URL, which itself defaults to a non-empty
+    "http://localhost:8080/v1". Reading the resolved values would therefore report a
+    local lane on every box, and "auto" would race the CPU-only box against a
+    llama-server that is not running — one guaranteed-failed lane per query.
+    """
+    return any(
+        os.getenv(var)
+        for var in ("LOCAL_SQL_BASE_URL", "LOCAL_PROSE_BASE_URL", "LOCAL_LLM_BASE_URL")
+    )
+
+
+def lane_race_enabled() -> bool:
+    """Whether to run two lanes per query.
+
+    "off" never races. "on" races even if the local endpoints look unconfigured
+    (operator override — lets a misconfigured box fail loudly instead of silently
+    serving one lane). "auto" races only when the local lane can actually answer.
+    """
+    if LANE_RACE == "off":
+        return False
+    if LANE_RACE == "on":
+        return True
+    return local_lane_available()
+
+
+def resolve_lane(lane: str | None, role: str) -> tuple[str | None, str | None]:
+    """Map (lane, role) -> (provider, model) for llm_complete.
+
+    Returns (None, None) for an unknown lane or the legacy lane=None path, which
+    means "use the ambient LLM_PROVIDER config" — i.e. every pre-existing call
+    site behaves exactly as it did before lanes existed.
+    """
+    if lane == LANE_CLOUD:
+        # The cloud lane is Gemini for both roles. Explicit rather than inherited
+        # so a box running LLM_PROVIDER=local still gets a genuine cloud lane to
+        # race against, instead of racing local against local.
+        return "gemini", GEMINI_MODEL
+    if lane == LANE_LOCAL:
+        if role == "sqlgen":
+            return "local", LOCAL_SQL_MODEL
+        # Every non-sqlgen role (prose, classify, hints, triage) is free text.
+        return "local", LOCAL_PROSE_MODEL
+    return None, None
+
+
+# Per-role base URL override. The two local models are separate llama-server
+# processes on separate ports, so provider+model is not enough to address them —
+# the base URL has to vary per role too. Held in a ContextVar for the same reason
+# as _last_metrics: two lanes run concurrently and a global would cross-wire them,
+# sending prose to the SQL model.
+_base_url_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "bhnoc_local_base_url", default=None,
+)
+
+
+def resolve_lane_base_url(lane: str | None, role: str) -> str | None:
+    """Base URL for a (lane, role), or None to use the ambient default."""
+    if lane != LANE_LOCAL:
+        return None
+    return LOCAL_SQL_BASE_URL if role == "sqlgen" else LOCAL_PROSE_BASE_URL
 
 
 # ---------------------------------------------------------------------------
@@ -247,18 +415,23 @@ def _get_local_model(
     model: str | None = None,
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    base_url: str | None = None,
 ):
     """Create a LangChain ChatOpenAI instance pointing at a LOCAL OpenAI-compatible
     server (llama.cpp `llama-server`, Ollama, or vLLM on the GPU box). Same client
     shape as OpenRouter, just a different base URL and no real key required. Longer
-    timeout than the cloud paths because a cold local model can be slow to first token."""
+    timeout than the cloud paths because a cold local model can be slow to first token.
+
+    base_url selects WHICH local server: AQLight and Foundation-Sec are two
+    llama-server processes on two ports (one process serves one GGUF). Falls back to
+    the context override, then LOCAL_LLM_BASE_URL."""
     from langchain_openai import ChatOpenAI
 
     model_name = model or LOCAL_LLM_MODEL
     return ChatOpenAI(
         model=model_name,
         openai_api_key=LOCAL_LLM_API_KEY,
-        openai_api_base=LOCAL_LLM_BASE_URL,
+        openai_api_base=base_url or _base_url_override.get() or LOCAL_LLM_BASE_URL,
         max_tokens=max_tokens,
         temperature=temperature,
         timeout=180,
@@ -293,6 +466,8 @@ async def llm_complete(
     model: str | None = None,
     provider: str | None = None,
     thinking_budget: int | None = None,
+    lane: str | None = None,
+    role: str = "prose",
 ) -> str:
     """
     Send a completion request via LangChain.
@@ -300,8 +475,23 @@ async def llm_complete(
     LangSmith OTEL integration automatically traces all LLM calls —
     prompts, completions, token usage, and model metadata are captured
     as OTEL spans and exported to Manifold via our TracerProvider.
+
+    lane/role select a provider stack for the dual-lane race (see module
+    docstring). lane=None is the legacy path: provider/model resolve from the
+    ambient LLM_PROVIDER env exactly as before. An explicit provider= argument
+    still wins over the lane, so SQLGEN_PROVIDER-style overrides keep working.
     """
     from langchain_core.messages import SystemMessage, HumanMessage
+
+    # Lane resolution is a DEFAULT, not an override: an explicit provider=/model=
+    # from the caller takes precedence. That keeps the pre-lane hybrid knob
+    # (SQLGEN_PROVIDER) authoritative where it is already set.
+    lane_base_url: str | None = None
+    if lane:
+        lane_provider, lane_model = resolve_lane(lane, role)
+        provider = provider or lane_provider
+        model = model or lane_model
+        lane_base_url = resolve_lane_base_url(lane, role)
 
     active = (provider or LLM_PROVIDER).lower()
 
@@ -335,7 +525,7 @@ async def llm_complete(
         provider_name = "google"
         model_name = model or GEMINI_MODEL
     elif active == "local":
-        llm = _get_local_model(model, max_tokens, temperature)
+        llm = _get_local_model(model, max_tokens, temperature, base_url=lane_base_url)
         provider_name = "local"
         model_name = model or LOCAL_LLM_MODEL
     else:
@@ -389,6 +579,7 @@ async def llm_complete(
         provider=provider_name, model=model_name, latency_ms=latency_ms,
         input_tokens=input_tok, output_tokens=output_tok,
         thinking_tokens=thinking_tok, finish_reason=finish_reason,
+        lane=lane, role=role if lane else None,
     )
     _record_otel_metrics(provider_name, model_name, latency_ms, input_tok, output_tok)
 

@@ -118,6 +118,29 @@ Each agent:
 - **Mobile (iPhone 12)** layout: single rotating alert card swapping every 3–5 s, stats hidden, full-width bubbles.
 - **Session tracking** — `bh_sid` HttpOnly cookie (30 days) + `X-Client-Session` header backed by localStorage. Either survives a cookie clear; both must be cleared to reset identity.
 - **6 starter prompts** on landing page covering threat hunting + network quality.
+- **Lane swap (`⇄`)**: on a raced query, the answer bubble names the lane that answered, its elapsed time, and a button to read the other one. See [Lane race](#lane-race-cloud-vs-local).
+
+---
+
+## Lane race (cloud vs local)
+
+Two provider stacks answer the same query at once. The first one to finish is what
+the analyst reads, and the answer bubble grows a `⇄` button for the other one.
+
+| lane | NL→SQL | prose |
+|---|---|---|
+| `cloud` | Gemini | Gemini |
+| `local` | AQLight | AQLight, or a second model if you serve one |
+
+`LANE_RACE=auto` (the default) races only when a local endpoint is configured, so
+the same image runs single-lane on a box with no GPU instead of firing off calls it
+knows will fail.
+
+Both lanes run the full pipeline, which means **a raced query scans Athena twice**.
+Set `LANE_RACE=off` if that costs more than the comparison is worth.
+
+Design notes, plus measured accuracy and latency for every configuration and why
+local loses on both today: [`docs/llm/lane-race.md`](docs/llm/lane-race.md).
 
 ---
 
@@ -169,6 +192,11 @@ docker compose -f docker-compose.agents.yml up -d --build
 | `GEMINI_API_KEY` | — | required |
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite-preview` | LLM model (swap via env, no code change) |
 | `LLM_PROVIDER` | `gemini` | or `openrouter` |
+| `LANE_RACE` | `auto` | race cloud vs local: `auto` (only if a local endpoint is set) \| `on` \| `off` |
+| `LOCAL_SQL_BASE_URL` | `LOCAL_LLM_BASE_URL` | local llama-server for NL→SQL |
+| `LOCAL_SQL_MODEL` | `LOCAL_LLM_MODEL` | served alias for the local SQL model |
+| `LOCAL_PROSE_BASE_URL` | `LOCAL_SQL_BASE_URL` | local llama-server for prose; unset = same one |
+| `LOCAL_PROSE_MODEL` | `LOCAL_SQL_MODEL` | served alias for the local prose model |
 | `OPENROUTER_API_KEY` | — | alternate provider |
 | `ATHENA_DATABASE` | `blackhat_pope_logs` | |
 | `ATHENA_WORKGROUP` | `blackhat-pope-dev` | |

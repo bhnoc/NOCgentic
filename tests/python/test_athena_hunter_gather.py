@@ -26,7 +26,7 @@ def athena_mod():
 
 class TestAthenaHunterGather:
     def test_gather_athena_context_concurrent_execution(self, athena_mod, monkeypatch):
-        async def mock_generate_sql(query, classified, today):
+        async def mock_generate_sql(query, classified, today, lane=None):
             return [
                 "SELECT 1 AS col LIMIT 10",
                 "SELECT 2 AS col LIMIT 5",

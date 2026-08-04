@@ -21,6 +21,19 @@ services:
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
+      # LANE RACE: cloud (Gemini) vs local run concurrently and the fastest is
+      # shown, with a UI swap to the other. LANE_RACE=auto races only when a local
+      # endpoint is configured, so this is inert on a CPU-only box.
+      #
+      # LOCAL_PROSE_* must default to EMPTY, not to a model name. Unset means the
+      # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
+      # is the default. Defaulting the model name alone would ask AQLight's
+      # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      - LANE_RACE=${LANE_RACE:-auto}
+      - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
+      - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
+      - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
+      - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
       - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
       # How long a Manifold threat keeps a session quarantined, in seconds.
       - QUARANTINE_TTL_SECONDS=${QUARANTINE_TTL_SECONDS:-1800}
@@ -64,6 +77,19 @@ services:
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
+      # LANE RACE: cloud (Gemini) vs local run concurrently and the fastest is
+      # shown, with a UI swap to the other. LANE_RACE=auto races only when a local
+      # endpoint is configured, so this is inert on a CPU-only box.
+      #
+      # LOCAL_PROSE_* must default to EMPTY, not to a model name. Unset means the
+      # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
+      # is the default. Defaulting the model name alone would ask AQLight's
+      # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      - LANE_RACE=${LANE_RACE:-auto}
+      - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
+      - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
+      - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
+      - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
       - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhat_pope_logs}
       - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhat-pope-dev}
       - ATHENA_REGION=${ATHENA_REGION:-us-west-2}
@@ -94,6 +120,19 @@ services:
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
+      # LANE RACE: cloud (Gemini) vs local run concurrently and the fastest is
+      # shown, with a UI swap to the other. LANE_RACE=auto races only when a local
+      # endpoint is configured, so this is inert on a CPU-only box.
+      #
+      # LOCAL_PROSE_* must default to EMPTY, not to a model name. Unset means the
+      # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
+      # is the default. Defaulting the model name alone would ask AQLight's
+      # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      - LANE_RACE=${LANE_RACE:-auto}
+      - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
+      - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
+      - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
+      - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
       # HYBRID: set SQLGEN_PROVIDER=local to route ONLY NL->SQL gen to AQLight while
       # synthesis stays on LLM_PROVIDER (Gemini). Unset -> SQL gen uses LLM_PROVIDER too.
       - SQLGEN_PROVIDER=${SQLGEN_PROVIDER:-}
@@ -128,6 +167,19 @@ services:
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
+      # LANE RACE: cloud (Gemini) vs local run concurrently and the fastest is
+      # shown, with a UI swap to the other. LANE_RACE=auto races only when a local
+      # endpoint is configured, so this is inert on a CPU-only box.
+      #
+      # LOCAL_PROSE_* must default to EMPTY, not to a model name. Unset means the
+      # prose role falls back to the SQL endpoint, i.e. AQLight does both jobs, which
+      # is the default. Defaulting the model name alone would ask AQLight's
+      # llama-server for a model it does not serve. See docs/llm/lane-race.md.
+      - LANE_RACE=${LANE_RACE:-auto}
+      - LOCAL_SQL_BASE_URL=${LOCAL_SQL_BASE_URL:-}
+      - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
+      - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
+      - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
       - OTEL_ENABLED=${OTEL_ENABLED:-true}

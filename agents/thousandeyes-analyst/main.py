@@ -539,7 +539,9 @@ SYSTEM_PROMPT = (
 )
 
 
-async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
+async def llm_analyze(
+    query: str, context: dict[str, Any], lane: str | None = None,
+) -> tuple[str, float]:
     # Keep LLM context tight — degraded_tests may be big, truncate to 20
     compact = dict(context)
     if isinstance(compact.get("degraded_tests"), list):
@@ -563,6 +565,8 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
             max_tokens=4096,
             temperature=0.1,
             thinking_budget=0,
+            lane=lane,
+            role="prose",
         )
     except Exception as exc:
         logger.warning("thousandeyes LLM call failed (%s): %s", type(exc).__name__, exc)
@@ -605,6 +609,8 @@ instrument_fastapi_app(app)
 
 class AnalyzeRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=5000)
+    # Provider stack for the dual-lane race; None = ambient LLM_PROVIDER.
+    lane: str | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -621,9 +627,11 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         span.set_attribute("query.length", len(req.query))
         span.set_attribute("query.text", req.query[:500])
         set_agent_span(span, input_value=req.query, name="thousandeyes-analyst")
+        if req.lane:
+            span.set_attribute("lane", req.lane)
 
         start = time.monotonic()
-        logger.info("analyze query_len=%d", len(req.query))
+        logger.info("analyze query_len=%d lane=%s", len(req.query), req.lane or "-")
 
         with tracer.start_as_current_span("thousandeyes_analyst.gather_context") as ctx_span:
             set_chain_span(ctx_span, input_value=req.query)
@@ -633,7 +641,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             ctx_span.set_attribute("context.red_count", context.get("red_count", 0))
             ctx_span.set_attribute("context.yellow_count", context.get("yellow_count", 0))
 
-        answer, confidence = await llm_analyze(req.query, context)
+        answer, confidence = await llm_analyze(req.query, context, lane=req.lane)
 
         elapsed = time.monotonic() - start
         elapsed_ms = round(elapsed * 1000, 1)

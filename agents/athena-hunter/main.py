@@ -496,7 +496,9 @@ SQL_GEN_PROMPT = (
 )
 
 
-async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> list[str]:
+async def generate_sql(
+    query: str, iocs: dict[str, list[str]], today: str, lane: str | None = None,
+) -> list[str]:
     """Use LLM to generate Athena SQL queries from natural language."""
     tracer = get_tracer()
     with tracer.start_as_current_span("athena_hunter.generate_sql") as span:
@@ -565,6 +567,8 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
         sqlgen_provider = SQLGEN_PROVIDER or None
         sqlgen_model = SQLGEN_MODEL or None
         span.set_attribute("sqlgen.provider", sqlgen_provider or (LLM_PROVIDER or "gemini"))
+        if lane:
+            span.set_attribute("lane", lane)
         try:
             raw = await llm_complete(
                 # Truncation guard for SQL generation. On flash-lite, thinking_budget=0
@@ -583,6 +587,11 @@ async def generate_sql(query: str, iocs: dict[str, list[str]], today: str) -> li
                 thinking_budget=512,
                 provider=sqlgen_provider,
                 model=sqlgen_model,
+                # role="sqlgen" is what sends the LOCAL lane to AQLight rather than
+                # Foundation-Sec. Note sqlgen_provider (SQLGEN_PROVIDER env) still
+                # wins if an operator set it explicitly — lane is only a default.
+                lane=lane,
+                role="sqlgen",
             )
             span.set_attribute("llm.response_length", len(raw))
         except RuntimeError as exc:
@@ -776,7 +785,7 @@ def _fallback_queries(query: str, iocs: dict[str, list[str]], today: str) -> lis
 # ---------------------------------------------------------------------------
 
 async def gather_athena_context(
-    iocs: list[str], query: str,
+    iocs: list[str], query: str, lane: str | None = None,
 ) -> dict[str, Any]:
     """Generate SQL, execute against Athena, gather results."""
     tracer = get_tracer()
@@ -789,7 +798,7 @@ async def gather_athena_context(
         set_chain_span(span, input_value=query)
 
         # Generate SQL via LLM
-        sql_queries = await generate_sql(query, classified, today)
+        sql_queries = await generate_sql(query, classified, today, lane=lane)
         span.set_attribute("sql.generated_count", len(sql_queries))
 
         ctx: dict[str, Any] = {
@@ -912,11 +921,15 @@ SYSTEM_PROMPT = (
 )
 
 
-async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
+async def llm_analyze(
+    query: str, context: dict[str, Any], lane: str | None = None,
+) -> tuple[str, float]:
     """Send Athena results to LLM for analysis."""
     tracer = get_tracer()
     with tracer.start_as_current_span("athena_hunter.llm_analyze") as span:
         set_chain_span(span, input_value=query)
+        if lane:
+            span.set_attribute("lane", lane)
         # Build context string from query results
         results_str = ""
         for qr in context.get("query_results", []):
@@ -965,6 +978,9 @@ async def llm_analyze(query: str, context: dict[str, Any]) -> tuple[str, float]:
                 max_tokens=4096,
                 temperature=0.1,
                 thinking_budget=0,
+                # role="prose": on the local lane this is Foundation-Sec, NOT AQLight.
+                lane=lane,
+                role="prose",
             )
             span.set_attribute("llm.answer_length", len(answer))
         except RuntimeError as exc:
@@ -1001,6 +1017,10 @@ instrument_fastapi_app(app)
 class AnalyzeRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=5000)
     extracted_iocs: list[str] = Field(default_factory=list)
+    # Which provider stack to run: "cloud" (Gemini), "local" (AQLight SQL +
+    # Foundation-Sec prose), or None for the ambient LLM_PROVIDER config. The
+    # orchestrator sets this when racing lanes; direct callers can omit it.
+    lane: str | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -1018,15 +1038,20 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         span.set_attribute("query.text", req.query[:500])
         span.set_attribute("iocs.count", len(req.extracted_iocs))
         set_agent_span(span, input_value=req.query, name="athena-hunter")
+        if req.lane:
+            span.set_attribute("lane", req.lane)
 
         start = time.monotonic()
-        logger.info("analyze query_len=%d iocs=%d", len(req.query), len(req.extracted_iocs))
+        logger.info(
+            "analyze query_len=%d iocs=%d lane=%s",
+            len(req.query), len(req.extracted_iocs), req.lane or "-",
+        )
 
         # Gather data via Athena
-        context = await gather_athena_context(req.extracted_iocs, req.query)
+        context = await gather_athena_context(req.extracted_iocs, req.query, lane=req.lane)
 
         # LLM analysis
-        answer, confidence = await llm_analyze(req.query, context)
+        answer, confidence = await llm_analyze(req.query, context, lane=req.lane)
 
         elapsed = time.monotonic() - start
         elapsed_ms = round(elapsed * 1000, 1)

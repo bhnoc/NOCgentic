@@ -246,7 +246,11 @@ GET    /health                   # Health check
 GET    /ws                       # WebSocket (alerts + job_update)
 ```
 
-Orchestrator (internal): `POST /query`, `GET /hints/:id`, `GET /admin/killswitch` (bearer).
+Orchestrator (internal): `POST /query`, `GET /hints/:id`, `GET /lanes/:id`, `GET /admin/killswitch` (bearer).
+
+`/lanes/:id` serves the losing lane of the dual-provider race (cloud Gemini vs
+local AQLight) so the UI can offer a swap. See
+[`docs/llm/lane-race.md`](docs/llm/lane-race.md).
 
 ---
 

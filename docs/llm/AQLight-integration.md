@@ -109,6 +109,12 @@ generic prompt).
 | `SQLGEN_PROVIDER` | (unset) | route ONLY NL->SQL gen here; `local` = hybrid (the default on the box). Unset = SQL gen uses `LLM_PROVIDER`. |
 | `SQLGEN_MODEL` | (unset) | optional model override paired with `SQLGEN_PROVIDER` |
 
+Related: **[`lane-race.md`](lane-race.md)**, which runs AQLight *against* Gemini
+concurrently and shows whichever finishes first, with a UI swap for the other. Where
+the hybrid above reroutes one step, that is a full second lane: AQLight runs the
+whole pipeline, prose included. Note that it measures slower than Gemini on the
+current T4 box, contrary to the throughput figures earlier in this doc.
+
 Set these in `.env.s3` on the box (authoritative env), then
 `docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d` the affected service.
 

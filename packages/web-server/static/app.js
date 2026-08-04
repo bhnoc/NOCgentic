@@ -318,6 +318,9 @@
           }
           sendBtn.disabled = false;
           if (job.status === 'done' && (!job.hints || job.hints.length === 0)) pollForHints(jobId);
+          // The losing lane usually lands after this response; pick it up so the
+          // swap control appears once there is actually something to swap to.
+          if (job.status === 'done' && job.lanesRacing) pollForLanes(jobId);
         }
         else if (attempts >= 90) { clearInterval(timer); removeThinking(thinkingId); appendAgentMessage({status:'error',error:'Timeout after 180s',agentUsed:'system'}); sendBtn.disabled = false; }
       } catch (err) {
@@ -332,6 +335,39 @@
       }
     }, 2000);
     pollIntervals.set(jobId, timer);
+  }
+
+  /**
+   * Poll for the second lane. When it lands, update the lane bar only — the
+   * displayed answer is NOT swapped out from under the reader. Defaulting to the
+   * fastest lane means the winner stays on screen; the swap is opt-in.
+   */
+  function pollForLanes(jobId) {
+    let attempts = 0;
+    const timer = setInterval(async () => {
+      attempts++;
+      if (attempts > 30) { clearInterval(timer); return; }
+      try {
+        const resp = await fetch(`/api/v1/chat/${jobId}`);
+        if (!resp.ok) return;
+        const job = await resp.json();
+        const st = laneState.get(jobId);
+        if (st) {
+          // Preserve `active`: the user may have already swapped manually.
+          if (job.lanes && job.lanes.length) st.lanes = job.lanes;
+          st.racing = job.lanesRacing === true;
+        } else if (job.lanes && job.lanes.length) {
+          laneState.set(jobId, {
+            lanes: job.lanes,
+            active: job.lane || job.lanes[0].lane,
+            agentKey: (job.agentUsed || 'direct').toLowerCase().replace(/\s+/g, '-'),
+            racing: job.lanesRacing === true,
+          });
+        }
+        refreshLaneBar(jobId);
+        if (!job.lanesRacing) clearInterval(timer);
+      } catch (_) {}
+    }, 2000);
   }
 
   function pollForHints(jobId) {
@@ -362,6 +398,115 @@
 
   // Jobs we've already rendered; guards against a double render within pollJob.
   const renderedJobs = new Set();
+
+  // ========== Lane race (cloud vs local) ==========
+  // Per-job lane results + which one is currently displayed. Held client-side so
+  // the swap is instant (no refetch) and so a late-arriving second lane can light
+  // up the swap button without re-rendering the whole message.
+  const laneState = new Map();
+
+  /** Render one lane's answer/confidence/metrics/data — the swappable region. */
+  function renderLaneBody(src, agentKey) {
+    const answerHtml = formatAnswer(src.answer || '');
+    let confHtml = '';
+    if (typeof src.confidence === 'number') {
+      const pct = Math.round(src.confidence * 100);
+      const fillClass = pct >= 70 ? 'conf-high' : pct >= 40 ? 'conf-medium' : 'conf-low';
+      confHtml = `<div class="confidence-row"><span class="confidence-label">Confidence</span><div class="confidence-bar"><div class="confidence-fill ${fillClass}" style="width:${pct}%"></div></div><span class="confidence-pct">${pct}%</span></div>`;
+    }
+    let metricsHtml = '';
+    const m = src.data?.llm_metrics;
+    if (m) {
+      const items = [
+        m.model ? `<span class="metric-item">MODEL <strong>${escHtml(m.model)}</strong></span>` : '',
+        m.latency_ms ? `<span class="metric-item">LATENCY <strong>${(m.latency_ms/1000).toFixed(1)}s</strong></span>` : '',
+        m.tok_per_sec ? `<span class="metric-item">SPEED <strong>${m.tok_per_sec} tok/s</strong></span>` : '',
+        m.completion_tokens ? `<span class="metric-item">OUTPUT <strong>${m.completion_tokens} tok</strong></span>` : '',
+        m.thinking_tokens ? `<span class="metric-item">THINKING <strong>${m.thinking_tokens} tok</strong></span>` : '',
+        m.prompt_tokens ? `<span class="metric-item">PROMPT <strong>${m.prompt_tokens} tok</strong></span>` : '',
+      ].filter(Boolean).join('');
+      metricsHtml = `<div class="metrics-row">${items}</div>`;
+    }
+    let dataHtml = '';
+    if (src.data && agentKey === 'thousandeyes-analyst') {
+      dataHtml = renderThousandEyesData(src.data);
+    } else if (src.data) {
+      const rawDataHtml = renderData({...src.data, llm_metrics: undefined});
+      dataHtml = rawDataHtml ? `<details class="data-collapse"><summary>Raw Data</summary>${rawDataHtml}</details>` : '';
+    }
+    return `${answerHtml}${confHtml}${metricsHtml}${dataHtml}`;
+  }
+
+  /**
+   * The swap control: which lane is showing, how fast it was, and the toggle.
+   *
+   * Reads everything from laneState — including `racing` — so it renders the same
+   * way whether it is called with a fresh job in hand (first render, poll tick) or
+   * from a swap, which has no job. Taking `lanesRacing` as an argument meant the
+   * pending state silently depended on the caller having one.
+   */
+  function renderLaneBar(laneKey) {
+    const st = laneState.get(laneKey);
+    // Nothing to swap between (single-lane box) — render no bar at all rather
+    // than a disabled control, so the single-lane UI is unchanged.
+    if (!st || st.lanes.length < 2) {
+      if (!st || !st.racing) return '';
+      // One lane in, the other still running: show the pending state so the user
+      // knows a second opinion is coming rather than wondering if it broke.
+      const only = st.lanes.length === 1 ? st.lanes[0] : null;
+      return `<span class="lane-current">${escHtml(only ? only.label : 'Fastest model')}</span>` +
+             `<span class="lane-pending">second model still working…</span>`;
+    }
+    const active = st.lanes.find(l => l.lane === st.active) || st.lanes[0];
+    const other = st.lanes.find(l => l.lane !== active.lane);
+    const winner = st.lanes.find(l => l.winner);
+    const isWinner = active.winner === true;
+    const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+    return (
+      `<span class="lane-current">${escHtml(active.label)}` +
+      (isWinner ? '<span class="lane-badge-fastest">FASTEST</span>' : '') +
+      `</span>` +
+      `<span class="lane-timing">${secs(active.elapsedMs)}` +
+      (winner && !isWinner ? ` <span class="lane-delta">+${secs(active.elapsedMs - winner.elapsedMs)}</span>` : '') +
+      `</span>` +
+      `<button class="lane-swap" type="button" data-lane-key="${escHtml(laneKey)}" ` +
+      `title="Show the answer from ${escHtml(other.label)}" ` +
+      `aria-label="Show the answer from ${escHtml(other.label)}">` +
+      `<span class="lane-swap-icon" aria-hidden="true">⇄</span>` +
+      `<span class="lane-swap-label">${escHtml(other.label)}</span></button>`
+    );
+  }
+
+  /** Swap the displayed lane in place, without refetching or re-rendering hints. */
+  function swapLane(laneKey) {
+    const st = laneState.get(laneKey);
+    if (!st || st.lanes.length < 2) return;
+    const idx = st.lanes.findIndex(l => l.lane === st.active);
+    const next = st.lanes[(idx + 1) % st.lanes.length];
+    st.active = next.lane;
+    const body = document.getElementById(`lanebody-${laneKey}`);
+    if (body) {
+      body.innerHTML = renderLaneBody(
+        { answer: next.answer, confidence: next.confidence, data: next.data },
+        st.agentKey,
+      );
+    }
+    refreshLaneBar(laneKey);
+  }
+
+  /** Re-render just the lane bar (after a swap, or when the second lane lands). */
+  function refreshLaneBar(laneKey) {
+    const bar = document.getElementById(`lanebar-${laneKey}`);
+    if (bar) bar.innerHTML = renderLaneBar(laneKey);
+  }
+
+  // Delegated: lane bars are re-rendered via innerHTML, so a bound listener on
+  // the button would be discarded on every swap.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest && ev.target.closest('.lane-swap');
+    if (!btn) return;
+    swapLane(btn.getAttribute('data-lane-key'));
+  });
 
   // ========== Message rendering ==========
   function appendMessage(role, text) {
@@ -407,40 +552,34 @@
     if (job.status === 'error') {
       bubbleContent = `<div class="message-bubble error-bubble"><strong style="color:#ff6080;">ERROR:</strong> ${escHtml(job.error||'Unknown error')}</div>`;
     } else {
-      const answerHtml = formatAnswer(job.answer || '');
-      let confHtml = '';
-      if (typeof job.confidence === 'number') {
-        const pct = Math.round(job.confidence * 100);
-        const fillClass = pct >= 70 ? 'conf-high' : pct >= 40 ? 'conf-medium' : 'conf-low';
-        confHtml = `<div class="confidence-row"><span class="confidence-label">Confidence</span><div class="confidence-bar"><div class="confidence-fill ${fillClass}" style="width:${pct}%"></div></div><span class="confidence-pct">${pct}%</span></div>`;
+      const laneKey = job.jobId || `anon-${Date.now()}`;
+      // Track lanes client-side so a swap can re-render from memory with no refetch.
+      if (job.lanes && job.lanes.length) {
+        laneState.set(laneKey, {
+          lanes: job.lanes,
+          active: job.lane || job.lanes[0].lane,
+          agentKey,
+          racing: job.lanesRacing === true,
+        });
       }
-      let metricsHtml = '';
-      const m = job.data?.llm_metrics;
-      if (m) {
-        const items = [
-          m.model ? `<span class="metric-item">MODEL <strong>${escHtml(m.model)}</strong></span>` : '',
-          m.latency_ms ? `<span class="metric-item">LATENCY <strong>${(m.latency_ms/1000).toFixed(1)}s</strong></span>` : '',
-          m.tok_per_sec ? `<span class="metric-item">SPEED <strong>${m.tok_per_sec} tok/s</strong></span>` : '',
-          m.completion_tokens ? `<span class="metric-item">OUTPUT <strong>${m.completion_tokens} tok</strong></span>` : '',
-          m.thinking_tokens ? `<span class="metric-item">THINKING <strong>${m.thinking_tokens} tok</strong></span>` : '',
-          m.prompt_tokens ? `<span class="metric-item">PROMPT <strong>${m.prompt_tokens} tok</strong></span>` : '',
-        ].filter(Boolean).join('');
-        metricsHtml = `<div class="metrics-row">${items}</div>`;
-      }
-      let dataHtml = '';
-      if (job.data && agentKey === 'thousandeyes-analyst') {
-        dataHtml = renderThousandEyesData(job.data);
-      } else if (job.data) {
-        const rawDataHtml = renderData({...job.data, llm_metrics: undefined});
-        dataHtml = rawDataHtml ? `<details class="data-collapse"><summary>Raw Data</summary>${rawDataHtml}</details>` : '';
-      }
-      const hintsId = job.jobId ? `hints-${job.jobId}` : `hints-${Date.now()}`;
+      const bodyHtml = renderLaneBody({
+        answer: job.answer, confidence: job.confidence, data: job.data,
+      }, agentKey);
+      const hintsId = `hints-${laneKey}`;
       let hintsInner = '';
       if (job.hints && job.hints.length > 0) {
         hintsInner = `<span class="hints-label">Next Steps</span>${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
       }
+      // The hints row sits OUTSIDE the swappable body on purpose: hints arrive
+      // asynchronously and are written into #hints-<id> by pollForHints. If they
+      // lived inside the lane body, swapping lanes after the hints landed would
+      // wipe them (and a swap before they land would be overwritten by them).
       const hintsHtml = `<div class="hints-row" id="${hintsId}">${hintsInner}</div>`;
-      bubbleContent = `<div class="message-bubble">${answerHtml}${confHtml}${metricsHtml}${dataHtml}${hintsHtml}</div>`;
+      bubbleContent =
+        `<div class="message-bubble">` +
+        `<div class="lane-bar" id="lanebar-${laneKey}">${renderLaneBar(laneKey)}</div>` +
+        `<div class="lane-body" id="lanebody-${laneKey}">${bodyHtml}</div>` +
+        `${hintsHtml}</div>`;
     }
 
     div.innerHTML = `

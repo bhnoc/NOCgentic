@@ -42,7 +42,10 @@ import credscrub  # noqa: E402
 import ipscope  # noqa: E402
 from llm_sanitize import sanitize_for_llm  # noqa: E402
 from event import EVENT_LABEL  # noqa: E402
-from llm_client import llm_complete  # noqa: E402
+import llm_client  # noqa: E402
+from llm_client import (  # noqa: E402
+    llm_complete, LANE_CLOUD, LANE_LOCAL, lane_race_enabled,
+)
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
     set_agent_span, set_chain_span,
@@ -529,7 +532,7 @@ CLASSIFY_SYSTEM_PROMPT = (
 VALID_INTENTS = {"alert_triage", "thousandeyes_analyst", "athena_hunter", "refused"}
 
 
-async def llm_classify(query: str) -> dict[str, Any]:
+async def llm_classify(query: str, lane: str | None = None) -> dict[str, Any]:
     """Ask the LLM to classify the query intent (fast: Flash, no thinking)."""
     safe_query = sanitize(query)
     try:
@@ -546,6 +549,8 @@ async def llm_classify(query: str) -> dict[str, Any]:
             max_tokens=1024,
             temperature=0.0,
             thinking_budget=512,
+            lane=lane,
+            role="prose",
         )
         result = extract_json(raw)
         intent = result.get("intent", "athena_hunter")
@@ -788,8 +793,8 @@ def _fallback_hints(agent_used: str) -> list[str]:
 # Each agent still runs sanitize() at its own LLM boundary for credentials/secrets,
 # but IPs flow through to Athena queries as-is.
 
-async def call_alert_triage(query: str, time_range_hours: int = 24, trace_headers: dict | None = None) -> dict[str, Any]:
-    payload = {"query": query, "time_range_hours": time_range_hours}
+async def call_alert_triage(query: str, time_range_hours: int = 24, trace_headers: dict | None = None, lane: str | None = None) -> dict[str, Any]:
+    payload = {"query": query, "time_range_hours": time_range_hours, "lane": lane}
     headers = trace_headers or inject_trace_headers()
     # Internal-network plaintext call (http://), so there is no TLS to verify.
     async with httpx.AsyncClient(timeout=180) as client:
@@ -798,8 +803,8 @@ async def call_alert_triage(query: str, time_range_hours: int = 24, trace_header
         return resp.json()
 
 
-async def call_athena_hunter(query: str, iocs: list[str], trace_headers: dict | None = None) -> dict[str, Any]:
-    payload = {"query": query, "extracted_iocs": iocs}
+async def call_athena_hunter(query: str, iocs: list[str], trace_headers: dict | None = None, lane: str | None = None) -> dict[str, Any]:
+    payload = {"query": query, "extracted_iocs": iocs, "lane": lane}
     headers = trace_headers or inject_trace_headers()
     # Internal-network plaintext call (http://), so there is no TLS to verify.
     async with httpx.AsyncClient(timeout=180) as client:
@@ -808,8 +813,8 @@ async def call_athena_hunter(query: str, iocs: list[str], trace_headers: dict | 
         return resp.json()
 
 
-async def call_thousandeyes_analyst(query: str, trace_headers: dict | None = None) -> dict[str, Any]:
-    payload = {"query": query}
+async def call_thousandeyes_analyst(query: str, trace_headers: dict | None = None, lane: str | None = None) -> dict[str, Any]:
+    payload = {"query": query, "lane": lane}
     headers = trace_headers or inject_trace_headers()
     # Internal-network plaintext call (http://), so there is no TLS to verify.
     async with httpx.AsyncClient(timeout=180) as client:
@@ -839,12 +844,31 @@ class QueryRequest(BaseModel):
     client: ClientInfo | None = None
 
 
+class LaneResult(BaseModel):
+    """One lane's finished answer, for the UI's swap control."""
+    lane:       str                 # "cloud" | "local"
+    label:      str                 # human label for the swap button
+    answer:     str
+    confidence: float
+    agent_used: str
+    data:       Any = None
+    elapsed_ms: float = 0.0
+    winner:     bool = False        # True if this lane finished first
+
+
 class QueryResponse(BaseModel):
     answer:     str
     agent_used: str
     confidence: float
     data:       Any = None
     hints:      list[str] = []
+    # Race metadata. `lane` names which stack produced `answer` above; `lanes`
+    # carries every lane that had finished by response time. When racing, the
+    # loser usually lands AFTER this response, so the web-server polls
+    # /lanes/{job_id} for the full pair (same pattern as async hints).
+    lane:        str | None = None
+    lanes:       list[LaneResult] = []
+    lanes_racing: bool = False      # True if a second lane is still in flight
 
 
 # ---------------------------------------------------------------------------
@@ -1047,6 +1071,302 @@ async def clear_quarantine(
     return {"cleared": existed, "session_id": session_id}
 
 
+# ---------------------------------------------------------------------------
+# Lane racing (dual-provider: cloud vs local)
+# ---------------------------------------------------------------------------
+# Two provider stacks answer the same question concurrently and the FIRST to
+# finish is shown; the UI offers a swap to read the other. See llm_client's
+# module docstring for the stacks themselves.
+#
+# Lane results outlive the /query response because the loser normally lands after
+# the winner has already been returned. Same shape and lifecycle as _hints_cache.
+
+LANE_LABELS: dict[str, str] = {
+    LANE_CLOUD: "Cloud (Gemini)",
+}
+
+
+def lane_label(lane: str) -> str:
+    """The swap control's name for a lane.
+
+    The local label is derived from what the box actually serves rather than
+    hardcoded, because the role split is now optional: the default is one model for
+    both roles (AQLight, via LOCAL_PROSE_* falling back to LOCAL_SQL_*), and the old
+    literal "Local (AQLight + Foundation-Sec)" named a second model most boxes never
+    start. Split the roles and both names come back on their own, so the string
+    cannot drift from the config again.
+
+    Read at call time, not import time, so a changed env is reflected without a
+    rebuild of this module's constants.
+    """
+    if lane != LANE_LOCAL:
+        return LANE_LABELS.get(lane, lane)
+    sql = llm_client.LOCAL_SQL_MODEL or "local"
+    prose = llm_client.LOCAL_PROSE_MODEL or sql
+    return f"Local ({sql})" if sql == prose else f"Local ({sql} + {prose})"
+
+_lane_store: dict[str, dict[str, Any]] = {}
+
+# Bound the store: one entry per raced query, and nothing ever deletes on read
+# (the UI may poll more than once, and a client that closes the tab never polls
+# at all). Without a cap a multi-day conference run grows this forever — the same
+# leak jobStore's TTL sweep exists to prevent on the web-server side.
+_LANE_STORE_MAX = 512
+
+
+def _lane_store_put(job_id: str, payload: dict[str, Any]) -> None:
+    if job_id not in _lane_store and len(_lane_store) >= _LANE_STORE_MAX:
+        # dicts are insertion-ordered, so this evicts the oldest entry.
+        _lane_store.pop(next(iter(_lane_store)), None)
+    _lane_store[job_id] = payload
+
+
+def _lane_result(
+    lane: str, *, answer: str, confidence: float, agent_used: str,
+    data: Any, elapsed_ms: float, winner: bool = False,
+) -> "LaneResult":
+    return LaneResult(
+        lane=lane,
+        label=lane_label(lane),
+        answer=answer,
+        confidence=confidence,
+        agent_used=agent_used,
+        data=data,
+        elapsed_ms=round(elapsed_ms, 1),
+        winner=winner,
+    )
+
+
+def _cover_lanes(answer: str, *, agent_used: str, elapsed_ms: float) -> list["LaneResult"]:
+    """Lane pair for a cover response.
+
+    Cover paths MUST expose two lanes whenever real answers do. If a swap control
+    appeared only on genuine answers, its presence or absence would tell a caller
+    whether a query was filtered — turning the UI affordance into a guardrail
+    oracle and undoing the point of serving cover at all. Both lanes carry the
+    same author-written cover text (no LLM is called, so there is nothing to
+    race), with plausible per-lane latencies rather than an identical number,
+    since two byte-identical elapsed times would themselves be a tell.
+    """
+    return [
+        _lane_result(
+            LANE_CLOUD, answer=answer, confidence=0.7, agent_used=agent_used,
+            data=None, elapsed_ms=elapsed_ms, winner=True,
+        ),
+        _lane_result(
+            LANE_LOCAL, answer=answer, confidence=0.7, agent_used=agent_used,
+            # Local is the slower lane on cold cache; scale rather than duplicate.
+            data=None, elapsed_ms=elapsed_ms * 1.6 + 40,
+        ),
+    ]
+
+
+async def _classify_raced(query: str, cls_span) -> dict[str, Any]:
+    """Classify on both lanes concurrently and reconcile FAIL-CLOSED.
+
+    Both lanes must agree on a single route before either touches an agent, for
+    two reasons:
+
+      1. Comparability. If cloud routed to athena-hunter and local to alert-triage,
+         the swap would be showing two different agents' findings and the "which
+         model is better" comparison it exists for becomes meaningless.
+      2. Guardrail integrity. `refused` is a security decision. If either lane
+         flags the query, we serve cover — a local model that is worse at spotting
+         prompt injection must not be able to unblock a query the cloud model
+         refused, and the user must not be able to swap lanes to see the answer
+         the strict lane withheld.
+
+    Ties on a non-refused intent go to whichever lane is more confident, defaulting
+    to cloud, which has the better routing eval of the two.
+    """
+    results = await asyncio.gather(
+        llm_classify(query, lane=LANE_CLOUD),
+        llm_classify(query, lane=LANE_LOCAL),
+        return_exceptions=True,
+    )
+    usable = [r for r in results if isinstance(r, dict)]
+    if not usable:
+        # Both classifiers died (e.g. local server down AND a cloud 429). The
+        # heuristic is the existing safety net and is itself refusal-aware.
+        logger.warning("both lane classifiers failed — using heuristic")
+        return _heuristic_classify(query)
+
+    cls_span.set_attribute("classify.lanes_ok", len(usable))
+
+    # Fail closed: ANY lane calling refused wins outright.
+    for r in usable:
+        if r.get("intent") == "refused":
+            cls_span.set_attribute("classify.refused_by_lane", True)
+            return r
+
+    # Otherwise most-confident wins; `usable` is cloud-first so a tie keeps cloud.
+    return max(usable, key=lambda r: float(r.get("confidence", 0.0)))
+
+
+async def _route_raced(
+    job_id: str,
+    racing: bool,
+    agent_used: str,
+    call: Any,
+    *,
+    fallback_confidence: float,
+) -> dict[str, Any]:
+    """Run `call(lane)` on both lanes, return the FIRST to finish.
+
+    `call` takes a lane name and returns the specialist agent's awaitable. Both
+    lanes run the full pipeline independently (separate NL->SQL, separate Athena
+    execution), which is what makes the latency comparison honest — and also means
+    each lane bills its own Athena scan.
+
+    The loser is NOT cancelled. It keeps running and files itself into the lane
+    store when it lands, which is what the UI's swap control reads. Cancelling it
+    would make the swap useless (nothing to swap to); the cost is one extra
+    in-flight pipeline per raced query.
+
+    When racing is off this is a plain single call — the pre-lane behaviour, with
+    the same return shape.
+    """
+    if not racing:
+        return await call(None)
+
+    started = time.monotonic()
+    tasks: dict[str, asyncio.Task] = {
+        lane: asyncio.create_task(call(lane)) for lane in (LANE_CLOUD, LANE_LOCAL)
+    }
+    # Seed the store before anything finishes so a UI poll that arrives between
+    # the winner's response and the loser's completion sees "still racing" rather
+    # than a 404 it would read as "no second lane".
+    _lane_store_put(job_id, {"status": "racing", "lanes": [], "agent_used": agent_used})
+
+    winner: dict[str, Any] | None = None
+    winner_lane: str | None = None
+
+    # Drain in completion order. asyncio.wait(FIRST_COMPLETED) in a loop lets us
+    # take the first SUCCESS rather than the first *completion* — a local lane that
+    # fails instantly (server down) must not "win" the race with an exception.
+    pending = set(tasks.values())
+    lane_of = {t: lane for lane, t in tasks.items()}
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            lane = lane_of[task]
+            elapsed_ms = (time.monotonic() - started) * 1000
+            try:
+                result = task.result()
+            except Exception as exc:
+                # A dead lane is not fatal to the query: log it, let the other lane
+                # answer. This is what keeps the race safe to leave on when the GPU
+                # box's llama-server is restarting.
+                logger.warning(
+                    "job=%s lane=%s failed after %.0fms (%s): %s",
+                    job_id, lane, elapsed_ms, type(exc).__name__, exc,
+                )
+                continue
+            _record_lane_result(job_id, lane, result, elapsed_ms,
+                                agent_used=agent_used,
+                                fallback_confidence=fallback_confidence,
+                                winner=winner is None)
+            if winner is None:
+                winner, winner_lane = result, lane
+                logger.info("job=%s lane=%s WON in %.0fms", job_id, lane, elapsed_ms)
+                # Hand the winner back immediately; the loser finishes in the
+                # background task below and files itself into the lane store.
+                if pending:
+                    _spawn_lane_drain(job_id, pending, lane_of, started, agent_used,
+                                      fallback_confidence)
+                    return {**result, "_lane": winner_lane}
+                break
+
+    if winner is None:
+        # Every lane errored. Raise the httpx error shape handle_query already
+        # handles, so the user gets the existing "agent unreachable" degradation.
+        raise httpx.ConnectError(f"all lanes failed for agent {agent_used}")
+
+    # Both lanes are already in (or the other errored), so nothing is still racing.
+    entry = _lane_store.get(job_id)
+    if entry is not None:
+        entry["status"] = "done"
+    return {**winner, "_lane": winner_lane}
+
+
+def _record_lane_result(
+    job_id: str, lane: str, result: dict[str, Any], elapsed_ms: float,
+    *, agent_used: str, fallback_confidence: float, winner: bool,
+) -> None:
+    """File one lane's finished answer into the lane store for the UI swap.
+
+    Output sanitisation is applied HERE as well as on the main response path. The
+    winner's text is sanitised by handle_query, but the loser bypasses that code
+    entirely — it lands after the response has already been sent. Without this the
+    swap control would serve unmasked restricted IPs and internal tool names: the
+    deception layer would hold on the answer the user sees first and leak on the
+    one they click to see second.
+    """
+    entry = _lane_store.get(job_id)
+    if entry is None:
+        entry = {"status": "racing", "lanes": [], "agent_used": agent_used}
+        _lane_store_put(job_id, entry)
+    lanes: list[LaneResult] = entry.setdefault("lanes", [])
+    if any(l.lane == lane for l in lanes):
+        return
+    lanes.append(_lane_result(
+        lane,
+        answer=sanitize_output_text(result.get("answer", "")),
+        confidence=float(result.get("confidence", fallback_confidence)),
+        agent_used=agent_used,
+        data=sanitize_output_obj(result.get("data")),
+        elapsed_ms=elapsed_ms,
+        winner=winner,
+    ))
+
+
+# Strong refs to background lane-drain tasks. asyncio only weakly references a
+# bare create_task result, so without this the loser can be garbage collected
+# mid-flight and never reach the store — the swap would silently never arrive.
+_bg_lane_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_lane_drain(
+    job_id: str, pending: set, lane_of: dict, started: float,
+    agent_used: str, fallback_confidence: float,
+) -> None:
+    """Await the losing lane(s) in the background and record their results.
+
+    Awaits each task directly (rather than asyncio.as_completed, which yields
+    values and would force matching a result back to its lane by object identity)
+    so the lane label is never guessed.
+    """
+    async def _drain() -> None:
+        remaining = set(pending)
+        while remaining:
+            done, remaining = await asyncio.wait(
+                remaining, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                lane = lane_of[task]
+                elapsed_ms = (time.monotonic() - started) * 1000
+                try:
+                    result = task.result()
+                except Exception as exc:
+                    logger.warning(
+                        "job=%s lane=%s (loser) failed after %.0fms (%s): %s",
+                        job_id, lane, elapsed_ms, type(exc).__name__, exc,
+                    )
+                    continue
+                _record_lane_result(job_id, lane, result, elapsed_ms,
+                                    agent_used=agent_used,
+                                    fallback_confidence=fallback_confidence,
+                                    winner=False)
+                logger.info("job=%s lane=%s finished (loser) in %.0fms", job_id, lane, elapsed_ms)
+        entry = _lane_store.get(job_id)
+        if entry is not None:
+            entry["status"] = "done"
+
+    task = asyncio.create_task(_drain())
+    _bg_lane_tasks.add(task)
+    task.add_done_callback(_bg_lane_tasks.discard)
+
+
 def _serve_cover(
     query: str,
     *,
@@ -1071,6 +1391,7 @@ def _serve_cover(
     elapsed_ms = round((time.monotonic() - start) * 1000, 1)
     _request_counter.add(1, {"agent.used": agent_used})
     _request_duration.record(elapsed_ms, {"agent.used": agent_used})
+    racing = lane_race_enabled()
     return QueryResponse(
         answer=answer,
         agent_used=agent_used,
@@ -1079,6 +1400,12 @@ def _serve_cover(
         confidence=0.7,
         data=None,
         hints=hints,
+        # Present the same lane surface a real answer would. lanes_racing is False
+        # because both lanes are already here — a cover never waits on a model, and
+        # a real answer that won both lanes before responding looks identical.
+        lane=LANE_CLOUD if racing else None,
+        lanes=_cover_lanes(answer, agent_used=agent_used, elapsed_ms=elapsed_ms) if racing else [],
+        lanes_racing=False,
     )
 
 @app.post("/query", response_model=QueryResponse)
@@ -1139,8 +1466,19 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
 
         # 1. Classify intent — LLM-first for quality (~500 ms with Flash + thinking_budget=0),
         # heuristic fallback guarantees we never crash on classifier errors.
+        #
+        # Classification is a BARRIER even when racing, not part of the race. Both
+        # lanes must route to the SAME agent, otherwise the swap compares two
+        # different agents' data rather than two models' writing — and a lane that
+        # classified "refused" while the other didn't would leak the guardrail
+        # through the swap control. So: classify on both lanes concurrently,
+        # then reconcile fail-closed before any agent is touched.
+        racing = lane_race_enabled()
         with tracer.start_as_current_span("orchestrator.classify") as cls_span:
-            classification = await llm_classify(req.query)
+            if racing:
+                classification = await _classify_raced(req.query, cls_span)
+            else:
+                classification = await llm_classify(req.query)
             intent     = classification.get("intent", "athena_hunter")
             confidence = float(classification.get("confidence", 0.5))
             cls_span.set_attribute("classification.intent", intent)
@@ -1151,14 +1489,16 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
             set_chain_span(cls_span, input_value=req.query, output_value=intent)
 
         span.set_attribute("routing.intent", intent)
+        span.set_attribute("lane.racing", racing)
         logger.info(
-            "job=%s intent=%s confidence=%.2f reasoning=%r",
-            req.job_id, intent, confidence, classification.get("reasoning", ""),
+            "job=%s intent=%s confidence=%.2f racing=%s reasoning=%r",
+            req.job_id, intent, confidence, racing, classification.get("reasoning", ""),
         )
 
-        answer     = ""
-        agent_used = "orchestrator"
-        data: Any  = None
+        answer      = ""
+        agent_used  = "orchestrator"
+        data: Any   = None
+        result: dict[str, Any] = {}
 
         try:
             if intent == "refused":
@@ -1180,7 +1520,13 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     # thousandeyes-analyst's own AGENT span is drawn via W3C trace
                     # context propagated on the httpx call below.
                     set_chain_span(rt_span, input_value=req.query)
-                    result = await call_thousandeyes_analyst(req.query, trace_headers=inject_trace_headers())
+                    result = await _route_raced(
+                        req.job_id, racing, "thousandeyes-analyst",
+                        lambda lane: call_thousandeyes_analyst(
+                            req.query, trace_headers=inject_trace_headers(), lane=lane,
+                        ),
+                        fallback_confidence=confidence,
+                    )
                     answer     = result.get("answer", "No answer returned by thousandeyes-analyst.")
                     confidence = float(result.get("confidence", confidence))
                     data       = result.get("data")
@@ -1195,7 +1541,14 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                             hours = min(int(m.group(1)), 168)
                     rt_span.set_attribute("triage.hours", hours)
                     set_chain_span(rt_span, input_value=req.query)
-                    result = await call_alert_triage(req.query, time_range_hours=hours, trace_headers=inject_trace_headers())
+                    result = await _route_raced(
+                        req.job_id, racing, "alert-triage",
+                        lambda lane: call_alert_triage(
+                            req.query, time_range_hours=hours,
+                            trace_headers=inject_trace_headers(), lane=lane,
+                        ),
+                        fallback_confidence=confidence,
+                    )
                     answer     = result.get("answer", "No answer returned by alert-triage.")
                     confidence = float(result.get("confidence", confidence))
                     data       = result.get("data")
@@ -1214,7 +1567,13 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     iocs = extract_iocs(req.query)
                     rt_span.set_attribute("iocs.count", len(iocs))
                     set_chain_span(rt_span, input_value=req.query)
-                    result = await call_athena_hunter(req.query, iocs, trace_headers=inject_trace_headers())
+                    result = await _route_raced(
+                        req.job_id, racing, "athena-hunter",
+                        lambda lane: call_athena_hunter(
+                            req.query, iocs, trace_headers=inject_trace_headers(), lane=lane,
+                        ),
+                        fallback_confidence=confidence,
+                    )
                     answer     = result.get("answer", "No answer returned by athena-hunter.")
                     confidence = float(result.get("confidence", confidence))
                     data       = result.get("data")
@@ -1250,6 +1609,16 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         answer = sanitize_output_text(answer)
         data   = sanitize_output_obj(data)
 
+        # Lane metadata for the UI swap control. The winning lane's answer is the
+        # one above; the store holds whichever lanes have landed so far and tells
+        # the client whether to keep polling /lanes for the other.
+        winner_lane = result.get("_lane") if racing else None
+        lane_entry = _lane_store.get(req.job_id) if racing else None
+        lanes_done = list(lane_entry.get("lanes", [])) if lane_entry else []
+        lanes_racing = bool(lane_entry and lane_entry.get("status") == "racing")
+        if winner_lane:
+            span.set_attribute("lane.winner", winner_lane)
+
         # Fire-and-forget hints generation in background; skip for error only.
         # ("orchestrator" is always reassigned before here; refused/kill-switch cover
         # paths and the never-assigned "guardrail" sentinel return earlier, so those are dead here.)
@@ -1264,6 +1633,9 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
             confidence=confidence,
             data=data,
             hints=[],  # hints arrive async via /hints/{job_id}
+            lane=winner_lane,
+            lanes=lanes_done,
+            lanes_racing=lanes_racing,
         )
 
 
@@ -1303,6 +1675,25 @@ async def get_hints(job_id: str) -> dict[str, Any]:
     if hints is not None:
         return {"status": "ready", "hints": hints}
     return {"status": "pending", "hints": []}
+
+
+@app.get("/lanes/{job_id}")
+async def get_lanes(job_id: str) -> dict[str, Any]:
+    """Poll for the losing lane's answer (feeds the UI's lane swap control).
+
+    status "racing" means at least one lane is still in flight and the client
+    should poll again; "done" means every lane that will land has landed (a lane
+    that errored simply never appears). An unknown job_id returns done+empty
+    rather than 404: single-lane boxes never populate this store at all, and a
+    404 there would show up in the UI as a broken swap instead of no swap.
+    """
+    entry = _lane_store.get(job_id)
+    if entry is None:
+        return {"status": "done", "lanes": []}
+    return {
+        "status": entry.get("status", "done"),
+        "lanes": [l.model_dump() for l in entry.get("lanes", [])],
+    }
 
 
 @app.get("/health")

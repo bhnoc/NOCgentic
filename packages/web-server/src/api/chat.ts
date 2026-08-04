@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
-import { AgentResponse, ChatQuerySchema } from '@bhnoc/shared';
+import { AgentResponse, ChatQuerySchema, LaneResult } from '@bhnoc/shared';
 import { alertCache } from '../services/alertCache';
 
 interface ClientInfo {
@@ -158,6 +158,9 @@ async function dispatchToOrchestrator(jobId: string, query: string, client?: Cli
       confidence: number;
       data?: unknown;
       hints?: string[];
+      lane?: string | null;
+      lanes?: OrchestratorLane[];
+      lanes_racing?: boolean;
     };
 
     job.status = 'done';
@@ -166,11 +169,21 @@ async function dispatchToOrchestrator(jobId: string, query: string, client?: Cli
     job.confidence = result.confidence;
     job.data = result.data;
     job.hints = result.hints && result.hints.length > 0 ? result.hints : undefined;
+    job.lane = result.lane ?? undefined;
+    job.lanes = (result.lanes ?? []).map(toLaneResult);
+    job.lanesRacing = result.lanes_racing === true;
     job.completedAt = new Date().toISOString();
 
     // Poll for async hints if none came with the response
     if (!job.hints || job.hints.length === 0) {
       void pollForHints(jobId);
+    }
+
+    // The losing lane normally lands AFTER the winner was returned, so fetch it
+    // separately — same fire-and-forget shape as hints. Only when the orchestrator
+    // says a lane is still in flight; a single-lane box never sets this.
+    if (job.lanesRacing) {
+      void pollForLanes(jobId);
     }
   } catch (err) {
     job.status = 'error';
@@ -179,6 +192,68 @@ async function dispatchToOrchestrator(jobId: string, query: string, client?: Cli
   }
 
   jobStore.set(jobId, job);
+}
+
+/** Orchestrator's snake_case lane payload, before mapping to the camelCase type. */
+export interface OrchestratorLane {
+  lane: string;
+  label: string;
+  answer: string;
+  confidence: number;
+  agent_used: string;
+  data?: unknown;
+  elapsed_ms: number;
+  winner: boolean;
+}
+
+export function toLaneResult(l: OrchestratorLane): LaneResult {
+  return {
+    lane: l.lane,
+    label: l.label,
+    answer: l.answer,
+    confidence: l.confidence,
+    agentUsed: l.agent_used,
+    data: l.data,
+    elapsedMs: l.elapsed_ms,
+    winner: l.winner,
+  };
+}
+
+/**
+ * Poll the orchestrator for the losing lane's answer so the UI's swap control has
+ * something to swap to. Bounded at 60s: past that the slow lane is not worth
+ * waiting on, and the UI already has a usable answer from the winner.
+ */
+export async function pollForLanes(jobId: string, intervalMs = 2000): Promise<void> {
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    try {
+      const resp = await fetch(`${ORCHESTRATOR_URL}/lanes/${jobId}`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) continue;
+      const data = await resp.json() as { status: string; lanes: OrchestratorLane[] };
+      const job = jobStore.get(jobId);
+      // Job evicted (TTL) or gone — stop burning polls on it.
+      if (!job) return;
+      if (data.lanes?.length) {
+        job.lanes = data.lanes.map(toLaneResult);
+      }
+      if (data.status === 'done') {
+        job.lanesRacing = false;
+        jobStore.set(jobId, job);
+        return;
+      }
+      jobStore.set(jobId, job);
+    } catch { /* retry */ }
+  }
+  // Timed out waiting on the slow lane. Clear the flag so the client stops
+  // polling and the UI settles on whatever lanes did arrive.
+  const job = jobStore.get(jobId);
+  if (job) {
+    job.lanesRacing = false;
+    jobStore.set(jobId, job);
+  }
 }
 
 async function pollForHints(jobId: string): Promise<void> {

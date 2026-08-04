@@ -645,7 +645,7 @@ QUERY_PARSE_PROMPT = (
 )
 
 
-async def parse_query_filters(query: str) -> dict[str, Any]:
+async def parse_query_filters(query: str, lane: str | None = None) -> dict[str, Any]:
     """Use LLM to extract structured filters from the analyst's query."""
     try:
         raw = await llm_complete(
@@ -653,7 +653,12 @@ async def parse_query_filters(query: str) -> dict[str, Any]:
             user_content=query,
             max_tokens=256,
             temperature=0.0,
-            model="gemini-3.5-flash-lite",
+            # model= is pinned for the legacy (lane=None) path only. On a lane the
+            # model comes from the lane stack, so passing a hardcoded Gemini name
+            # would pin the LOCAL lane to a model its server does not serve.
+            model=None if lane else "gemini-3.5-flash-lite",
+            lane=lane,
+            role="prose",
         )
         text = raw.strip()
         try:
@@ -736,6 +741,7 @@ SYSTEM_PROMPT = (
 async def llm_triage(
     query: str,
     triage_data: dict[str, Any],
+    lane: str | None = None,
 ) -> tuple[str, float]:
     data_str = json.dumps(triage_data, default=str)[:10000]
     user_content = (
@@ -750,8 +756,11 @@ async def llm_triage(
             user_content=user_content,
             max_tokens=4096,
             temperature=0.1,
-            model="gemini-3.5-flash-lite",
+            # Pinned model only on the legacy path — see parse_query_filters.
+            model=None if lane else "gemini-3.5-flash-lite",
             thinking_budget=0,
+            lane=lane,
+            role="prose",
         )
     except RuntimeError as exc:
         return (
@@ -796,6 +805,8 @@ instrument_fastapi_app(app)
 class TriageRequest(BaseModel):
     query:            str = Field(..., min_length=1, max_length=5000)
     time_range_hours: int = Field(default=24, ge=1, le=168)
+    # Provider stack for the dual-lane race; None = ambient LLM_PROVIDER.
+    lane:             str | None = None
 
 
 class TriageResponse(BaseModel):
@@ -817,10 +828,14 @@ async def triage(req: TriageRequest) -> TriageResponse:
         span.set_attribute("triage.hours", req.time_range_hours)
         span.set_attribute("triage.data_source", "athena")
         set_agent_span(span, input_value=req.query, name="alert-triage")
+        if req.lane:
+            span.set_attribute("lane", req.lane)
 
         start = time.monotonic()
         hours = req.time_range_hours
-        logger.info("triage query_len=%d hours=%d", len(req.query), hours)
+        logger.info(
+            "triage query_len=%d hours=%d lane=%s", len(req.query), hours, req.lane or "-",
+        )
 
         # === PHASE 0: Instant hint extraction (regex, no LLM) ===
         hints = extract_query_hints(req.query)
@@ -848,7 +863,7 @@ async def triage(req: TriageRequest) -> TriageResponse:
 
         # Fire LLM parse + all Athena queries at once
         qf, suricata_alerts, unified_alerts, conn_flows, dns_logs, top_talkers = await asyncio.gather(
-            parse_query_filters(req.query),
+            parse_query_filters(req.query, lane=req.lane),
             _hint_alerts(),
             _hint_unified_alerts(),
             _hint_flows(),
@@ -1167,7 +1182,7 @@ async def triage(req: TriageRequest) -> TriageResponse:
         span.set_attribute("triage.total_flows", len(conn_flows))
         span.set_attribute("triage.total_dns", len(dns_logs))
 
-        answer, confidence = await llm_triage(req.query, triage_data)
+        answer, confidence = await llm_triage(req.query, triage_data, lane=req.lane)
 
         elapsed_ms = round((time.monotonic() - start) * 1000, 1)
         span.set_attribute("response.confidence", confidence)
