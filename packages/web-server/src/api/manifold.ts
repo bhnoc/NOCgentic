@@ -93,12 +93,18 @@ export function markSeen(findingId: string, now = Date.now()): boolean {
   evictStaleFindings(now);
   if (seenFindings.has(findingId)) return false;
   seenFindings.set(findingId, now);
+  evictStaleFindings(now);
   return true;
 }
 
 /** Test seam: drop all dedup state. */
 export function resetSeenFindings(): void {
   seenFindings.clear();
+}
+
+/** Test seam: return current dedup map size. */
+export function getSeenFindingsSize(): number {
+  return seenFindings.size;
 }
 
 /**
