@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Manifold</title>
+  <link rel="icon" href="/favicon.ico">
+  <!--
+    Manifold demo wall — /Manifold
+
+    A stand-in for the real Manifold dashboard while that team is still building
+    it: one 1920x1080 clip, full-bleed, looping forever. The whole point is that
+    a viewer reads it as a live dashboard, so the page must never look like a
+    video player or a page that is loading:
+
+      * The page paints black FIRST and the video is opacity:0 until its first
+        frame has actually decoded. There is no poster, no white default page
+        background, no spinner, no controls, no letterbox.
+      * pointer-events:none on the <video> means right-click gives the page
+        context menu, not "Save video as…" / "Loop" / playback speed.
+      * Everything is inline: one request paints the page, so there is no
+        window where an unstyled (white) document is on screen.
+
+    Autoplay is only permitted for muted+playsinline video, so both are load
+    bearing — do not drop them, the clip has no audio track to lose.
+  -->
+  <style>
+    :root { color-scheme: dark; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+
+    /* Idle cursor hide: a mouse pointer parked over the wall is the one bit of
+       chrome we can still get rid of. Comes back on any movement. */
+    body.idle { cursor: none; }
+
+    #wall {
+      position: fixed;
+      inset: 0;
+      background: #000;
+    }
+
+    #wall video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      /* cover: the clip is 16:9 and so is the wall, so this is an exact fill.
+         On an odd aspect ratio it crops rather than letterboxes — bars would
+         read as "this is a video". Switch to `contain` if a display ever crops
+         something that matters. */
+      object-fit: cover;
+      background: #000;
+      opacity: 0;
+      transition: opacity 400ms linear;
+      pointer-events: none;
+    }
+
+    #wall video.lit { opacity: 1; }
+
+    @media (prefers-reduced-motion: reduce) {
+      #wall video { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="wall">
+    <video id="wall-video"
+           src="/assets/manifold-blackhat-loop.mp4"
+           autoplay muted loop playsinline preload="auto"
+           disablepictureinpicture
+           controlslist="nodownload noplaybackrate noremoteplayback"
+           tabindex="-1" aria-hidden="true"></video>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var video = document.getElementById('wall-video');
+
+      // Some engines only honour muted autoplay when the PROPERTY is set, not
+      // just the attribute (the attribute alone loses to a restored session).
+      video.muted = true;
+      video.defaultMuted = true;
+
+      // Reveal on the first decoded frame, never on a timer: fading up before
+      // the frame exists is exactly the black-then-flash we are avoiding.
+      var lit = false;
+      function reveal() {
+        if (lit || video.readyState < 2 /* HAVE_CURRENT_DATA */) return;
+        lit = true;
+        video.classList.add('lit');
+      }
+      video.addEventListener('loadeddata', reveal);
+      video.addEventListener('playing', reveal);
+      reveal(); // already buffered (bfcache / warm reload)
+
+      function play() {
+        var p = video.play();
+        // Rejects when autoplay is blocked; the listeners below retry. Swallow
+        // it so nothing lands in the console on a demo machine.
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+      }
+      play();
+
+      // `loop` should make this unreachable — belt and braces for engines that
+      // fire ended on a loop boundary under load.
+      video.addEventListener('ended', function () {
+        video.currentTime = 0;
+        play();
+      });
+
+      // A backgrounded tab may be throttled to a stop; resume on return.
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) play();
+      });
+
+      // Autoplay-blocked fallback: the first interaction of any kind starts it.
+      ['pointerdown', 'keydown', 'touchstart'].forEach(function (evt) {
+        document.addEventListener(evt, play, { passive: true });
+      });
+
+      // Stall watchdog. This wall runs for days unattended, so a decoder that
+      // wedges must recover on its own: nudge first, and only reload the file
+      // (which costs a black frame) once nudging has failed for ~6s.
+      var lastTime = -1;
+      var stalled = 0;
+      setInterval(function () {
+        if (document.hidden) return;
+        if (video.paused || video.ended) { play(); return; }
+        if (video.currentTime !== lastTime) {
+          lastTime = video.currentTime;
+          stalled = 0;
+          return;
+        }
+        stalled++;
+        if (stalled === 3) {
+          play();
+        } else if (stalled >= 6) {
+          stalled = 0;
+          lit = false;
+          video.classList.remove('lit');
+          video.load();
+          play();
+        }
+      }, 1000);
+
+      // Idle cursor hide.
+      var idleTimer;
+      function markActive() {
+        document.body.classList.remove('idle');
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(function () {
+          document.body.classList.add('idle');
+        }, 3000);
+      }
+      document.addEventListener('mousemove', markActive, { passive: true });
+      markActive();
+    })();
+  </script>
+</body>
+</html>

@@ -88,6 +88,15 @@ async function main() {
     prefix: '/',
   });
 
+  // Manifold demo wall: a full-bleed looping video standing in for the real
+  // Manifold dashboard until that team ships it. @fastify/static is registered
+  // with redirect:false, so a bare directory path 404s -- name the file
+  // explicitly. Both cases are routed because Fastify matches case-sensitively
+  // and the URL handed out is /Manifold.
+  for (const route of ['/Manifold', '/Manifold/', '/manifold', '/manifold/']) {
+    server.get(route, (_req, reply) => reply.sendFile('Manifold/index.html'));
+  }
+
   // Chat API routes
   registerChatRoutes(server);
 
