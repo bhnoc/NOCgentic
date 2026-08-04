@@ -43,11 +43,20 @@ ALERT_SOURCES: tuple[dict, ...] = (
         "alert_type": "suricata",
         "name": "alert_signature",
         "detail": "alert_category",
-        # Suricata severity is an int, 1 = most severe. Recovered from the
-        # original view definition rather than guessed.
+        # Suricata severity is 1 = most severe. Recovered from the original view
+        # definition rather than guessed. NOTE the CAST: alert_severity is a
+        # STRING holding a digit, so comparing it to a bare int is TYPE_MISMATCH.
+        #
+        # 4 is spelled out rather than left to the ELSE because it is not an
+        # edge case: it is 3.9M of 4.7M live suricata rows (83%), so it is the
+        # single most common value this arm maps. Leaving it implicit is how the
+        # app's NUM_SEV came to omit it, which bucketed all of those rows as
+        # 'unknown' and scored them as medium. ELSE stays for a genuinely new
+        # value. Keep this in lockstep with alert-triage.NUM_SEV.
         "severity": (
             "CASE CAST(alert_severity AS INT) "
             "WHEN 1 THEN 'high' WHEN 2 THEN 'medium' WHEN 3 THEN 'low' "
+            "WHEN 4 THEN 'informational' "
             "ELSE 'informational' END"
         ),
     },

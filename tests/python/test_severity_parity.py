@@ -50,7 +50,12 @@ def test_norm_sev_parity(value):
     )
 
 
-@pytest.mark.parametrize("garbage", ["", "   ", "xyz", None, "5", "4", "0", "99", "sev-none"])
+# "4" is deliberately NOT in this list: it is a real Suricata severity
+# (informational), not garbage, and it is 83% of live suricata rows. Asserting it
+# bucketed to "unknown" was locking in the bug, because "unknown" scores 3 (==
+# medium), which floated the noisiest severity in the data to the top of the
+# feed. See test_severity_four_is_informational_not_unknown below.
+@pytest.mark.parametrize("garbage", ["", "   ", "xyz", None, "5", "0", "99", "sev-none"])
 def test_unknown_not_low(garbage):
     """Blank/garbage/out-of-range severities must bucket to 'unknown', not 'low'.
 
@@ -65,14 +70,43 @@ def test_unknown_not_low(garbage):
 
 
 def test_known_numeric_and_word_buckets():
-    # Corelight/Suricata numeric convention: 1->high, 2->medium, 3->low.
+    # Corelight/Suricata numeric convention: 1->high, 2->medium, 3->low, 4->informational.
     for fn in (norm_sev, normalize_severity):
         assert fn("1") == "high"
         assert fn("2") == "medium"
         assert fn("3") == "low"
+        assert fn("4") == "informational"
         assert fn("critical") == "critical"
         assert fn("informational") == "informational"
         # Word aliases fold identically on both sides.
         assert fn("error") == "high"
         assert fn("notification") == "low"
         assert fn("informational (default)") == "informational"
+
+
+def test_severity_four_is_informational_not_unknown():
+    """Suricata severity 4 must bucket as informational on BOTH paths.
+
+    REVERT-CHECK for the enum-drift bug. alert_severity='4' is 3.9M of 4.7M live
+    suricata rows. While it was absent from NUM_SEV it fell through to the ql-7
+    "unknown" branch, which SEVERITY_SCORE gives 3, the same score as medium. The
+    single noisiest severity in the data therefore outranked genuine lows in
+    prioritized_alerts[:15].
+
+    It also has to agree with the Athena `alerts` view, which is the other route
+    to the same rows and maps it with `ELSE 'informational'`. Before the fix a
+    severity-4 alert read 'informational' through the view and 'unknown' through
+    the raw table, so the label depended on which query path a question took.
+    """
+    for fn in (norm_sev, normalize_severity):
+        assert fn("4") == "informational"
+        assert fn("4") != "unknown"
+    # Parity with the view's CASE for the whole numeric range it defines.
+    view_case = {"1": "high", "2": "medium", "3": "low", "4": "informational"}
+    for raw, expected in view_case.items():
+        assert norm_sev(raw) == expected, f"drifted from the alerts view on {raw!r}"
+        assert normalize_severity(raw) == expected
+
+    # And the score must actually be the lowest, which is the point of the fix.
+    assert _at.SEVERITY_SCORE["informational"] < _at.SEVERITY_SCORE["low"]
+    assert _at.SEVERITY_SCORE["informational"] < _at.SEVERITY_SCORE["unknown"]

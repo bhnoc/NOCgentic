@@ -117,6 +117,25 @@ class TestSeverityVocabulary:
         sql = dv.build_alerts_sql(DB, _catalog())
         assert "WHEN 1 THEN 'high'" in sql
 
+    def test_suricata_severity_4_is_mapped_explicitly(self):
+        """4 is 83% of live suricata rows, so it must not ride on the ELSE.
+
+        REVERT-CHECK for the enum-drift bug: while 4 was implicit here, the app's
+        NUM_SEV omitted it too and bucketed 3.9M rows as 'unknown' (score 3, ==
+        medium). Naming it keeps the view and alert-triage.NUM_SEV visibly paired.
+        """
+        src = next(s for s in dv.ALERT_SOURCES if s["table"] == "suricata_corelight")
+        assert "WHEN 4 THEN 'informational'" in src["severity"]
+
+    def test_suricata_severity_is_cast_before_comparing(self):
+        """alert_severity is a STRING holding a digit in prod.
+
+        `CASE alert_severity WHEN 1` would fail with TYPE_MISMATCH ("Cannot apply
+        operator: varchar = integer"), so the CAST is not cosmetic.
+        """
+        src = next(s for s in dv.ALERT_SOURCES if s["table"] == "suricata_corelight")
+        assert "CAST(alert_severity AS INT)" in src["severity"]
+
     def test_yara_hit_is_high(self):
         """A YARA match is a positive malware signature, not informational."""
         src = next(s for s in dv.ALERT_SOURCES if s["table"] == "yara_corelight")

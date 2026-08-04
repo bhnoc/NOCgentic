@@ -1,8 +1,8 @@
 {
   "meta": {
     "generated": "2026-07-25",
-    "database": "blackhat_pope_logs",
-    "workgroup": "blackhat-pope-dev",
+    "database": "blackhatnoc_glue",
+    "workgroup": "blackhatnoc-usa2026",
     "region": "us-west-2",
     "profile": "VirtualPOC-users",
     "partition": "dt='2026-07-25'",

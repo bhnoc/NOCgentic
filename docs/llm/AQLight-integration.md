@@ -5,7 +5,7 @@ _2026-07-28. Companion to the model handoff at `slm-athena/AQLight_handoff.md`._
 ## What AQLight is
 
 AQLight is a fine-tuned Qwen2.5-Coder-7B served as a 4.4GB q4 GGUF on the AING box. It turns
-a natural-language analyst question into ONE Athena SQL query for `blackhat_pope_logs`. On a
+a natural-language analyst question into ONE Athena SQL query for `blackhatnoc_glue`. On a
 100-case execution-validated eval it beats Gemini 3.5 Flash Lite on NL->SQL (0.962 vs 0.942)
 at ~129 tok/s, ~5GB VRAM. Full detail and provenance: `slm-athena/AQLight_handoff.md`.
 

@@ -12,7 +12,7 @@ Speed strategy:
   3. After LLM parse, do targeted Athena queries only if new filters found
   4. Use Gemini 2.5 Flash for ~200 tok/s throughput
 
-Data source: AWS Athena → Parquet tables in blackhat_pope_logs
+Data source: AWS Athena → Parquet tables in blackhatnoc_glue
 Fallback: S3 raw Zeek TSV scanning (if Athena unavailable)
 
 Security: All data sent to the LLM is sanitized; internal IPs are redacted.
@@ -91,11 +91,25 @@ SEVERITY_SCORE: dict[str, int] = {
 
 # CANONICAL SEVERITY MAPPING (source of truth; athena-hunter must align to this):
 #   Suricata/Corelight alert_severity numbers → word buckets:
-#     "1" → high, "2" → medium, "3" → low   (per Corelight/Suricata convention)
-# Suricata/Corelight store alert_severity as a VARCHAR number ("1"/"2"/"3");
-# the unified alerts.severity also carries non-word values. Normalize both to
-# the word buckets SEVERITY_SCORE / _severity_breakdown key off.
-NUM_SEV: dict[str, str] = {"1": "high", "2": "medium", "3": "low"}
+#     "1" → high, "2" → medium, "3" → low, "4" → informational
+# Suricata/Corelight store alert_severity as a VARCHAR number; the unified
+# alerts.severity also carries non-word values. Normalize both to the word
+# buckets SEVERITY_SCORE / _severity_breakdown key off.
+#
+# "4" IS A REAL SURICATA VALUE, NOT GARBAGE, and it is the common case: on live
+# prod it is 3.9M of 4.7M suricata rows (83%). Omitting it sent every one of
+# those through the ql-7 unknown branch, which scores 3, the same as medium. So
+# the single noisiest severity in the data was being promoted into
+# prioritized_alerts[:15] ahead of real lows. The ql-7 rule still stands for
+# values that are genuinely unparseable ("0", "5", "xyz", ""); 4 never was one.
+#
+# This must match the mapping inside the Athena `alerts` view, which is the
+# other path to the same rows: `CASE CAST(alert_severity AS INT) WHEN 1 'high'
+# WHEN 2 'medium' WHEN 3 'low' ELSE 'informational'`. Before this, a severity-4
+# row read as 'informational' via the view (athena_recent_alerts) and 'unknown'
+# via the raw table (athena_suricata_alerts). Same alert, two buckets, decided
+# by which query path the analyst's question happened to take.
+NUM_SEV: dict[str, str] = {"1": "high", "2": "medium", "3": "low", "4": "informational"}
 _WORD_SEV: dict[str, str] = {
     "informational (default)": "informational",
     "notification":           "low",
@@ -177,7 +191,7 @@ async def _athena_query(sql: str, label: str = "query") -> list[dict[str, str]]:
     with tracer.start_as_current_span(f"alert_triage.athena.{label}") as qspan:
         set_tool_span(qspan, name="athena.query", input_value=sql,
                       parameters={"label": label})
-        set_tool_resource(qspan, db_system="athena", db_name="blackhat_pope_logs")
+        set_tool_resource(qspan, db_system="athena", db_name="blackhatnoc_glue")
         try:
             rows, meta = await execute_query(sql, timeout=15)
             _athena_query_count.add(1)
@@ -712,9 +726,26 @@ SYSTEM_PROMPT = (
     "triage_data totals verbatim: total_alerts, total_flows and total_dns\n"
     "(e.g. \"7 alerts across 1204 flows and 88 DNS queries\"). An analyst\n"
     "cannot judge a finding without knowing how much data it came from, so\n"
-    "omit a total only when it is absent from triage_data.\n\n"
+    "omit a total only when it is absent from triage_data.\n"
+    # Copy the total as the STRING it is. When a count reads "at least 50
+    # (SAMPLED...)" the bench caught models citing the flows figure and dropping
+    # the alerts one, because they were reformatting the sampled string into a
+    # number and losing it. Repeat the sampled rule here, next to the instruction
+    # that triggers it, rather than only in ALERT VALIDATION 40 lines below.
+    "Copy each total exactly as it appears, including a 'at least N (SAMPLED...)'\n"
+    "form, which you report as 'at least N (sampled)'. Never round one, convert\n"
+    "one, or drop one because it is awkward to phrase.\n"
+    "When triage_data is empty, say so in one line and set confidence < 0.3.\n\n"
     "## Key Entities\n"
-    "Bullets: src IP (zone) → dst IP:port, signature, count. One line each.\n\n"
+    "Bullets: src IP (zone) → dst IP:port, signature, count. One line each.\n"
+    # The citation rule above induced this failure on the 2026-08-04 bench: told to
+    # cite total_alerts=5, the model wrote five entity bullets, inventing three
+    # hosts to fill rows the payload never had. A scope total and a row count are
+    # different quantities and the prompt has to say so.
+    "EXACTLY one bullet per entry in triage_data.prioritized_alerts, in that\n"
+    "order. Never add a bullet to make the count match total_alerts: the total is\n"
+    "the scope you searched, NOT the number of rows you were given. Two bullets\n"
+    "under a total of 5 is the correct answer when you were handed two.\n\n"
     "## Risk\n"
     "One line: Severity + scope (hosts/networks affected) + impact.\n\n"
     "## Next Steps\n"

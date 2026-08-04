@@ -102,6 +102,16 @@ _RE_MD5 = re.compile(r"\b[0-9a-fA-F]{32}\b")
 _RE_SHA256 = re.compile(r"\b[0-9a-fA-F]{64}\b")
 _RE_UID = re.compile(r"\b[A-Za-z][A-Za-z0-9]{15,25}\b")
 
+# A database qualifier in a table position: `FROM some_db.conn` -> `FROM conn`.
+# Anchored on FROM/JOIN because a qualified COLUMN (`f.uid`) is legitimate and must
+# survive untouched. The database comes from the Athena execution context, so a
+# name in the SQL is at best redundant and at worst a stale one baked into a
+# fine-tune. Only a single qualifier is stripped: `cat.db.tbl` keeps `db.tbl`,
+# which is a deliberate choice not to guess at cross-catalog intent.
+_RE_DB_QUALIFIER = re.compile(
+    r"(?i)\b(from|join)(\s+)[a-z_][a-z0-9_]*\.(?=[a-z_][a-z0-9_]*\b)"
+)
+
 
 # sanitize() lives in agents/shared/llm_sanitize.py: it was four identical
 # copies, and a policy change had to be made in all four without missing one.
@@ -179,12 +189,20 @@ SQL_GEN_PROMPT = (
     "   ⚠ files has NO remote_organization — JOIN with conn on uid to get that.\n"
     "- suricata_corelight: uid, id_orig_h, id_resp_h, id_orig_p, id_resp_p, "
     "id_orig_network_name, id_resp_network_name, id_orig_room_name, id_resp_room_name, "
-    "alert_action, alert_signature, alert_category, alert_severity (INT), alert_signature_id, service\n"
+    "alert_action, alert_signature, alert_category, alert_severity (STRING '1'-'4'), "
+    "alert_signature_id, service\n"
     "- notice: uid, id_orig_h, id_resp_h, note, msg, severity_name, severity_level, "
     "id_orig_network_name, fuid\n"
     "- alerts: ts_datetime, ts, uid, orig_h, orig_p, resp_h, resp_p, orig_network_name, "
     "alert_type, alert_name, alert_detail, severity, dt. alert_type is one of "
-    "suricata|notice|ml|yara|anomaly, so filter on it to ask about one detector. "
+    # Live prod emits exactly these four. The view builder also has an 'anomaly'
+    # arm, but it is discovery-driven and there is no `anomaly` table in either
+    # database, so that arm is not in the deployed view. Advertising the type
+    # here made a filter on it return zero rows and a confident "no anomaly
+    # alerts found", which reads as a finding rather than as a missing source.
+    "suricata|notice|ml|yara, so filter on it to ask about one detector. "
+    "Do NOT filter alert_type='anomaly': that source is not present, so it "
+    "yields an empty result that looks like a real all-clear. "
     "severity is critical|high|medium|low|informational|unknown.\n"
     "- uid_lookup: uid, log_type, ts, ts_datetime, orig_h, resp_h, orig_network_name, dt. "
     "FAST index covering EVERY log type that carries a uid (37 of them), so this is how "
@@ -336,9 +354,16 @@ SQL_GEN_PROMPT = (
     "rejected outright.)\n"
     "- All tables have: ts (epoch bigint), ts_datetime (varchar), dt (varchar YYYY-MM-DD)\n\n"
     "TYPES & ENUMS:\n"
-    "- alerts.severity is VARCHAR: 'critical','high','medium','low','informational'. "
+    "- alerts.severity is VARCHAR: 'critical','high','medium','low','informational','unknown'. "
     "Use `=` or `IN (...)`; NEVER `<`/`<=`/`>`/`>=`.\n"
-    "- suricata_corelight.alert_severity is INTEGER (1=highest).\n"
+    # Both of these were wrong and both produced a hard Athena failure. The
+    # column is a STRING holding a digit, so an unquoted compare is
+    # TYPE_MISMATCH: "Cannot apply operator: varchar = integer". Verified
+    # against live prod. 'unknown' was missing from the severity list above for
+    # the same reason: the enum was written from the dev catalog, not this one.
+    "- suricata_corelight.alert_severity is a STRING holding a digit '1'-'4' (1=highest, "
+    "4=informational). ALWAYS quote it: `alert_severity = '1'`, `alert_severity IN ('1','2')`. "
+    "An unquoted `alert_severity = 1` or a range like `<= 2` fails with TYPE_MISMATCH.\n"
     "- For lateral movement / zone correlation, use suricata_corelight (has both-side zones). "
     "alerts only has orig_network_name.\n"
     "- For 'connections to Zoho/Google/AWS' style org queries, filter conn.remote_organization "
@@ -357,6 +382,13 @@ SQL_GEN_PROMPT = (
     "4. Match column prefix to the table: `id_orig_h` on raw Zeek tables, `orig_h` on alerts/uid_lookup\n"
     "5. For aggregations on conn use CAST(orig_bytes AS bigint)\n"
     "6. NEVER use the name 'suricata' — the table is 'suricata_corelight'\n"
+    # AQLight emitted `FROM blackhat_pope_logs.ssl` on the 2026-08-04 bench. It
+    # runs, because the execution context already names that database, but it
+    # hardcodes a value that comes from ATHENA_DATABASE. Point a box at another
+    # database and the qualified name silently keeps addressing the old one.
+    "6b. Use BARE table names: `FROM ssl`, never `FROM blackhat_pope_logs.ssl`. "
+    "The database is set by the query context; naming it in the SQL hardcodes a "
+    "value that is configuration.\n"
     "7. For organisation/brand queries (Zoho, Google, AWS, etc.), search on MULTIPLE "
     "fields because GeoIP enrichment can be sparse: use BOTH conn.remote_organization LIKE '%Zoho%' "
     "AND ssl.server_name LIKE '%zoho%' (SSL SNI contains real hostnames like 'mdm.zoho.in'). "
@@ -414,6 +446,7 @@ SQL_GEN_PROMPT = (
     "    WHERE f.dt IN ('TODAY','YESTERDAY') AND c.id_orig_h='<ip>'\n"
     "      AND (LOWER(s.server_name) LIKE '%<org>%'\n"
     "           OR LOWER(c.remote_organization) LIKE '%<org>%')\n"
+    "    LIMIT 200\n"
     "  (2) Supporting context — 'where DID the files go?' (top destinations):\n"
     "    SELECT c.id_resp_h,\n"
     "           ARBITRARY(s.server_name) AS sample_sni,\n"
@@ -481,7 +514,11 @@ SQL_GEN_PROMPT = (
     "    FROM conn WHERE dt=...\n"
     "    GROUP BY id_orig_h ORDER BY SUM(CAST(resp_bytes AS bigint)) DESC LIMIT 20\n\n"
     "* Session correlation (got a uid, want everything related):\n"
-    "    FROM uid_lookup WHERE dt=... AND uid='<uid>' ORDER BY ts\n"
+    # The LIMIT here is load-bearing. Every model tested (Gemini, AQLight,
+    # Foundation-Sec) dropped LIMIT on the uid pivot when this exemplar omitted
+    # it, copying the example over RULES #2. A concrete pattern beats a rule
+    # stated once, so the patterns have to satisfy the rules themselves.
+    "    FROM uid_lookup WHERE dt=... AND uid='<uid>' ORDER BY ts LIMIT 200\n"
     "  (uid_lookup uses orig_h / resp_h — NO id_ prefix.)\n\n"
     "* Vague / broad queries: widen to dt IN ('today','yesterday').\n\n"
     "CORRECTNESS CHECKS before you output SQL:\n"
@@ -627,12 +664,18 @@ async def generate_sql(
         def _sub_tokens(s: str) -> str:
             for tok, real in _token_dates.items():
                 s = re.sub(rf"(?i)'{tok}'", f"'{real}'", s)
-            # AQLight is fine-tuned to emit the literal schema `blackhat_pope_logs.<table>`
-            # regardless of prompt. Rewrite that baked-in prefix to the configured
-            # ATHENA_DATABASE so the catalog can be named per-tenant (e.g. blackhatnoc_glue).
-            # No-op when ATHENA_DATABASE == blackhat_pope_logs (the single-tenant case).
-            if ATHENA_DATABASE != "blackhat_pope_logs":
-                s = re.sub(r"(?i)\bblackhat_pope_logs\.", f"{ATHENA_DATABASE}.", s)
+            # STRIP any database qualifier, do not rewrite it. AQLight is fine-tuned
+            # to emit a literal `<some_db>.<table>` prefix regardless of what the
+            # prompt says, so this cannot be fixed in the prompt alone (RULES 6b
+            # asks, this enforces). Dropping the qualifier is better than mapping it
+            # to ATHENA_DATABASE: the execution context already names the database,
+            # so a bare table is correct on every box, while a rewrite has to know
+            # every stale name the weights might produce. The training-set name was
+            # blackhat_pope_logs; prod is blackhatnoc_glue; the next one is unknown.
+            # Anchored on FROM/JOIN so only a table position is rewritten. A bare
+            # `\w+\.\w+` rule would also eat qualified COLUMNS (`f.uid`, `s.server_name`
+            # in the files-join pattern), which would corrupt every joined query.
+            s = _RE_DB_QUALIFIER.sub(r"\1\2", s)
             return s
 
         # Inject date partition if missing.
@@ -1108,7 +1151,11 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 # bucket set (SEVERITY_SCORE keys). alert-triage._norm_sev is the source of truth;
 # these are kept in lockstep so the same event is labeled the same on the live
 # /alerts/recent feed and in the triage view.
-_NUM_SEV = {"1": "high", "2": "medium", "3": "low"}
+# "4" -> informational matches both the source of truth and the Athena `alerts`
+# view's own CASE. It is 83% of live suricata rows, so treating it as an
+# unparseable value scored it as medium and floated the noisiest severity in the
+# data to the top of the feed.
+_NUM_SEV = {"1": "high", "2": "medium", "3": "low", "4": "informational"}
 _WORD_SEV = {
     "informational (default)": "informational",
     "notification":            "low",
@@ -1119,9 +1166,10 @@ _VALID_SEVERITIES = {"critical", "high", "medium", "unknown", "low", "informatio
 
 def _normalize_severity(raw: str | None) -> str:
     # Behaviorally identical to alert-triage._norm_sev for all shared inputs:
-    # numeric 1/2/3 -> high/medium/low; recognized words pass through; the word
-    # aliases above are folded; and any unrecognized / blank / None / 4+ value
-    # returns "unknown" (NOT "low") so it stays visible instead of being buried.
+    # numeric 1/2/3/4 -> high/medium/low/informational; recognized words pass
+    # through; the word aliases above are folded; and any unrecognized / blank /
+    # None / 5+ value returns "unknown" (NOT "low") so it stays visible instead
+    # of being buried.
     s = str(raw).strip().lower()
     if s in _NUM_SEV:
         return _NUM_SEV[s]
