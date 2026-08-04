@@ -16,6 +16,10 @@ export const CSP = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: https:",
+  // First-party video only (the /Manifold wall). default-src would already
+  // cover it; stated explicitly so a later default-src change cannot silently
+  // widen or break it.
+  "media-src 'self'",
   "connect-src 'self' ws: wss:",
   "frame-ancestors 'none'",
   "base-uri 'self'",

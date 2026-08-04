@@ -47,6 +47,14 @@ const chip = await evaluate(`(() => {
   return { count: c.length, first: c[0] ? c[0].textContent.trim() : null };
 })()`);
 check('landing renders quick-pick chips', chip.count === 5, 'count=' + chip.count);
+// The chips come from /api/v1/config, not the static fallback markup, and the
+// draw always carries at least two network-quality questions.
+check('chips came from the server draw', /^STUB HINT:/.test(chip.first || ''), JSON.stringify(chip.first));
+const chipTexts = await evaluate(
+  `[...document.querySelectorAll('.example-chip')].map(c => c.textContent.trim())`);
+check('draw keeps >= 2 network-quality chips',
+  chipTexts.filter(t => /network quality|latency|packet loss|outage|BGP|DNS/i.test(t)).length >= 2,
+  JSON.stringify(chipTexts));
 
 await evaluate(`document.querySelectorAll('.example-chip')[0].click()`);
 await sleep(300);

@@ -48,12 +48,16 @@
           Query live network threats, investigate IOCs, triage firewall alerts,
           or ask about suspicious activity. AI agents analyze NOC telemetry in real time.
         </p>
+        <!-- Static fallback only. app.js replaces these with a fresh draw from
+             /api/v1/config (see services/starterHints.ts); this set is what a
+             visitor sees if that call fails, so it keeps the same shape:
+             newcomer questions, at least two about network quality. -->
         <div class="example-queries" id="example-queries">
-          <button class="example-chip" onclick="fillQuery(this)">What are the highest-severity threats active right now?</button>
-          <button class="example-chip" onclick="fillQuery(this)">Any beaconing or C2 patterns in outbound traffic today?</button>
-          <button class="example-chip" onclick="fillQuery(this)">Show brute-force or credential attacks on conference hosts</button>
-          <button class="example-chip" onclick="fillQuery(this)">Any packet loss, latency, or BGP issues on conference uplinks?</button>
-          <button class="example-chip" onclick="fillQuery(this)">Are there any network outages impacting attendees right now?</button>
+          <button class="example-chip" onclick="fillQuery(this)">What is the biggest risk so far?</button>
+          <button class="example-chip" onclick="fillQuery(this)">Are there any attacks happening right now?</button>
+          <button class="example-chip" onclick="fillQuery(this)">What is the most interesting attack so far?</button>
+          <button class="example-chip" onclick="fillQuery(this)">How is the network quality right now?</button>
+          <button class="example-chip" onclick="fillQuery(this)">Is there any latency reported to AWS?</button>
         </div>
       </div>
     </div>
@@ -110,6 +114,21 @@
   </aside>
 </div>
 
+<!-- ===== ALERT DETAIL POPUP =====
+     Shell only; app.js fills the body per alert and positions the panel. The
+     backdrop is what makes "click anywhere else to close" work, so it must stay
+     a full-viewport sibling *under* the panel, never a wrapper around it. -->
+<div class="alert-modal-backdrop" id="alert-modal-backdrop" hidden></div>
+<div class="alert-modal" id="alert-modal" hidden role="dialog" aria-modal="true" aria-labelledby="alert-modal-title">
+  <div class="alert-modal-head" id="alert-modal-head">
+    <span class="alert-modal-grip" aria-hidden="true">&#x283F;</span>
+    <span class="alert-modal-title" id="alert-modal-title">Alert Detail</span>
+    <button class="alert-modal-close" id="alert-modal-close" type="button" aria-label="Close alert detail">&#x2715;</button>
+  </div>
+  <div class="alert-modal-body" id="alert-modal-body"></div>
+</div>
+
+<script src="/alertHints.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

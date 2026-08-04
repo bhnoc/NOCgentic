@@ -177,3 +177,74 @@ class TestJsonShapedSecrets:
         """user_ is identity, not a credential, and the analyst needs it."""
         out = scrub_secrets('{"user_":"alice","password":"x"}')
         assert "alice" in out
+
+
+# ---------------------------------------------------------------------------
+# Gaps found 2026-08-04 by pushing the Manifold policy test vectors through the
+# REAL export redactor: these three credential forms reached Manifold AND the
+# permanent S3 span archive in the clear, because no pattern matched them.
+# ---------------------------------------------------------------------------
+
+class TestExportGapsFound20260804:
+    def test_pem_private_key_block_is_removed_entirely(self):
+        text = (
+            "here is the key\n"
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEowIBAAKCAQEAx7Wn3kQm2p\n"
+            "9s0dFakeKeyMaterialHere1234\n"
+            "-----END RSA PRIVATE KEY-----\n"
+            "and that was it"
+        )
+        out = scrub_secrets(text)
+        assert "BEGIN RSA PRIVATE KEY" not in out
+        assert "MIIEowIBAAKCAQEAx7Wn3kQm2p" not in out
+        assert "[REDACTED-PRIVATE-KEY]" in out
+        # surrounding prose must survive — this runs on analyst-facing text
+        assert "here is the key" in out and "and that was it" in out
+
+    def test_openssh_and_ec_key_headers_also_match(self):
+        for kind in ("OPENSSH", "EC", "DSA", ""):
+            header = f"-----BEGIN {kind} PRIVATE KEY-----".replace("  ", " ")
+            out = scrub_secrets(f"leak: {header} body")
+            assert "PRIVATE KEY" not in out, kind
+
+    def test_unterminated_header_still_redacted(self):
+        # A truncated paste is still a disclosure that a key was present.
+        out = scrub_secrets("-----BEGIN PRIVATE KEY----- MIIEow")
+        assert "BEGIN" not in out
+
+    def test_two_keys_do_not_collapse_into_one_match(self):
+        # Non-greedy: the text BETWEEN two keys must not be swallowed.
+        text = ("-----BEGIN PRIVATE KEY-----\naaa\n-----END PRIVATE KEY-----"
+                " KEEP-THIS "
+                "-----BEGIN PRIVATE KEY-----\nbbb\n-----END PRIVATE KEY-----")
+        out = scrub_secrets(text)
+        assert "KEEP-THIS" in out
+        assert "aaa" not in out and "bbb" not in out
+
+    def test_google_api_key_is_redacted(self):
+        out = scrub_secrets("key AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q")
+        assert "AIzaSy" not in out
+
+    def test_manifold_oidc_secret_is_redacted(self):
+        for line in ("MANIFOLD_OIDC_SECRET=s3cret-value-here",
+                     "MANIFOLD_OIDC_ID: abc123",
+                     "client_secret = hunter2hunter2",
+                     "OIDC_SECRET:zzz"):
+            out = scrub_secrets(line)
+            assert "s3cret-value-here" not in out
+            assert "abc123" not in out
+            assert "hunter2hunter2" not in out
+            assert "zzz" not in out
+
+    def test_file_hashes_still_survive(self):
+        # THE carve-out this module exists for: hashes are the IOCs an analyst
+        # needs to see. The new rules must not regress it.
+        sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        md5 = "d41d8cd98f00b204e9800998ecf8427e"
+        out = scrub_secrets(f"hashes {sha256} and {md5}")
+        assert sha256 in out and md5 in out
+
+    def test_ordinary_prose_untouched(self):
+        text = "The Registration zone had 4.2 GB of egress and no private key material."
+        assert scrub_secrets(text) == text

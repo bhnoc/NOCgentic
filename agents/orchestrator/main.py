@@ -6,6 +6,10 @@ Classifies incoming queries and routes them to the appropriate specialist agent:
   - alert-triage  (port 8003): alert summaries, severity triaging, firewall events
   - thousandeyes-analyst (port 8004): network path / latency analysis
 
+One agent is NOT reachable by classification:
+  - deter (port 8006): answers CONTAINED sessions from a vetted safe data pool.
+    Only a Manifold quarantine sends traffic here, and no intent maps to it.
+
 ALL queries investigate real data. There is no "direct" LLM-only path. This is
 a SOC platform, every question should be answered with telemetry context.
 
@@ -47,6 +51,7 @@ from llm_client import (  # noqa: E402
     llm_complete, LANE_CLOUD, LANE_LOCAL, lane_race_enabled,
 )
 import local_models  # noqa: E402
+import pacing  # noqa: E402
 import response_cache  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
@@ -83,6 +88,55 @@ logger = logging.getLogger("orchestrator")
 ALERT_TRIAGE_URL         = os.getenv("ALERT_TRIAGE_URL",         "http://localhost:8003")
 THOUSANDEYES_ANALYST_URL = os.getenv("THOUSANDEYES_ANALYST_URL", "http://localhost:8004")
 ATHENA_HUNTER_URL        = os.getenv("ATHENA_HUNTER_URL",        "http://localhost:8005")
+# Where a CONTAINED session's queries go. Not a routable intent: nothing the
+# classifier decides can send traffic here, and nothing here can be reached by a
+# session that has not been quarantined.
+DETER_URL                = os.getenv("DETER_URL",                "http://localhost:8006")
+DETER_ENABLED            = os.getenv("DETER_ENABLED", "true").lower() in ("1", "true", "yes")
+# Ceiling on the deter round-trip. A contained caller must not wait noticeably
+# longer than anyone else, so past this we stop waiting and serve cover — which
+# is fast, and lands inside the range a normal answer occupies.
+DETER_TIMEOUT_SECONDS    = float(os.getenv("DETER_TIMEOUT_SECONDS", "25.0"))
+# Wall-clock floor for the deter path. A deter answer is a real LLM call but a
+# cheap one, and its cover fallback costs nothing at all — either can land far
+# faster than the specialist agent the response claims to come from. Response
+# TIME is a side channel that needs no interpretation, so anything quicker than
+# this window is padded out to a target drawn from it.
+#
+# [2, 6] is a DELIBERATE TRADE-OFF, chosen with the measurement in hand — not a
+# default nobody looked at. Recording both halves so a later reader does not
+# "correct" it back and does not mistake it for an oversight.
+#
+# Measured off this box's orchestrator logs, 2026-08-04:
+#
+#     agent                  n     p50      p95      min      max
+#     athena-hunter         99   17.02s   33.94s    2.17s   44.80s
+#     alert-triage          37   32.78s   53.08s    2.31s   58.34s
+#     thousandeyes-analyst  59   10.84s   18.76s    3.19s   26.57s
+#
+# The deter agent's own p95 is ~1.0s (scripts/bench_deter_models.py), so the
+# padding sets the response time outright.
+#
+# A deter response reports agent_used="athena-hunter", whose p50 is 17s. So this
+# window is faster than the agent it claims to be, and a caller who times enough
+# turns against a known-good athena-hunter answer can see that. What it DOES buy,
+# which is the point:
+#
+#   * 2-6s is plausible SOC-tool latency in absolute terms, and 2.17s is inside
+#     athena-hunter's real range. Nothing about a single response looks wrong.
+#   * It closes the millisecond gap, which was the loud tell — three orders of
+#     magnitude, visible in one turn with no baseline to compare against. This
+#     leaves a ~3x gap visible only across many turns WITH a baseline.
+#   * The 4-second spread scatters more than the 2-second one it replaced; a
+#     narrow window is its own signature regardless of where it sits.
+#   * It keeps the platform responsive for the false positives containment will
+#     produce, which is a real cost paid by real operators.
+#
+# Widen toward the table above if timing indistinguishability starts to matter
+# more than responsiveness. Re-measure first — the command is in
+# docs/security/deter-agent.md.
+DETER_PACE_MIN_SECONDS   = float(os.getenv("DETER_PACE_MIN_SECONDS", "2.0"))
+DETER_PACE_MAX_SECONDS   = float(os.getenv("DETER_PACE_MAX_SECONDS", "6.0"))
 ADMIN_BEARER_TOKEN       = os.getenv("ADMIN_BEARER_TOKEN", "")
 
 MAX_QUERY_LEN = 5000
@@ -829,6 +883,34 @@ async def call_thousandeyes_analyst(query: str, trace_headers: dict | None = Non
         return resp.json()
 
 
+async def call_deter(
+    query: str, *, reason: str | None = None, trace_headers: dict | None = None,
+    live_ok: bool = True,
+) -> dict[str, Any]:
+    """Ask the deter agent for a safe-pool answer for a contained session.
+
+    Timeout is DETER_TIMEOUT_SECONDS, not the 180s the specialist agents get. A
+    contained session hanging for three minutes and then producing something is
+    visibly different from every other session on the platform, and the caller
+    would learn more from that timing than from any answer we could give them.
+
+    `lane` is deliberately absent: the deter path serves a single answer and
+    reports a synthetic lane pair (see _serve_deter), so racing two models here
+    would double the LLM spend on hostile traffic for nothing.
+
+    `live_ok=False` forbids live pool reads for this answer. The agent already
+    defaults to static roll-ups, but the kill-switch path must not rely on that
+    default holding — sending it explicitly is what makes "plug pulled" a
+    property of the request rather than of the agent's environment.
+    """
+    payload = {"query": query, "reason": reason, "live_ok": live_ok}
+    headers = trace_headers or inject_trace_headers()
+    async with httpx.AsyncClient(timeout=DETER_TIMEOUT_SECONDS) as client:
+        resp = await client.post(f"{DETER_URL}/deter", json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -881,10 +963,23 @@ class QueryResponse(BaseModel):
 # Admin kill-switches
 # ---------------------------------------------------------------------------
 # In-memory flags that the audit-monitor (admin UI) can flip in emergencies
-# during a live demo. When an agent is "killed", queries routed to it instead
-# get the silent cover response — indistinguishable from the restricted-range
-# filter to an observer, so demos don't look broken.
+# during a live demo.
+#
+# THIS IS THE PLUG, NOT AN AGENT TOGGLE. The key is still `athena_hunter` for
+# wire compatibility (the audit monitor's button and the web-server's alert-feed
+# freeze both read that name), but its meaning is "cut every live-data path".
+# It was an athena-only check inside the athena branch, which meant a killed
+# platform still answered "any alerts in the last hour?" from alert-triage
+# (Athena) and "how is the network?" from thousandeyes-analyst (live TE API),
+# and still served live-derived answers out of the response cache. Anyone
+# pulling this switch means all of it, so `live_data_killed()` is checked once,
+# before classification, ahead of every agent branch and every cache lookup.
 _kill_switches: dict[str, bool] = {"athena_hunter": False}
+
+
+def live_data_killed() -> bool:
+    """True when the admin kill-switch has cut access to live data."""
+    return bool(_kill_switches.get("athena_hunter"))
 
 
 class KillSwitchBody(BaseModel):
@@ -914,6 +1009,19 @@ async def set_athena_kill(body: KillSwitchBody, authorization: str | None = Head
     _require_admin(authorization)
     _kill_switches["athena_hunter"] = bool(body.killed)
     logger.warning("ADMIN kill-switch: athena_hunter=%s", _kill_switches["athena_hunter"])
+    # Surface the flip on the audit swim lane's KILL SWITCH column. Both
+    # directions are recorded: turning the switch OFF is as operationally
+    # important as turning it on, and a lane that only shows one half of the
+    # pair reads as "still killed" long after someone restored service.
+    with get_tracer().start_as_current_span("killswitch.athena_hunter") as span:
+        span.set_attribute("killswitch.kind", "agent_kill")
+        span.set_attribute("killswitch.agent", "athena_hunter")
+        span.set_attribute("killswitch.killed", bool(body.killed))
+        set_agent_span(
+            span,
+            input_value=("athena_hunter KILLED" if body.killed else "athena_hunter restored"),
+            name="KILL SWITCH",
+        )
     return dict(_kill_switches)
 
 
@@ -1060,6 +1168,14 @@ _QUARANTINE_MAX_TRACES = 5000
 _trace_sessions: dict[str, tuple[float, str]] = {}
 # session id (bh_sid) -> expires_at
 _quarantined: dict[str, float] = {}
+# session id -> why it was contained (Manifold threat title, or an operator note).
+# Kept in a SEPARATE map rather than widening _quarantined's value, so the expiry
+# arithmetic that every containment decision runs on stays a plain float compare.
+#
+# This text is attacker-influenced (a threat title can quote what the attacker
+# typed), so it goes to the audit trail and to the deter agent's span attributes
+# ONLY. It must never reach an LLM prompt or a caller-visible field.
+_quarantine_reasons: dict[str, str] = {}
 
 
 def normalize_trace_id(raw: str | None) -> str:
@@ -1084,6 +1200,7 @@ def _prune_quarantine(now: float | None = None) -> None:
     for sid, expires_at in list(_quarantined.items()):
         if now >= expires_at:
             _quarantined.pop(sid, None)
+            _quarantine_reasons.pop(sid, None)
             logger.info("quarantine EXPIRED for session=%s", sid)
     # Hard cap as a backstop if TTLs are configured very long.
     if len(_trace_sessions) > _QUARANTINE_MAX_TRACES:
@@ -1108,14 +1225,27 @@ def record_trace_session(trace_id: str | None, session_id: str | None) -> None:
     _prune_quarantine(now)
 
 
-def quarantine_session(session_id: str, *, ttl_seconds: float | None = None) -> float:
+def quarantine_session(
+    session_id: str, *, ttl_seconds: float | None = None, reason: str | None = None,
+) -> float:
     """Quarantine one session. Returns the absolute expiry."""
     ttl = QUARANTINE_TTL_SECONDS if ttl_seconds is None else float(ttl_seconds)
     expires_at = time.time() + ttl
     # Extend rather than shorten: a second threat on an already-contained
     # session must never pull its release time closer.
     _quarantined[session_id] = max(_quarantined.get(session_id, 0.0), expires_at)
+    if reason:
+        # Latest reason wins: a second threat is the more current explanation of
+        # why this session is still contained.
+        _quarantine_reasons[session_id] = reason[:200]
     return _quarantined[session_id]
+
+
+def quarantine_reason(session_id: str | None) -> str | None:
+    """Why a session is contained, for the audit trail. Never caller-visible."""
+    if not session_id:
+        return None
+    return _quarantine_reasons.get(session_id)
 
 
 def resolve_trace_to_session(trace_id: str | None) -> str | None:
@@ -1169,7 +1299,28 @@ async def add_quarantine(
         )
         return {"quarantined": False, "reason": "unresolved_trace",
                 "trace_id": normalize_trace_id(body.trace_id) or None}
-    expires_at = quarantine_session(session_id, ttl_seconds=body.ttl_seconds)
+    # Emit spans so the containment appears on the audit swim lane. Manifold's
+    # webhook lands on the WEB-SERVER, which is not in the OTEL span stream the
+    # dashboard reads -- so without this the single most consequential event in
+    # the system is invisible on the board. The span NAME is what routes it into
+    # the manifold-webhook and KILL SWITCH columns (see CONTROL_LANES in the
+    # audit-monitor UI); the service name is unchanged.
+    _tracer = get_tracer()
+    with _tracer.start_as_current_span("manifold.webhook.quarantine") as wspan:
+        wspan.set_attribute("quarantine.session_id", session_id)
+        wspan.set_attribute("quarantine.trace_id", normalize_trace_id(body.trace_id) or "-")
+        wspan.set_attribute("quarantine.reason", (body.reason or "-")[:300])
+        set_agent_span(wspan, input_value=(body.reason or "manifold threat"),
+                       name="manifold-webhook")
+    with _tracer.start_as_current_span("killswitch.quarantine_added") as kspan:
+        kspan.set_attribute("killswitch.kind", "session_quarantine")
+        kspan.set_attribute("killswitch.session_id", session_id)
+        set_agent_span(kspan, input_value=f"session {session_id} contained",
+                       name="KILL SWITCH")
+
+    expires_at = quarantine_session(
+        session_id, ttl_seconds=body.ttl_seconds, reason=body.reason,
+    )
     logger.warning(
         "quarantine ADDED session=%s trace=%s reason=%s expires_in=%.0fs",
         session_id, normalize_trace_id(body.trace_id) or "-",
@@ -1195,6 +1346,7 @@ async def clear_quarantine(
 ) -> dict[str, Any]:
     _require_admin(authorization)
     existed = _quarantined.pop(session_id, None) is not None
+    _quarantine_reasons.pop(session_id, None)
     logger.warning("quarantine CLEARED session=%s (was_active=%s)", session_id, existed)
     return {"cleared": existed, "session_id": session_id}
 
@@ -1613,6 +1765,139 @@ def _serve_cover(
         lanes_racing=False,
     )
 
+async def _serve_deter(
+    query: str,
+    *,
+    start: float,
+    session_id: str | None,
+    span: Any,
+    live_ok: bool = True,
+    salt: str = "quarantine",
+    reason_override: str | None = None,
+) -> "QueryResponse":
+    """Answer a contained session from the deter agent's safe pool.
+
+    This is the whole point of containment being *deterrence* rather than
+    refusal: the caller gets a real, on-topic, useful-looking answer built only
+    from data we decided in advance is safe to disclose to someone hostile. They
+    learn nothing about having been detected, and rephrasing does not eventually
+    produce a different class of response the way probing a static cover does.
+
+    Falls back to `_serve_cover` on ANY failure — agent down, timeout, or the
+    deter agent's own output screen rejecting what the model wrote. The fallback
+    is not an error path; it is the same answer this session would have received
+    before this agent existed, so a failure here degrades silently rather than
+    exposing the mechanism.
+
+    Two properties are enforced here rather than left to the agent:
+
+      * `agent_used` is reported as athena-hunter, never "deter". It reaches the
+        browser, and a caller who sees their agent change the turn after a probe
+        has been told exactly what they needed to know.
+      * The answer is never written to the response cache. This function returns
+        before `_route_cached` is ever reached, which is what makes that true --
+        stated explicitly because a future edit that hoists the cache write out
+        of the agent branches would start serving deter answers to everyone who
+        later asks the same question.
+
+    `live_ok=False` forbids the agent from reading Athena for this answer, so
+    every facet serves its static roll-up. That is what the admin kill-switch
+    passes: "answer from deter" and "no live data" are only compatible if the
+    orchestrator says so on the wire, because the agent's own
+    DETER_ATHENA_ENABLED is an env var on the box and a pulled plug must not
+    depend on how it happens to be set.
+
+    `salt` varies the follow-up hints per caller-path (see `_serve_cover`), and
+    `reason_override` names the path on the audit surface when the caller is not
+    a quarantined session.
+    """
+    agent_used = "athena-hunter"
+    reason = reason_override if reason_override is not None else quarantine_reason(session_id)
+
+    async def _pace() -> None:
+        """Pad the request out to the deter window before anything is built.
+
+        Deliberately runs BEFORE the response is assembled, not after. The lane
+        timings in `_cover_lanes` are derived from the elapsed clock and they are
+        USER-VISIBLE on the swap control — pacing afterwards would hold the
+        response for three seconds and then hand the caller a lane badge reading
+        "8 ms", which states the true cost of the path in the one place the
+        padding was meant to hide it.
+        """
+        waited = await pacing.pace(
+            time.monotonic() - start, DETER_PACE_MIN_SECONDS, DETER_PACE_MAX_SECONDS,
+        )
+        span.set_attribute("deter.pace_seconds", round(waited, 3))
+
+    span.set_attribute("deter.live_ok", live_ok)
+    try:
+        result = await call_deter(
+            query, reason=reason, trace_headers=inject_trace_headers(), live_ok=live_ok,
+        )
+    except Exception as exc:
+        # Broad by design: connect error, timeout, non-2xx, malformed JSON —
+        # every one of them means "serve cover", and none of them may propagate.
+        logger.warning(
+            "deter agent unavailable (%s: %s) — falling back to cover",
+            type(exc).__name__, exc,
+        )
+        span.set_attribute("deter.served", False)
+        span.set_attribute("deter.fallback_reason", type(exc).__name__)
+        # The fallback needs the floor MORE than the success path does: a cover
+        # costs no LLM call at all, so an unpaced one returns in milliseconds and
+        # announces that the deter agent just failed.
+        await _pace()
+        return _serve_cover(query, start=start, salt=salt)
+
+    if not result.get("usable") or not result.get("answer"):
+        # The deter agent screened its own output and rejected it.
+        span.set_attribute("deter.served", False)
+        span.set_attribute("deter.fallback_reason",
+                           str(result.get("screen_reason", "unusable"))[:120])
+        logger.warning(
+            "deter answer unusable (%s) — falling back to cover",
+            result.get("screen_reason", "-"),
+        )
+        await _pace()
+        return _serve_cover(query, start=start, salt=salt)
+
+    await _pace()
+    answer = sanitize_output_text(str(result["answer"]))
+    confidence = float(result.get("confidence", 0.7))
+    elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+
+    span.set_attribute("deter.served", True)
+    span.set_attribute("agent.used", agent_used)
+    span.set_attribute("response.confidence", confidence)
+    span.set_attribute("response.elapsed_ms", elapsed_ms)
+    span.set_attribute("response.length", len(answer))
+    span.set_attribute("response.text", answer[:2000])
+    set_agent_span(span, output_value=answer, name="orchestrator")
+    # Counted under the agent we CLAIM to be, so the contained traffic does not
+    # stand out as its own series on a dashboard the demo screen might show.
+    # `deter.served` on the span is where the real accounting lives.
+    _request_counter.add(1, {"agent.used": agent_used})
+    _request_duration.record(elapsed_ms, {"agent.used": agent_used})
+
+    # Same lane surface a cover gets, and for the same reason: the presence or
+    # absence of a swap control must not depend on which path answered. One LLM
+    # call produced this text, so both synthetic lanes carry it — see _cover_lanes.
+    racing = lane_race_enabled() and llm_client.side_by_side_enabled()
+    return QueryResponse(
+        answer=answer,
+        agent_used=agent_used,
+        confidence=confidence,
+        # No `data`: the specialist agents return query metadata here, and the
+        # deter agent's payload names the facets it read. Forwarding that would
+        # describe the containment mechanism to the person it is aimed at.
+        data=None,
+        hints=restricted_cover_hints(query, salt=salt),
+        lane=LANE_CLOUD if racing else None,
+        lanes=_cover_lanes(answer, agent_used=agent_used, elapsed_ms=elapsed_ms) if racing else [],
+        lanes_racing=False,
+    )
+
+
 @app.post("/query", response_model=QueryResponse)
 async def handle_query(req: QueryRequest) -> QueryResponse:
     tracer = get_tracer()
@@ -1647,17 +1932,65 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         trace_id_hex = format(span_ctx.trace_id, "032x") if span_ctx and span_ctx.trace_id else None
         record_trace_session(trace_id_hex, session_id)
 
-        # 0a. Manifold quarantine — before the restricted filter, so a contained
-        # session burns no LLM budget and reaches no agent. Cover, not refusal:
-        # the caller cannot tell containment from the restricted-range filter.
+        # 0a. Manifold quarantine — before classification and before the
+        # restricted filter, so a contained session never reaches a specialist
+        # agent or the shared response cache.
+        #
+        # DETERRENCE, not refusal: the query goes to the deter agent, which
+        # answers it for real from a pool of data vetted as safe to hand to a
+        # hostile caller. The caller gets something useful and learns nothing
+        # about having been detected. If deter is disabled or cannot produce a
+        # screened answer, this degrades to the canned cover, which is what this
+        # path did before the deter agent existed.
         if is_quarantined(session_id):
             span.set_attribute("routing.intent", "cover")
             span.set_attribute("filter.quarantined", True)
             logger.warning(
-                "job=%s session=%s QUARANTINED (Manifold threat) — serving cover",
+                "job=%s session=%s QUARANTINED (Manifold threat) — deterring",
                 req.job_id, session_id,
             )
+            if DETER_ENABLED:
+                return await _serve_deter(
+                    req.query, start=start, session_id=session_id, span=span,
+                )
+            span.set_attribute("deter.served", False)
+            span.set_attribute("deter.fallback_reason", "disabled")
             return _serve_cover(req.query, start=start, salt="quarantine")
+
+        # 0b. Admin kill-switch — THE PLUG. Checked here, before classification
+        # and therefore before every agent branch and every cache lookup, because
+        # all three of those reach live data:
+        #
+        #   * alert-triage and athena-hunter read Athena; thousandeyes-analyst
+        #     calls the live ThousandEyes API. This check used to live inside the
+        #     athena branch only, so a killed platform still answered anything
+        #     the classifier sent to the other two.
+        #   * the response cache stores answers built from live data, so serving
+        #     a hit after the plug is pulled discloses exactly what the plug was
+        #     pulled to stop.
+        #
+        # Killed traffic is answered by the deter agent with live pool reads
+        # FORBIDDEN (live_ok=False), so what goes out is the author-written
+        # static roll-up and nothing that was read from the network today. If
+        # deter is disabled, unreachable, slow, or screens its own answer away,
+        # this degrades to the same canned cover every other guardrail serves —
+        # the failover matters more here than anywhere else, because a kill
+        # switch that errors instead of answering announces that it was thrown.
+        if live_data_killed():
+            span.set_attribute("routing.intent", "kill_switch")
+            span.set_attribute("filter.kill_switch", True)
+            logger.warning(
+                "job=%s KILL-SWITCH ACTIVE — no live data, deterring", req.job_id,
+            )
+            if DETER_ENABLED:
+                return await _serve_deter(
+                    req.query, start=start, session_id=session_id, span=span,
+                    live_ok=False, salt="kill_switch",
+                    reason_override="admin kill-switch",
+                )
+            span.set_attribute("deter.served", False)
+            span.set_attribute("deter.fallback_reason", "disabled")
+            return _serve_cover(req.query, start=start, salt="kill_switch")
 
         # 0. Restricted-range soft filter — before we classify or hit any agent.
         # If the query references a restricted subnet or zone name, short-circuit
@@ -1766,14 +2099,11 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     agent_used = "alert-triage"
 
             else:  # athena_hunter — DEFAULT for all other data-lake work
-                # Admin kill-switch: if flipped during an incident, silently
-                # serve the cover response instead of hitting the agent. Looks
-                # like a real "nothing notable" answer to the user.
-                if _kill_switches.get("athena_hunter"):
-                    span.set_attribute("routing.intent", "athena_killed")
-                    span.set_attribute("filter.kill_switch", True)
-                    logger.warning("job=%s athena kill-switch ACTIVE — serving cover", req.job_id)
-                    return _serve_cover(req.query, start=start, salt="kill_switch")
+                # No kill-switch check here on purpose: it moved to step 0b, in
+                # front of classification, because guarding this branch alone
+                # left alert-triage and thousandeyes-analyst answering from live
+                # data while the switch was thrown. Nothing routed reaches this
+                # point with the plug pulled.
                 with tracer.start_as_current_span("orchestrator.route.athena_hunter") as rt_span:
                     iocs = extract_iocs(req.query)
                     rt_span.set_attribute("iocs.count", len(iocs))

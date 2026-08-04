@@ -8,6 +8,7 @@ import path from 'path';
 import { registerChatRoutes } from './api/chat';
 import { registerManifoldRoutes } from './api/manifold';
 import { alertCache } from './services/alertCache';
+import { pickStarterHints } from './services/starterHints';
 import {
   SECURITY_HEADERS,
   rateLimitKeyGenerator,
@@ -87,6 +88,15 @@ async function main() {
     prefix: '/',
   });
 
+  // Manifold demo wall: a full-bleed looping video standing in for the real
+  // Manifold dashboard until that team ships it. @fastify/static is registered
+  // with redirect:false, so a bare directory path 404s -- name the file
+  // explicitly. Both cases are routed because Fastify matches case-sensitively
+  // and the URL handed out is /Manifold.
+  for (const route of ['/Manifold', '/Manifold/', '/manifold', '/manifold/']) {
+    server.get(route, (_req, reply) => reply.sendFile('Manifold/index.html'));
+  }
+
   // Chat API routes
   registerChatRoutes(server);
 
@@ -145,7 +155,12 @@ async function main() {
   // truth is EVENT_EDITION (nation + year, e.g. "USA 2026"); "Black Hat" is the
   // static wrapper. Never tie system config (S3 prefixes, IAM) to this.
   const EVENT_LABEL = `Black Hat ${(process.env.EVENT_EDITION ?? 'USA 2026').trim()}`;
-  server.get('/api/v1/config', async () => ({ eventLabel: EVENT_LABEL }));
+  // starterHints is drawn per request, so two attendees loading the wall at the
+  // same time get different opening questions. Always >= 2 network-quality.
+  server.get('/api/v1/config', async () => ({
+    eventLabel: EVENT_LABEL,
+    starterHints: pickStarterHints(),
+  }));
 
   // Start the Athena-backed alert cache refresh loop
   alertCache.start();

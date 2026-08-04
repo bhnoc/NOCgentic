@@ -64,6 +64,17 @@ def test_compose_agents_env_parity():
         "ALERT_TRIAGE_URL",
         "THOUSANDEYES_ANALYST_URL",
         "ATHENA_HUNTER_URL",
+        # Without DETER_URL the orchestrator falls back to its localhost default,
+        # every contained session's deter call fails to connect, and the whole
+        # feature degrades to the canned cover — silently, because the fallback
+        # is designed to be invisible. Exactly the failure this file exists for.
+        "DETER_URL",
+        "DETER_ENABLED",
+        # Absent, these fall back to the code defaults rather than failing, so a
+        # missing pacing window is invisible until someone times the deter path
+        # against a real answer and finds it 3s early.
+        "DETER_PACE_MIN_SECONDS",
+        "DETER_PACE_MAX_SECONDS",
         "OTEL_ENABLED",
         "EVENT_EDITION",
     ]:
@@ -90,3 +101,32 @@ def test_compose_agents_env_parity():
         "EVENT_EDITION",
     ]:
         assert req in te_envs, f"thousandeyes-analyst service in docker-compose.agents.yml missing {req}"
+
+    # 4) Deter agent critical envs. It needs an LLM to write the answer and the
+    # Athena config only when the pool reads live; DETER_ATHENA_ENABLED must be
+    # present either way, because its absence silently means "static", which is a
+    # working-but-different feature rather than a visible failure.
+    deter_envs = envs.get("deter", set())
+    for req in [
+        "GEMINI_API_KEY",
+        "LLM_PROVIDER",
+        # Absent, deter silently inherits the platform-wide GEMINI_MODEL, which is
+        # a different workload and measured slower on the deter prompt.
+        "DETER_MODEL",
+        "DETER_ATHENA_ENABLED",
+        "ATHENA_DATABASE",
+        "ATHENA_REGION",
+        "OTEL_ENABLED",
+        "EVENT_EDITION",
+    ]:
+        assert req in deter_envs, f"deter service in docker-compose.agents.yml missing {req}"
+
+
+def test_deter_agent_is_not_published_to_the_host():
+    """Every agent is expose-only; the deter agent especially so. A published
+    port would let anyone reach the containment path directly and read back
+    exactly which facets the safe pool is built from."""
+    content = (ROOT / "docker-compose.agents.yml").read_text("utf-8")
+    deter_block = content.split("\n  deter:\n", 1)[1].split("\n  thousandeyes-analyst:", 1)[0]
+    assert "expose:" in deter_block
+    assert "ports:" not in deter_block

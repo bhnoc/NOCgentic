@@ -23,20 +23,21 @@ Browser (static/index.html) ──HTTPS──┐
               │ POST /query                    /bh/1337/thetraces/)
               ▼
          Orchestrator (FastAPI, 8001)
-              │  ┌─ classify (Gemini Flash-Lite, ~500ms)
+              │  ┌─ Manifold quarantine → deter (safe-pool answer)
+              │  ├─ classify (Gemini Flash-Lite, ~500ms)
               │  ├─ restricted-range filter (silent cover)
               │  ├─ guardrail filter (silent cover)
               │  └─ 4-intent router
               │
-   ┌──────────┼──────────────┐
-   ▼          ▼              ▼
-alert-triage  thousandeyes   athena-hunter
-   :8003      :8004           :8005 (primary)
-     │         │                │
-     │         │                ▼
-     │         │           AWS Athena
-     │         │           (Parquet logs)
-     └─────────┴────────────┐
+   ┌──────────┼──────────────┬──────────────┐
+   ▼          ▼              ▼              ▼
+alert-triage  thousandeyes   athena-hunter  deter
+   :8003      :8004           :8005 (primary)  :8006
+     │         │                │              │
+     │         │                ▼              ▼
+     │         │           AWS Athena     safe_pool.py
+     │         │           (Parquet logs) (vetted aggregates)
+     └─────────┴────────────┬──────────────┘
                             ▼
                   Gemini 3.1 Flash Lite Preview
                   (LangChain + LangSmith OTEL bridge)
@@ -97,8 +98,18 @@ Internal `10.x`/`172.16/12`/`192.168` IPs are **not** stripped at the orchestrat
 | **athena-hunter** | 8005 | AWS Athena (SQL) | Default: generates SQL from NL, explains results |
 | **alert-triage** | 8003 | AWS Athena `alerts` | Prioritises active alerts, IDS feed |
 | **thousandeyes-analyst** | 8004 | ThousandEyes v7 API | BGP / latency / uplink health |
+| **deter** | 8006 | `agents/deter/safe_pool.py` | Answers sessions Manifold has quarantined, from vetted aggregates only |
 
-Agent ports (8001-8005) are internal to the Docker network (`expose:`, not published to the host). Only nginx (80/443) is public.
+Agent ports (8001-8006) are internal to the Docker network (`expose:`, not published to the host). Only nginx (80/443) is public.
+
+`deter` is the one agent no intent routes to. When a Manifold threat quarantines
+a session, its later queries go there instead of getting a canned refusal-shaped
+cover: it answers what was actually asked, using only author-written,
+aggregate-only roll-ups over an allowlisted set of tables. The caller's text
+selects which roll-up is read and never becomes part of one, and any failure —
+agent down, timeout, or its own output screen rejecting the model's text —
+degrades silently to the same cover the other guardrails serve. See
+[`docs/security/deter-agent.md`](docs/security/deter-agent.md).
 
 Each agent:
 - Initialises OTel at startup → Manifold traces, metrics, logs + S3 NDJSON span archive
@@ -281,6 +292,9 @@ agents/
   alert-triage/       Athena-backed triage (Flash-Lite)
   athena-hunter/      SQL generation + analysis (primary hunt agent)
   thousandeyes-analyst/  TE REST API
+  deter/
+    main.py           contained-session answers + output screen
+    safe_pool.py      the ONLY data a contained session can reach
   shared/
     llm_client.py     Gemini/OpenRouter unified client + metrics
     athena_client.py  SELECT-only SQL wrapper with date partitioning

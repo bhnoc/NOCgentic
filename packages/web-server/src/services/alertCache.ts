@@ -4,7 +4,10 @@ const ATHENA_HUNTER_URL = process.env.ATHENA_HUNTER_URL ?? 'http://athena-hunter
 // Kill-switch source: the orchestrator holds the authoritative in-memory switch.
 // ADMIN_BEARER_TOKEN must be added to the web-server service in docker-compose.
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? 'http://orchestrator:8001';
-const ADMIN_BEARER_TOKEN = process.env.ADMIN_BEARER_TOKEN ?? '';
+// Read per call, not frozen at import: api/manifold.ts already does it this way,
+// and a token added to the environment after boot should start working without a
+// restart of the process that polls the emergency switch.
+const adminBearerToken = (): string => process.env.ADMIN_BEARER_TOKEN ?? '';
 const REFRESH_INTERVAL_MS = parseInt(process.env.ALERT_REFRESH_MS ?? '1800000', 10); // 30 min
 // Kill-switch polled on its own short cycle so the emergency freeze is responsive
 // (the 30 min alert refresh would be far too slow for an emergency control).
@@ -57,18 +60,41 @@ class AlertCache {
   private refreshTimer: NodeJS.Timeout | null = null;
   private killTimer: NodeJS.Timeout | null = null;
   private running = false;
-  // When the orchestrator's athena_hunter kill-switch is on, freeze the feed.
-  // Fail SAFE: defaults to false so a killswitch check error never freezes the feed.
+  // When the orchestrator's kill-switch is on, freeze the feed.
+  //
+  // Two different failure directions, and they are NOT symmetric:
+  //  * Never observed a kill (boot, no admin token, orchestrator not up yet) →
+  //    stay live. A feed that freezes because a check failed is an outage.
+  //  * Observed a kill → STAY killed until a successful check says otherwise.
+  //    Clearing this on a timeout would un-pull a plug someone pulled on
+  //    purpose, at the exact moment the platform is least healthy.
   private athenaKilled = false;
+  // Has a kill-switch poll ever succeeded? Without a token, or with the
+  // orchestrator unreachable since boot, the freeze half of the plug is not
+  // wired at all — and the only symptom was a log line nobody reads.
+  private killSwitchVerified = false;
 
   // --- Test-only hooks (additive; do not affect production behavior) --------
   /** Push a raw alert onto the queue so dequeue() can be exercised in tests. */
   __enqueueForTest(raw: RawAlert): void {
     this.queue.push(raw);
   }
-  /** Set the cached athena kill-switch flag directly for tests. */
+  /** Drive the kill-switch transition tests take. Routed through the real
+   *  applyKillState so a test cannot pass against behaviour production skips. */
   __setAthenaKilledForTest(killed: boolean): void {
-    this.athenaKilled = killed;
+    this.applyKillState(killed);
+  }
+  /** Run one kill-switch poll against whatever global fetch is stubbed to. */
+  async __refreshKillSwitchForTest(): Promise<void> {
+    await this.refreshKillSwitch();
+  }
+  /** Forget that a poll ever succeeded (the flag is process-wide otherwise). */
+  __resetKillVerifiedForTest(): void {
+    this.killSwitchVerified = false;
+  }
+  /** Observe the emitted buffer without going through the killed-state filter. */
+  __emittedCountForTest(): number {
+    return this.emitted.length;
   }
   // --------------------------------------------------------------------------
 
@@ -113,8 +139,10 @@ class AlertCache {
   /** Pull one alert off the queue for broadcast. Re-stamps timestamp to now.
    *  Sanitizes restricted subnets and zone names before anything reaches the UI. */
   dequeue(): Alert | null {
-    // Kill-switch: freeze the feed while athena_hunter is killed. Leaves the
-    // queue intact so it resumes where it left off once unkilled.
+    // Kill-switch: nothing leaves the cache while the plug is pulled. The queue
+    // and the emitted buffer were both dropped when the switch was thrown (see
+    // applyKillState), so there is nothing here to resume from either — the
+    // refresh after restore repopulates from Athena.
     if (this.athenaKilled) return null;
     const raw = this.queue.shift();
     if (!raw) return null;
@@ -139,52 +167,97 @@ class AlertCache {
     return alert;
   }
 
-  /** Recent alerts already emitted — for the initial REST fetch by new clients. */
+  /** Recent alerts already emitted — for the initial REST fetch by new clients.
+   *  Empty while killed: freezing the WebSocket trickle but still handing the
+   *  last 20 live alerts to every page load would leave the plug half-pulled. */
   recentEmitted(limit = 20): Alert[] {
+    if (this.athenaKilled) return [];
     return this.emitted.slice(-limit);
   }
 
-  status(): { queueLength: number; emitted: number; lastRefreshAt: number; pacingMs: number } {
+  status(): {
+    queueLength: number;
+    emitted: number;
+    lastRefreshAt: number;
+    pacingMs: number;
+    killed: boolean;
+    killSwitchVerified: boolean;
+  } {
     return {
       queueLength: this.queue.length,
       emitted: this.emitted.length,
       lastRefreshAt: this.lastRefreshAt,
       pacingMs: this.pacingMs(),
+      // Operators need to see the plug is actually pulled from the outside,
+      // without the admin bearer the orchestrator's own endpoint requires.
+      killed: this.athenaKilled,
+      // false = this process has never successfully read the switch, so the
+      // feed would NOT freeze if someone threw it. Check this before trusting
+      // the plug, not after.
+      killSwitchVerified: this.killSwitchVerified,
     };
   }
 
-  /** Poll the orchestrator's authoritative kill-switch and cache the athena
-   *  state. Fail SAFE: on any error, or when no admin token is configured,
-   *  leave athenaKilled false so the feed keeps working. */
+  /** Apply an observed kill state. Throwing the switch drops everything the
+   *  cache is holding: queued and already-emitted alerts are live venue data,
+   *  and keeping them in memory to resume from would mean the plug stopped the
+   *  refills but not the disclosures. */
+  private applyKillState(killed: boolean): void {
+    if (killed === this.athenaKilled) return;
+    console.log(`[alertCache] kill-switch now ${killed ? 'ON (feed frozen, buffers dropped)' : 'OFF (feed live)'}`);
+    this.athenaKilled = killed;
+    if (killed) {
+      this.queue = [];
+      this.emitted = [];
+    } else if (this.running) {
+      // Restored: refill immediately rather than waiting out the 30 min cycle.
+      // Guarded on `running` so a unit test flipping the flag doesn't reach out
+      // to Athena as a side effect.
+      void this.refresh();
+    }
+  }
+
+  /** Poll the orchestrator's authoritative kill-switch.
+   *
+   *  Only a SUCCESSFUL read may change the cached state. An unreachable
+   *  orchestrator, a 500, a bad token or a missing token all leave the current
+   *  state alone: at boot that means the feed stays live (nothing was ever
+   *  killed), and after a kill it means the freeze holds. The previous version
+   *  set the flag to false on every one of those paths, so anything that took
+   *  the orchestrator down also un-froze the feed. */
   private async refreshKillSwitch(): Promise<void> {
-    if (!ADMIN_BEARER_TOKEN) {
-      console.warn('[alertCache] ADMIN_BEARER_TOKEN unset; skipping kill-switch check (feed stays live)');
-      this.athenaKilled = false;
+    const token = adminBearerToken();
+    if (!token) {
+      console.warn('[alertCache] ADMIN_BEARER_TOKEN unset; cannot verify kill-switch (state unchanged)');
       return;
     }
     try {
       const resp = await fetch(`${ORCHESTRATOR_URL}/admin/killswitch`, {
-        headers: { Authorization: `Bearer ${ADMIN_BEARER_TOKEN}` },
+        headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(10000),
       });
       if (!resp.ok) {
-        console.warn(`[alertCache] killswitch check returned ${resp.status}; feed stays live`);
-        this.athenaKilled = false;
+        console.warn(`[alertCache] killswitch check returned ${resp.status}; state unchanged (killed=${this.athenaKilled})`);
         return;
       }
       const data = (await resp.json()) as Record<string, boolean>;
-      const killed = data.athena_hunter === true;
-      if (killed !== this.athenaKilled) {
-        console.log(`[alertCache] athena kill-switch now ${killed ? 'ON (feed frozen)' : 'OFF (feed live)'}`);
-      }
-      this.athenaKilled = killed;
+      this.killSwitchVerified = true;
+      this.applyKillState(data.athena_hunter === true);
     } catch (err) {
-      console.warn('[alertCache] killswitch check failed; feed stays live:', err instanceof Error ? err.message : err);
-      this.athenaKilled = false;
+      console.warn(
+        `[alertCache] killswitch check failed; state unchanged (killed=${this.athenaKilled}):`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
   private async refresh(): Promise<boolean> {
+    // The plug stops the pull, not just the push: a killed feed must not keep
+    // fetching venue alerts out of Athena into this process every 30 minutes.
+    if (this.athenaKilled) {
+      console.warn('[alertCache] refresh skipped: kill-switch active');
+      return false;
+    }
     try {
       const url = `${ATHENA_HUNTER_URL}/alerts/recent?hours=${LOOKBACK_HOURS}&limit=${MAX_ALERTS}`;
       const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });

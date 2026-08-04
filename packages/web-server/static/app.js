@@ -54,6 +54,16 @@
         <div class="alert-desc">${escHtml(a.description)}</div>
         <div class="alert-src">${escHtml(a.source||'')}${a.srcIp?' // '+escHtml(a.srcIp):''}</div>
       `;
+
+      // The card is the only place the full alert object exists client-side —
+      // the popup reads it from here rather than re-fetching or re-parsing DOM.
+      card.setAttribute('role', 'button');
+      card.tabIndex = 0;
+      card.addEventListener('click', () => openAlertModal(a));
+      card.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openAlertModal(a); }
+      });
+
       feed.insertBefore(card, feed.firstChild);
       totalAlerts++;
       if (sev === 'critical') criticalAlerts++;
@@ -65,6 +75,160 @@
     // On mobile, ensure exactly one card is visible after new arrivals
     if (mobileAlertMode) showMobileAlert();
   }
+
+  // ========== Alert detail popup ==========
+  // Draggable, closes on X / backdrop click / Escape. The panel is positioned
+  // with explicit left+top (never a transform) so a drag can just write the
+  // pointer position back into the same two properties.
+  let alertModalDrag = null;        // { pointerId, dx, dy } while dragging
+  let alertModalReturnFocus = null; // element focused before the popup opened
+
+  function alertModalEls() {
+    return {
+      backdrop: document.getElementById('alert-modal-backdrop'),
+      modal:    document.getElementById('alert-modal'),
+      head:     document.getElementById('alert-modal-head'),
+      body:     document.getElementById('alert-modal-body'),
+      close:    document.getElementById('alert-modal-close'),
+    };
+  }
+
+  function openAlertModal(alert) {
+    const el = alertModalEls();
+    if (!el.modal || !el.backdrop || !el.body || !alert) return;
+
+    alertModalReturnFocus = document.activeElement;
+    const sev = String(alert.severity || 'low').toLowerCase();
+    el.body.innerHTML = renderAlertDetail(alert);
+    // Reuse the feed's severity stripe so the popup reads as the same object.
+    el.modal.className = 'alert-modal sev-card-' + sev;
+    el.backdrop.hidden = false;
+    el.modal.hidden = false;
+    centerAlertModal();
+
+    el.body.querySelectorAll('.hint-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const query = chip.getAttribute('data-hint');
+        closeAlertModal();
+        if (query) submitQueryText(query);
+      });
+    });
+
+    if (el.close) el.close.focus();
+  }
+
+  function closeAlertModal() {
+    const el = alertModalEls();
+    if (!el.modal || el.modal.hidden) return;
+    if (alertModalDrag && el.head && el.head.releasePointerCapture) {
+      try { el.head.releasePointerCapture(alertModalDrag.pointerId); } catch (_) {}
+    }
+    alertModalDrag = null;
+    el.modal.classList.remove('dragging');
+    el.modal.hidden = true;
+    el.backdrop.hidden = true;
+    el.body.innerHTML = '';
+    const back = alertModalReturnFocus;
+    alertModalReturnFocus = null;
+    if (back && back.focus && document.contains(back)) back.focus();
+  }
+
+  function centerAlertModal() {
+    const { modal } = alertModalEls();
+    if (!modal) return;
+    placeAlertModal((window.innerWidth - modal.offsetWidth) / 2,
+                    (window.innerHeight - modal.offsetHeight) / 2);
+  }
+
+  /** Write left/top, clamped so the panel can never be dragged off-screen. */
+  function placeAlertModal(left, top) {
+    const { modal } = alertModalEls();
+    if (!modal) return;
+    const maxLeft = Math.max(0, window.innerWidth - modal.offsetWidth);
+    const maxTop  = Math.max(0, window.innerHeight - modal.offsetHeight);
+    modal.style.left = Math.round(Math.min(Math.max(left, 0), maxLeft)) + 'px';
+    modal.style.top  = Math.round(Math.min(Math.max(top, 0), maxTop)) + 'px';
+  }
+
+  function renderAlertDetail(a) {
+    const sev = String(a.severity || 'low').toLowerCase();
+    const sevClass = { critical:'sev-critical', high:'sev-high', medium:'sev-medium', low:'sev-low', informational:'sev-info' }[sev] || 'sev-low';
+    const ts = new Date(a.timestamp);
+    const when = isNaN(ts.getTime())
+      ? String(a.timestamp || 'unknown')
+      : ts.toLocaleString('en-US', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+
+    const rows = [
+      ['Source',   a.source],
+      ['Src IP',   a.srcIp],
+      ['Dst IP',   a.dstIp],
+      ['Dst Port', a.dstPort === 0 || a.dstPort ? String(a.dstPort) : ''],
+      ['Action',   a.action],
+      ['Detected', when],
+      ['Alert ID', a.id],
+    ].filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '');
+
+    const grid = rows.map(([label, value]) =>
+      `<div class="adg-row"><dt>${escHtml(label)}</dt><dd>${escHtml(String(value))}</dd></div>`).join('');
+
+    // Guardrail-filtered in alertHints.js: a clicked chip that trips the
+    // orchestrator would answer with a silent cover, so fewer chips is correct.
+    const hints = typeof buildAlertHuntHints === 'function' ? buildAlertHuntHints(a) : [];
+    const hintRow = hints.length === 0 ? '' : `
+      <div class="hunt-row">
+        <span class="hints-label">Hunt From Here</span>
+        ${hints.map(h => `<button type="button" class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</button>`).join('')}
+      </div>`;
+
+    return `
+      <div class="alert-detail-top">
+        <span class="sev-badge ${sevClass}">${escHtml(sev)}</span>
+        <span class="alert-detail-time">${escHtml(when)}</span>
+      </div>
+      <div class="alert-detail-desc">${escHtml(a.description || '')}</div>
+      <dl class="alert-detail-grid">${grid}</dl>
+      ${hintRow}
+    `;
+  }
+
+  // Static shell in index.html, so these bind once. app.js is loaded at the end
+  // of <body>, so the elements exist by the time this runs.
+  (function wireAlertModal() {
+    const el = alertModalEls();
+    if (!el.modal || !el.head || !el.backdrop) return;
+
+    if (el.close) el.close.addEventListener('click', closeAlertModal);
+    el.backdrop.addEventListener('click', closeAlertModal);
+
+    el.head.addEventListener('pointerdown', (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      if (ev.target.closest && ev.target.closest('.alert-modal-close')) return;
+      const rect = el.modal.getBoundingClientRect();
+      alertModalDrag = { pointerId: ev.pointerId, dx: ev.clientX - rect.left, dy: ev.clientY - rect.top };
+      el.modal.classList.add('dragging');
+      if (el.head.setPointerCapture) { try { el.head.setPointerCapture(ev.pointerId); } catch (_) {} }
+      ev.preventDefault(); // suppress text selection / touch scroll while dragging
+    });
+
+    el.head.addEventListener('pointermove', (ev) => {
+      if (!alertModalDrag || ev.pointerId !== alertModalDrag.pointerId) return;
+      placeAlertModal(ev.clientX - alertModalDrag.dx, ev.clientY - alertModalDrag.dy);
+    });
+
+    const endDrag = (ev) => {
+      if (!alertModalDrag || (ev && ev.pointerId !== alertModalDrag.pointerId)) return;
+      alertModalDrag = null;
+      el.modal.classList.remove('dragging');
+    };
+    el.head.addEventListener('pointerup', endDrag);
+    el.head.addEventListener('pointercancel', endDrag);
+
+    document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeAlertModal(); });
+    // A shrinking viewport must not strand a dragged panel outside it.
+    window.addEventListener('resize', () => {
+      if (!el.modal.hidden) placeAlertModal(el.modal.offsetLeft, el.modal.offsetTop);
+    });
+  })();
 
   // ========== Mobile single-alert rotator ==========
   const mobileMQ = window.matchMedia('(max-width: 480px)');
@@ -155,9 +319,17 @@
 
   // ========== Chat ==========
   function fillQuery(btn) {
+    submitQueryText(btn.textContent.trim());
+  }
+
+  /** Put text in the box and send it. Shared by the welcome chips and the
+   *  alert-popup hunt chips so both respect the in-flight send lock. */
+  function submitQueryText(text) {
+    const query = String(text || '').trim();
+    if (!query) return;
     if (document.getElementById('send-btn').disabled) return;
     const input = document.getElementById('query-input');
-    input.value = btn.textContent.trim();
+    input.value = query;
     autoResize(input);
     input.focus();
     sendQuery();
@@ -716,13 +888,32 @@
   function elapsed(start, end) { const ms = new Date(end) - new Date(start); return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`; }
   function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
 
-  // Pull the public event-edition label (composed server-side) from the
-  // server so re-branding is a single env change. Falls back to static markup.
-  async function loadEventLabel() {
+  // Replace the static welcome chips with the server's per-load draw. The
+  // markup keeps a hand-written set as the fallback, so a failed/empty fetch
+  // leaves the banner alone rather than blanking it.
+  function renderStarterHints(hints) {
+    if (!Array.isArray(hints) || hints.length === 0) return;
+    const container = document.getElementById('example-queries');
+    if (!container) return;
+    container.innerHTML = '';
+    hints.forEach(hint => {
+      const text = String(hint).slice(0, 200);
+      const btn = document.createElement('button');
+      btn.className = 'example-chip';
+      btn.textContent = text;   // textContent, not innerHTML: never parse server text as markup
+      btn.addEventListener('click', () => fillQuery(btn));
+      container.appendChild(btn);
+    });
+  }
+
+  // Pull public UI config (event-edition label composed server-side, starter
+  // hint draw) so re-branding is a single env change. Falls back to static markup.
+  async function loadConfig() {
     try {
       const resp = await fetch('/api/v1/config', { signal: AbortSignal.timeout(3000) });
       if (!resp.ok) return;
-      const { eventLabel } = await resp.json();
+      const { eventLabel, starterHints } = await resp.json();
+      renderStarterHints(starterHints);
       if (!eventLabel) return;
       const banner = document.getElementById('event-label');
       if (banner) banner.textContent = eventLabel;
@@ -746,7 +937,7 @@
 
   // ========== Boot ==========
   connectWS();
-  loadEventLabel();
+  loadConfig();
   loadInitialAlerts();
   applyMobileAlertMode();
   // Real alerts now trickle from the Athena-backed cache via WebSocket.
