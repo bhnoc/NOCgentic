@@ -735,6 +735,15 @@ SYSTEM_PROMPT = (
     "Copy each total exactly as it appears, including a 'at least N (SAMPLED...)'\n"
     "form, which you report as 'at least N (sampled)'. Never round one, convert\n"
     "one, or drop one because it is awkward to phrase.\n"
+    # The scope rule alone made the model treat three totals as the WHOLE citation
+    # duty: on sum-07 it cited 28/640/132 and dropped severity_breakdown.high=6,
+    # which was the actual answer to "give me the medium and high severity
+    # picture". Scope is what you searched; the breakdown is what you found, and an
+    # answer needs both. Only the non-zero buckets, because listing six zeroes is
+    # what the STYLE rules above are trying to prevent.
+    "Then give the numbers that answer analyst_focus, not just the scope: when\n"
+    "triage_data has a severity_breakdown, cite the count for every severity the\n"
+    "question is about, skipping buckets that are 0 (e.g. \"6 high, 18 medium\").\n"
     "When triage_data is empty, say so in one line and set confidence < 0.3.\n\n"
     "## Key Entities\n"
     "Bullets: src IP (zone) → dst IP:port, signature, count. One line each.\n"
@@ -749,14 +758,27 @@ SYSTEM_PROMPT = (
     "## Risk\n"
     "One line: Severity + scope (hosts/networks affected) + impact.\n\n"
     "## Next Steps\n"
-    "Numbered imperatives: 'Block 1.2.3.4', 'Pivot on uid=ABC123', 'Check HTTP for uid X'.\n\n"
+    # The placeholders here are deliberately NOT uid-shaped. The previous exemplar
+    # was 'Pivot on uid=ABC123', and on the 2026-08-04 bench the model copied the
+    # SHAPE instead of the value: handed uid=Csmb000000000001 it emitted
+    # uid=C5220330000000001, assembling a plausible uid out of the host's own
+    # digits (10.220.3.14 -> 5220330...). sum-05 did the same thing. A uid an
+    # analyst cannot paste back into a search is worse than no uid at all, and it
+    # is silent: the string looks right. The rule below already forbade it, so the
+    # exemplar was outvoting the rule, exactly as it did for the LIMIT rule in
+    # athena-hunter. Use <copy the uid from triage_data> so there is no shape to
+    # imitate, only an instruction to follow.
+    "Numbered imperatives: 'Block <orig_h from triage_data>', "
+    "'Pivot on uid=<copy the uid verbatim from triage_data>'.\n\n"
     "End with: ```json\n{\"confidence\": 0.XX}\n```\n"
     "Only cite data present in triage_data — never invent alerts, IPs, or UIDs. "
     # Identifier fidelity: a uid the analyst cannot paste back into a search is worse
     # than no uid. Every provider in the bench mangled at least one, and the local
     # models also narrated the correction ("actually the uid is...") mid-answer.
-    "Copy every uid and IP as the EXACT string from triage_data; never abbreviate, "
-    "reformat or re-derive one, and never narrate a correction mid-answer. "
+    "Copy every uid and IP as the EXACT character sequence from triage_data. A uid "
+    "is an OPAQUE token: never abbreviate it, reformat it, pad it, or build one out "
+    "of an IP's digits. If you cannot find a uid in triage_data, omit it rather "
+    "than construct one, and never narrate a correction mid-answer. "
     "If data is empty, say so in one line and set confidence < 0.3.\n\n"
     "ALERT VALIDATION (when the analyst asks to validate/confirm/triage a specific alert):\n"
     "State a VERDICT in the first line: CONFIRMED (true positive), FALSE POSITIVE, or "
@@ -835,6 +857,19 @@ async def llm_triage(
             logger.warning("llm_triage: confidence value unparseable, using low default 0.3")
     else:
         logger.warning("llm_triage: no confidence trailer in answer (truncated/malformed?), using low default 0.3")
+        # The low confidence alone is not enough. A truncated answer still LOOKS
+        # complete: the 2026-08-04 bench caught a run that burned 4092 of its 4096
+        # output tokens and stopped mid-bullet, so the analyst saw a Key Entities
+        # list that simply ended, with no way to know entities were missing. Same
+        # generation at the same settings came back in 762 chars, so this is a
+        # stochastic runaway rather than an answer that needs a bigger cap, which
+        # is exactly why it cannot be fixed by raising max_tokens. Say so inline,
+        # because a confidence number in a side panel is not where anyone looks.
+        answer = (
+            answer.rstrip()
+            + "\n\n_Note: this response was cut off before it finished, so the "
+            "lists above may be incomplete. Re-run the question._"
+        )
 
     return answer, confidence
 
