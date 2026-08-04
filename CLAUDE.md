@@ -69,7 +69,7 @@ NOCgentic/
 │   ├── alert-triage/              # :8003 — Athena alerts triage
 │   ├── thousandeyes-analyst/      # :8004 — ThousandEyes network quality
 │   ├── athena-hunter/             # :8005 — NL→SQL hunt (primary data-lake agent)
-│   └── shared/                    # llm_client, athena_client, telemetry, scrubbers
+│   └── shared/                    # llm_client, athena_client, response_cache, telemetry, scrubbers
 │
 ├── nginx/                         # TLS + reverse proxy (template → nginx-ssl.conf on box)
 ├── ops/                           # Canonical deploy + test runner (CI uses these)
@@ -106,6 +106,7 @@ There is **no** `packages/agent-sdk`, no CloudFormation under `infrastructure/`,
 - **Framework:** FastAPI + uvicorn
 - **LLM:** `agents/shared/llm_client.py` (Gemini default; OpenRouter / local AQLight alternate)
 - **Data:** `agents/shared/athena_client.py` (SELECT-only Athena)
+- **Cache:** `agents/shared/response_cache.py` (Redis; finished answers, guardrails first)
 - **Telemetry:** OpenTelemetry → Manifold + S3 span archive
 - **Testing:** pytest (+ `ops/run-tests.sh` / `tests/`)
 
@@ -191,9 +192,15 @@ Orchestrator routes by intent:
   thousandeyes_analyst  → thousandeyes-analyst :8004/analyze
   athena_hunter         → athena-hunter :8005/analyze   (default)
   refused               → silent cover + hints
+
+Guardrails run first, then the Redis response cache, then the agent:
+  quarantine / restricted / refused / kill-switch → cover (never cached)
+  cache hit  → stored answer, paced to a random 2-5s total, no lane metadata
+  cache miss → agent call → sanitise → cache write
 ```
 
 Agent ports are **internal-only** (`expose:` in compose). Only nginx 80/443 is public.
+Redis is `expose: 6379`, reachable only from the compose network.
 
 ---
 
@@ -246,11 +253,17 @@ GET    /health                   # Health check
 GET    /ws                       # WebSocket (alerts + job_update)
 ```
 
-Orchestrator (internal): `POST /query`, `GET /hints/:id`, `GET /lanes/:id`, `GET /admin/killswitch` (bearer).
+Orchestrator (internal): `POST /query`, `GET /hints/:id`, `GET /lanes/:id`,
+`GET /admin/killswitch`, `GET|DELETE /admin/cache` (all `/admin/*` behind bearer).
 
 `/lanes/:id` serves the losing lane of the dual-provider race (cloud Gemini vs
 local AQLight) so the UI can offer a swap. See
 [`docs/llm/lane-race.md`](docs/llm/lane-race.md).
+
+`/admin/cache` reports and purges the Redis response cache. The lookup lives after
+every guardrail in `handle_query` on purpose, because the key is the query text
+alone and entries are shared between callers. Do not move it earlier. See
+[`docs/cache/response-cache.md`](docs/cache/response-cache.md).
 
 ---
 
@@ -293,8 +306,11 @@ APP_DIR=/opt/nocgentic/app bash ops/deploy.sh
 | Distributed traces | Manifold + S3 NDJSON under `nocgentic/traces/` |
 | Admin swim lanes | audit-monitor UI |
 | API / agent health | compose healthchecks + `/health` |
+| Response cache | `bhnoc.orchestrator.cache_hits` / `cache_misses`; `GET /admin/cache` |
 
 Key thresholds from ops practice: API error rate, agent latency, LLM token/cost metrics on spans (`bhnoc.tokens`, `bhnoc.cost.usd`).
+
+Cache hit rate is the only cache signal that means anything: a hit is paced to look like a live answer, so latency graphs will not show it.
 
 ---
 

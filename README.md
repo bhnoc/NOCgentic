@@ -144,6 +144,34 @@ local loses on both today: [`docs/llm/lane-race.md`](docs/llm/lane-race.md).
 
 ---
 
+## Response cache (Redis)
+
+A question somebody already asked comes back without re-running the pipeline. Booth
+traffic is repetitive: two people click the same quick-pick chip a minute apart, and
+the second one should not pay for a fresh Athena scan and two LLM calls.
+
+Keyed on the question plus the answering agent plus the model config, in Redis so it
+survives a redeploy and any replica can read it. This sits above the SQL cache in
+`athena_client` and caches something different: `question → finished answer` rather
+than `SQL → rows`, which is where the seconds actually are.
+
+Two things about it are load-bearing and not obvious:
+
+- **The lookup runs after every guardrail.** Quarantine, the restricted-range filter,
+  the refusal verdict and the Athena kill-switch all return their cover before the
+  cache is consulted. The key is the query text alone, so an entry is served to
+  callers who did not populate it. Caching in front of those checks would replay a
+  contained session's cover to everyone and would keep serving live answers past a
+  kill-switch flip.
+- **A hit is deliberately paced** to a random 2 to 5 seconds total, because an answer
+  that returns in two milliseconds tells an observer which questions have been asked
+  before. Applied to a cover that becomes a guardrail oracle.
+
+Redis down degrades to "no cache", never to "no answers". Full write-up, including
+the admin purge route: [`docs/cache/response-cache.md`](docs/cache/response-cache.md).
+
+---
+
 ## Audit monitor (admin only)
 
 `tools/audit-monitor/` — FastAPI + SSE live view of every agent span.
@@ -198,6 +226,11 @@ docker compose -f docker-compose.agents.yml up -d --build
 | `LOCAL_PROSE_BASE_URL` | `LOCAL_SQL_BASE_URL` | local llama-server for prose; unset = same one |
 | `LOCAL_PROSE_MODEL` | `LOCAL_SQL_MODEL` | served alias for the local prose model |
 | `OPENROUTER_API_KEY` | — | alternate provider |
+| `RESPONSE_CACHE_ENABLED` | `true` | `false` skips Redis entirely |
+| `REDIS_URL` | `redis://redis:6379/0` | response cache backend |
+| `RESPONSE_CACHE_TTL_SECONDS` | `900` | how long a cached answer stays valid |
+| `RESPONSE_CACHE_HIT_DELAY_MIN` | `2.0` | cache hits are paced to a random total in this window |
+| `RESPONSE_CACHE_HIT_DELAY_MAX` | `5.0` | so a hit does not look instant |
 | `ATHENA_DATABASE` | `blackhat_pope_logs` | |
 | `ATHENA_WORKGROUP` | `blackhat-pope-dev` | |
 | `ATHENA_REGION` | `us-west-2` | |

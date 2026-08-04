@@ -34,6 +34,16 @@ services:
       - LOCAL_SQL_MODEL=${LOCAL_SQL_MODEL:-}
       - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
       - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
+      # RESPONSE CACHE: repeat questions come back from Redis instead of re-running
+      # the agent. Only the orchestrator needs these; the cache sits after every
+      # guardrail so a hit is never a cover response or a contained session's answer.
+      # Hits are paced to 2-5s so a cached answer doesn't return suspiciously fast,
+      # which would make response time a side channel. See docs/cache/response-cache.md.
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - RESPONSE_CACHE_ENABLED=${RESPONSE_CACHE_ENABLED:-true}
+      - RESPONSE_CACHE_TTL_SECONDS=${RESPONSE_CACHE_TTL_SECONDS:-900}
+      - RESPONSE_CACHE_HIT_DELAY_MIN=${RESPONSE_CACHE_HIT_DELAY_MIN:-2.0}
+      - RESPONSE_CACHE_HIT_DELAY_MAX=${RESPONSE_CACHE_HIT_DELAY_MAX:-5.0}
       - ADMIN_BEARER_TOKEN=${ADMIN_BEARER_TOKEN}
       # How long a Manifold threat keeps a session quarantined, in seconds.
       - QUARANTINE_TTL_SECONDS=${QUARANTINE_TTL_SECONDS:-1800}
@@ -61,6 +71,7 @@ services:
       - alert-triage
       - thousandeyes-analyst
       - athena-hunter
+      - redis
     restart: unless-stopped
 
   alert-triage:
@@ -239,6 +250,28 @@ services:
     depends_on:
       - orchestrator
       - athena-hunter
+    restart: unless-stopped
+
+  # Shared response cache for finished agent answers (agents/shared/response_cache.py).
+  # Deliberately has NO volume: the cache is disposable by design, everything in it
+  # has a TTL of minutes, and persisting it across a redeploy would mean an answer
+  # outliving the code and prompts that produced it.
+  #
+  # maxmemory + allkeys-lru so a long conference run cannot grow this without bound
+  # or get OOM-killed. Evicting the least-recently-asked question is exactly the
+  # right thing for a cache to do under pressure.
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    # Internal only, same as every agent. Nothing outside the compose network has
+    # any business reaching an unauthenticated Redis.
+    expose:
+      - "6379"
     restart: unless-stopped
 
   nginx:

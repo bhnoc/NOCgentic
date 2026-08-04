@@ -46,6 +46,7 @@ import llm_client  # noqa: E402
 from llm_client import (  # noqa: E402
     llm_complete, LANE_CLOUD, LANE_LOCAL, lane_race_enabled,
 )
+import response_cache  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
     set_agent_span, set_chain_span,
@@ -57,6 +58,10 @@ init_telemetry(service_name="bhnocgentic-orchestrator")
 _meter = get_meter()
 _request_counter  = _meter.create_counter("bhnoc.orchestrator.requests", description="Total orchestrator requests")
 _request_duration = _meter.create_histogram("bhnoc.orchestrator.duration_ms", unit="ms", description="Orchestrator request latency")
+# Hit rate is the only way to know the response cache is doing anything: a hit is
+# deliberately paced to look like a live answer, so latency graphs won't show it.
+_cache_hit_counter  = _meter.create_counter("bhnoc.orchestrator.cache_hits", description="Response cache hits")
+_cache_miss_counter = _meter.create_counter("bhnoc.orchestrator.cache_misses", description="Response cache misses")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -911,6 +916,28 @@ async def set_athena_kill(body: KillSwitchBody, authorization: str | None = Head
     return dict(_kill_switches)
 
 
+@app.get("/admin/cache")
+async def get_cache_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """Response-cache state: reachable, how many entries, what the knobs are."""
+    _require_admin(authorization)
+    return await response_cache.health()
+
+
+@app.delete("/admin/cache")
+async def purge_cache(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """Flush every cached answer.
+
+    Needed because the TTL is minutes long and a demo can go wrong faster than
+    that: a bad answer, a data reload, or a prompt fix that should take effect on
+    the next click rather than after the window expires. Scoped to this build's key
+    prefix, so it cannot flush anything else sharing the Redis instance.
+    """
+    _require_admin(authorization)
+    removed = await response_cache.purge()
+    logger.warning("ADMIN response cache purged: %d entries", removed)
+    return {"purged": removed}
+
+
 # ---------------------------------------------------------------------------
 # Manifold-driven session quarantine
 # ---------------------------------------------------------------------------
@@ -1201,6 +1228,64 @@ async def _classify_raced(query: str, cls_span) -> dict[str, Any]:
 
     # Otherwise most-confident wins; `usable` is cloud-first so a tie keeps cloud.
     return max(usable, key=lambda r: float(r.get("confidence", 0.0)))
+
+
+async def _route_cached(
+    job_id: str,
+    racing: bool,
+    agent_used: str,
+    call: Any,
+    *,
+    query: str,
+    start: float,
+    fallback_confidence: float,
+    span: Any = None,
+) -> dict[str, Any]:
+    """`_route_raced` with the response cache in front of it.
+
+    Every agent branch goes through here, so the cache sits at exactly one point in
+    the request: after classification (the agent is known) and after every cover
+    path has already returned. Nothing that reaches this function is
+    caller-dependent, which is the property that makes a query-text-only key safe.
+
+    A hit returns the stored answer with `_cached: True` and no `_lane`, so the
+    caller reports no lane metadata and the UI shows no swap control. That is
+    honest -- there was no race, and inventing lane timings for an answer that
+    didn't run would make the swap show a fabricated comparison.
+    """
+    key = response_cache.cache_key(query, agent=agent_used,
+                                   lane_fingerprint=_lane_fingerprint())
+    hit = await _cached_answer(key)
+    if hit is not None:
+        # Pad to a plausible wall-clock. Without this a hit returns in
+        # milliseconds, and "how fast did that come back" becomes a way to tell
+        # which questions have been asked before.
+        waited = await response_cache.pace_hit(time.monotonic() - start)
+        logger.info(
+            "job=%s agent=%s CACHE HIT (paced +%.2fs)", job_id, agent_used, waited,
+        )
+        if span is not None:
+            span.set_attribute("cache.hit", True)
+            span.set_attribute("cache.pad_seconds", round(waited, 3))
+        _cache_hit_counter.add(1, {"agent.used": agent_used})
+        return {
+            "answer": hit["answer"],
+            "confidence": float(hit.get("confidence", fallback_confidence)),
+            "data": hit.get("data"),
+            "_cached": True,
+        }
+
+    if span is not None:
+        span.set_attribute("cache.hit", False)
+    _cache_miss_counter.add(1, {"agent.used": agent_used})
+    result = await _route_raced(
+        job_id, racing, agent_used, call, fallback_confidence=fallback_confidence,
+    )
+    # Write-back happens at the end of handle_query, not here: the answer stored
+    # has to be the sanitised one, and sanitisation runs on the way out. Carry the
+    # key so the writer cannot compute a different one.
+    result["_cache_key"] = key
+    return result
 
 
 async def _route_raced(
@@ -1520,12 +1605,13 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     # thousandeyes-analyst's own AGENT span is drawn via W3C trace
                     # context propagated on the httpx call below.
                     set_chain_span(rt_span, input_value=req.query)
-                    result = await _route_raced(
+                    result = await _route_cached(
                         req.job_id, racing, "thousandeyes-analyst",
                         lambda lane: call_thousandeyes_analyst(
                             req.query, trace_headers=inject_trace_headers(), lane=lane,
                         ),
-                        fallback_confidence=confidence,
+                        query=req.query, start=start,
+                        fallback_confidence=confidence, span=rt_span,
                     )
                     answer     = result.get("answer", "No answer returned by thousandeyes-analyst.")
                     confidence = float(result.get("confidence", confidence))
@@ -1541,13 +1627,18 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                             hours = min(int(m.group(1)), 168)
                     rt_span.set_attribute("triage.hours", hours)
                     set_chain_span(rt_span, input_value=req.query)
-                    result = await _route_raced(
+                    result = await _route_cached(
                         req.job_id, racing, "alert-triage",
                         lambda lane: call_alert_triage(
                             req.query, time_range_hours=hours,
                             trace_headers=inject_trace_headers(), lane=lane,
                         ),
-                        fallback_confidence=confidence,
+                        # hours is parsed out of the query text but changes the
+                        # answer, so it joins the key. Otherwise "threats in the
+                        # last 2 hours" and "...last 48 hours" would collide
+                        # whenever the surrounding wording happened to match.
+                        query=f"{req.query}\x00hours={hours}", start=start,
+                        fallback_confidence=confidence, span=rt_span,
                     )
                     answer     = result.get("answer", "No answer returned by alert-triage.")
                     confidence = float(result.get("confidence", confidence))
@@ -1567,12 +1658,13 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
                     iocs = extract_iocs(req.query)
                     rt_span.set_attribute("iocs.count", len(iocs))
                     set_chain_span(rt_span, input_value=req.query)
-                    result = await _route_raced(
+                    result = await _route_cached(
                         req.job_id, racing, "athena-hunter",
                         lambda lane: call_athena_hunter(
                             req.query, iocs, trace_headers=inject_trace_headers(), lane=lane,
                         ),
-                        fallback_confidence=confidence,
+                        query=req.query, start=start,
+                        fallback_confidence=confidence, span=rt_span,
                     )
                     answer     = result.get("answer", "No answer returned by athena-hunter.")
                     confidence = float(result.get("confidence", confidence))
@@ -1612,12 +1704,33 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         # Lane metadata for the UI swap control. The winning lane's answer is the
         # one above; the store holds whichever lanes have landed so far and tells
         # the client whether to keep polling /lanes for the other.
-        winner_lane = result.get("_lane") if racing else None
-        lane_entry = _lane_store.get(req.job_id) if racing else None
+        #
+        # A cache hit reports NO lane metadata even when racing is on. No race
+        # happened, so there is no second opinion to swap to and no honest timing
+        # to show. (_lane_store is only seeded inside _route_raced, so this is
+        # already what falls out; stated explicitly because a future edit that
+        # seeds it earlier would silently start showing fabricated lane timings on
+        # cached answers.)
+        served_from_cache = bool(result.get("_cached"))
+        lanes_available = racing and not served_from_cache
+        winner_lane = result.get("_lane") if lanes_available else None
+        lane_entry = _lane_store.get(req.job_id) if lanes_available else None
         lanes_done = list(lane_entry.get("lanes", [])) if lane_entry else []
         lanes_racing = bool(lane_entry and lane_entry.get("status") == "racing")
         if winner_lane:
             span.set_attribute("lane.winner", winner_lane)
+
+        # Write-back. Deliberately AFTER sanitisation, so what is stored is what a
+        # caller may see: caching raw agent output and sanitising on read would mean
+        # a tightened redaction rule kept leaking under the old rules until every
+        # entry aged out. Skipped on a hit (nothing new) and on the error path
+        # (_store_answer drops agent_used == "error"), so one unreachable-agent blip
+        # cannot become fifteen minutes of them.
+        if not served_from_cache:
+            await _store_answer(
+                result.get("_cache_key"),
+                agent_used, answer=answer, confidence=confidence, data=data,
+            )
 
         # Fire-and-forget hints generation in background; skip for error only.
         # ("orchestrator" is always reassigned before here; refused/kill-switch cover
@@ -1637,6 +1750,65 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
             lanes=lanes_done,
             lanes_racing=lanes_racing,
         )
+
+
+# ---------------------------------------------------------------------------
+# Response cache (Redis) — repeat questions answered without re-running the agent
+# ---------------------------------------------------------------------------
+# Placed here rather than in the web-server on purpose. The key is the query text
+# alone, so a hit is served to a DIFFERENT caller than the one who populated it,
+# which is only safe once every per-caller decision has already been made. By the
+# time these helpers run inside handle_query, quarantine / restricted-range /
+# refusal / kill-switch have all returned their covers, so what is left is a
+# function of the question. The web-server can't see any of that state, so a cache
+# there would replay covers and contained sessions' answers across users.
+#
+# See agents/shared/response_cache.py for the rest of the reasoning.
+
+
+def _lane_fingerprint() -> str:
+    """Model config a cached answer was produced under.
+
+    Part of the key so that flipping LANE_RACE, or repointing the local lane at a
+    different GGUF, misses instead of serving an answer whose lane metadata names
+    a model this box no longer runs.
+    """
+    if not lane_race_enabled():
+        return "single"
+    return f"race:{llm_client.LOCAL_SQL_MODEL}/{llm_client.LOCAL_PROSE_MODEL}"
+
+
+async def _cached_answer(key: str) -> dict[str, Any] | None:
+    """Look for a finished answer under `key`. None on miss or any failure."""
+    payload = await response_cache.get(key)
+    if payload is None:
+        return None
+    # A stored entry has to carry an answer to be worth anything. Anything else is
+    # a build mismatch; treat it as a miss and let the live path overwrite it.
+    if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
+        return None
+    return payload
+
+
+async def _store_answer(
+    key: str | None, agent_used: str, *, answer: str, confidence: float, data: Any,
+) -> None:
+    """Cache a genuine answer. Never called for covers or errors.
+
+    Takes the key COMPUTED BY THE READ PATH rather than recomputing it. The
+    alert-triage branch folds the parsed `hours` window into its key, so a
+    recomputed write key could disagree with the read key and populate an entry
+    nothing would ever look up -- a cache that stores diligently and never hits.
+    """
+    if not key or agent_used == "error" or not answer.strip():
+        return
+    await response_cache.put(key, {
+        "answer": answer,
+        "confidence": confidence,
+        "data": data,
+        "agent_used": agent_used,
+        "cached_at": time.time(),
+    })
 
 
 # ---------------------------------------------------------------------------
