@@ -69,6 +69,7 @@ NOCgentic/
 │   ├── alert-triage/              # :8003 — Athena alerts triage
 │   ├── thousandeyes-analyst/      # :8004 — ThousandEyes network quality
 │   ├── athena-hunter/             # :8005 — NL→SQL hunt (primary data-lake agent)
+│   ├── deter/                     # :8006 — contained sessions; safe_pool.py is its whole data surface
 │   └── shared/                    # llm_client, athena_client, response_cache, local_models, telemetry, scrubbers
 │
 ├── nginx/                         # TLS + reverse proxy (template → nginx-ssl.conf on box)
@@ -195,10 +196,21 @@ Orchestrator routes by intent:
   refused               → silent cover + hints
 
 Guardrails run first, then the Redis response cache, then the agent:
-  quarantine / restricted / refused / kill-switch → cover (never cached)
+  quarantine (Manifold)              → deter :8006/deter, cover on any failure
+  restricted / refused / kill-switch → cover (never cached)
   cache hit  → stored answer, paced to a random 2-5s total, no lane metadata
   cache miss → agent call → sanitise → cache write
 ```
+
+`deter` is NOT a routable intent — no classification reaches it and it answers
+only sessions Manifold has quarantined. It replaces refusal-shaped containment
+with a real, on-topic answer built solely from `agents/deter/safe_pool.py`:
+author-written, aggregate-only, parameterless statements over an allowlisted set
+of tables. The caller's text picks *which* facet is read and never becomes part
+of one. Every failure path — agent down, timeout, or its own output screen
+rejecting the model's text — degrades silently to the same canned cover the
+other guardrails serve, so `_COVER_RESPONSES` stays the single copy of that
+prose. See [`docs/security/deter-agent.md`](docs/security/deter-agent.md).
 
 Lane mode decides which lanes run at all: `hybrid` (race), `cloud`, or `local`.
 `LANE_MODE` overrides `LANE_RACE`; empty derives from it. `LANE_SIDE_BY_SIDE=false`

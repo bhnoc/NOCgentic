@@ -65,6 +65,14 @@ services:
       - ALERT_TRIAGE_URL=http://alert-triage:8003
       - THOUSANDEYES_ANALYST_URL=http://thousandeyes-analyst:8004
       - ATHENA_HUNTER_URL=http://athena-hunter:8005
+      # DETER: where a quarantined session's queries go instead of a canned cover.
+      # DETER_ENABLED=false reverts that path to the cover text with no redeploy of
+      # the agent itself. The timeout is deliberately far below the 180s the
+      # specialist agents get — a contained caller waiting three minutes learns
+      # more from the wait than from any answer. See docs/security/deter-agent.md.
+      - DETER_URL=http://deter:8006
+      - DETER_ENABLED=${DETER_ENABLED:-true}
+      - DETER_TIMEOUT_SECONDS=${DETER_TIMEOUT_SECONDS:-25.0}
       # S3_REGION only. The orchestrator does not touch S3 itself; this is the
       # documented fallback for TRACE_S3_REGION in s3_span_exporter.
       #
@@ -92,6 +100,7 @@ services:
       - alert-triage
       - thousandeyes-analyst
       - athena-hunter
+      - deter
       - redis
     restart: unless-stopped
 
@@ -197,6 +206,53 @@ services:
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-athena-hunter
+      - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Answers CONTAINED sessions (Manifold quarantine) from a vetted safe data pool
+  # instead of a canned cover. Reachable ONLY from the orchestrator's quarantine
+  # branch — no intent routes here, and like every agent it is expose-only, so
+  # nothing outside the compose network can reach it directly.
+  #
+  # DETER_ATHENA_ENABLED defaults to FALSE: every facet then serves its static
+  # roll-up, which is a complete answer on its own. Turn it on to make the pool
+  # read live venue aggregates. Either way the caller's text never reaches SQL —
+  # it selects which author-written facet is read and nothing else. See
+  # agents/deter/safe_pool.py and docs/security/deter-agent.md.
+  deter:
+    build:
+      context: .
+      dockerfile: agents/deter/Dockerfile
+    expose:
+      - "8006"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-AQLight}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-not-needed}
+      # No LANE_* here on purpose: the deter path serves a single answer and
+      # reports a synthetic lane pair, so racing two models would double the LLM
+      # spend on hostile traffic for a swap surface that is already synthetic.
+      - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
+      - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
+      - DETER_ATHENA_ENABLED=${DETER_ATHENA_ENABLED:-false}
+      - DETER_WINDOW_HOURS=${DETER_WINDOW_HOURS:-24}
+      - DETER_ATHENA_TIMEOUT=${DETER_ATHENA_TIMEOUT:-12.0}
+      - ATHENA_DATABASE=${ATHENA_DATABASE:-blackhatnoc_glue}
+      - ATHENA_WORKGROUP=${ATHENA_WORKGROUP:-blackhatnoc-usa2026}
+      - ATHENA_REGION=${ATHENA_REGION:-us-east-2}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhatnoc}
+      - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
+      - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
+      - OTEL_SERVICE_NAME=bhnocgentic-deter
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
     extra_hosts:
       - "host.docker.internal:host-gateway"
