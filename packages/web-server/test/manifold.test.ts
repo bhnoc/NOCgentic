@@ -5,6 +5,7 @@ import {
   markSeen,
   resetSeenFindings,
   evictStaleFindings,
+  getSeenFindingsSize,
   type ManifoldEnvelope,
 } from '../src/api/manifold';
 
@@ -157,5 +158,13 @@ describe('idempotency on data.id', () => {
     markSeen('recent', t0);
     evictStaleFindings(t0 + 60 * 1000);
     expect(markSeen('recent', t0 + 60 * 1000)).toBe(false);
+  });
+
+  it('enforces DEDUP_MAX so the map never settles above the cap', () => {
+    const t0 = Date.now();
+    for (let i = 0; i < 10005; i++) {
+      markSeen(`finding-cap-${i}`, t0);
+    }
+    expect(getSeenFindingsSize()).toBeLessThanOrEqual(10000);
   });
 });
