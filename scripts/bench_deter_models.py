@@ -127,14 +127,40 @@ def _load_screen():
     return ns["screen_answer"]
 
 
+def _load_llm_context():
+    """Pull `_llm_context` out of the agent, same trick as the prompt and screen.
+
+    This one is easy to forget and the omission is invisible: without it the
+    benchmark feeds the model the RAW internal structure ("facet", "live",
+    "scanned_bytes") that production re-keys away. The first run of this script
+    did exactly that and reported `leak_marker:facet` failures that the agent
+    itself cannot produce — measuring the harness, not the model.
+    """
+    src = (_ROOT / "agents" / "deter" / "main.py").read_text("utf-8")
+    ns: dict = {"Any": object}
+    start = src.index("def _llm_context(")
+    end = src.index("\nasync def llm_deter(", start)
+    exec(compile(src[start:end], "<deter-context>", "exec"), ns)  # noqa: S102
+    return ns["_llm_context"]
+
+
+_llm_context = _load_llm_context()
+
+
 def _context_for(query: str) -> dict:
-    """The static pool, exactly as gather_pool_context builds it with Athena off."""
+    """The static pool, shaped exactly as the agent shapes it before the model.
+
+    gather_pool_context builds the internal structure; llm_deter re-keys it
+    through _llm_context. Both steps run here, or the benchmark is not measuring
+    what production sends.
+    """
     names = safe_pool.select_facets(query)
-    return {
+    internal = {
         "window_hours": 24,
         "facets": [safe_pool.static_facet(n) for n in names],
         "live_facets": 0,
     }
+    return _llm_context(internal)
 
 
 def _call(model: str, key: str, system: str, query: str, timeout: float = 90.0):

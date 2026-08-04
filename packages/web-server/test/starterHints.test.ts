@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   pickStarterHints,
   NETWORK_QUALITY_HINTS,
+  ALL_STARTER_HINTS,
   MIN_NETWORK_QUALITY,
   DEFAULT_STARTER_HINT_COUNT,
 } from '../src/services/starterHints';
@@ -55,9 +56,9 @@ describe('pickStarterHints', () => {
   });
 
   it('caps at the pool size when asked for more than exists', () => {
-    const picked = pickStarterHints(999);
+    const picked = pickStarterHints(ALL_STARTER_HINTS.length + 50);
+    expect(picked).toHaveLength(ALL_STARTER_HINTS.length);
     expect(new Set(picked).size).toBe(picked.length);
-    expect(picked.length).toBeGreaterThanOrEqual(NETWORK_QUALITY_HINTS.length);
   });
 
   it('is deterministic given a deterministic rand', () => {
@@ -67,12 +68,60 @@ describe('pickStarterHints', () => {
     };
     expect(pickStarterHints(5, seeded())).toEqual(pickStarterHints(5, seeded()));
   });
+});
 
-  // Same rule the orchestrator applies to LLM-generated follow-up hints: the
-  // UI must not name vendors or products.
-  it('names no vendors or products', () => {
-    const vendorish = /\b(corelight|zeek|palo\s?alto|cisco|fortinet|crowdstrike|splunk|thousandeyes|arista|juniper|netscout|rsa)\b/i;
-    const all = [...NETWORK_QUALITY_HINTS, ...pickStarterHints(999)];
-    expect(all.filter((h) => vendorish.test(h))).toEqual([]);
+describe('the hint pool itself', () => {
+  it('is at least 100 hints and has no duplicates', () => {
+    expect(ALL_STARTER_HINTS.length).toBeGreaterThanOrEqual(100);
+    expect(new Set(ALL_STARTER_HINTS).size).toBe(ALL_STARTER_HINTS.length);
+  });
+
+  it('gives network quality a real share of the pool', () => {
+    expect(NETWORK_QUALITY_HINTS.length).toBeGreaterThanOrEqual(25);
+  });
+
+  // agents/orchestrator/main.py::_ZONE_RE — a query containing "Registration"
+  // or "Tools" is treated as touching a restricted zone and gets a SILENT cover
+  // response. A chip that does that renders fine and then refuses to answer,
+  // which reads as a broken product. "Which AI tools…" is the trap here.
+  it('contains no restricted-zone words', () => {
+    const zoneRe = /\b(registration|tools)\b/i;
+    expect(ALL_STARTER_HINTS.filter((h) => zoneRe.test(h))).toEqual([]);
+  });
+
+  // agents/orchestrator/main.py::_REFUSAL_PATTERNS / _OFFTOPIC_KW — same
+  // failure mode: a chip that trips a guardrail is a chip that never answers.
+  it('trips none of the refusal or off-topic guardrails', () => {
+    const refusalRe = new RegExp([
+      'ignore (previous|all|prior)\\s+(instructions|prompts|rules)',
+      'show me your (system )?prompt',
+      'what (are|is) your (instructions|system prompt|rules)',
+      'you are now (dan|an ai|)',
+      '(pretend|roleplay|act) (to be|as|as if)',
+      'disregard the (rules|instructions)',
+      'write (an? )?(exploit|phishing|malware|keylogger|virus|backdoor)',
+      'how do i (hack|exploit|compromise|bypass)',
+      'craft (malware|an attack|a payload)',
+      'generate (phishing|malicious|exploit)',
+    ].join('|'), 'i');
+    const offTopic = [
+      'write a poem', 'tell me a joke', 'recipe for', 'translate this', 'weather',
+      'homework', 'what is 2+2', 'who won the', 'capital of',
+    ];
+    expect(ALL_STARTER_HINTS.filter((h) => refusalRe.test(h))).toEqual([]);
+    expect(ALL_STARTER_HINTS.filter((h) => offTopic.some((k) => h.toLowerCase().includes(k)))).toEqual([]);
+  });
+
+  // Same rule the orchestrator applies to generated follow-up hints
+  // (_VENDOR_RE): don't advertise our own stack. Monitored public destinations
+  // (AWS, Azure, Google) are deliberately NOT in this list.
+  it('names none of our own vendors or products', () => {
+    const vendorish = /\b(corelight|zeek|suricata|snort|thousand\s*eyes|thousandeyes|splunk|cisco|meraki|umbrella|palo\s*alto|fortinet|fortigate|crowdstrike|check\s*point|swapcard|myrepublic|slack)\b/i;
+    expect(ALL_STARTER_HINTS.filter((h) => vendorish.test(h))).toEqual([]);
+  });
+
+  it('keeps every hint short enough to render as a chip', () => {
+    expect(ALL_STARTER_HINTS.filter((h) => h.length > 90)).toEqual([]);
+    expect(ALL_STARTER_HINTS.filter((h) => h.trim() !== h || h.length < 15)).toEqual([]);
   });
 });

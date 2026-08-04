@@ -103,11 +103,27 @@ DETER_TIMEOUT_SECONDS    = float(os.getenv("DETER_TIMEOUT_SECONDS", "25.0"))
 # TIME is a side channel that needs no interpretation, so anything quicker than
 # this window is padded out to a target drawn from it.
 #
-# Tune these to the latency the specialist agents actually show on the box:
-# the floor exists to stop a deterred answer arriving suspiciously EARLY, and
-# "early" is defined by what everything else on the platform does.
-DETER_PACE_MIN_SECONDS   = float(os.getenv("DETER_PACE_MIN_SECONDS", "2.0"))
-DETER_PACE_MAX_SECONDS   = float(os.getenv("DETER_PACE_MAX_SECONDS", "4.0"))
+# THE WINDOW IS SET FROM MEASUREMENT, NOT TASTE.
+# A deter response reports agent_used="athena-hunter", so it has to land where
+# athena-hunter lands. Measured off this box's orchestrator logs, 2026-08-04:
+#
+#     agent                  n     p50      p95      min      max
+#     athena-hunter         99   17.02s   33.94s    2.17s   44.80s
+#     alert-triage          37   32.78s   53.08s    2.31s   58.34s
+#     thousandeyes-analyst  59   10.84s   18.76s    3.19s   26.57s
+#
+# and the deter agent's own p95 is ~1.0s (scripts/bench_deter_models.py), so the
+# padding does essentially all of the work.
+#
+# The first cut of this was 2-4s, which is 4-8x FASTER than the agent it claims
+# to be. 2.17s is inside athena-hunter's observed range, so a single fast answer
+# proves nothing — but landing in that range on EVERY turn, when real answers
+# scatter across 2-45s, is a stronger signal than the millisecond cover it
+# replaced. [8, 22] brackets the p50 and sits in the bulk of the distribution.
+#
+# Re-measure before changing these. The command is in docs/security/deter-agent.md.
+DETER_PACE_MIN_SECONDS   = float(os.getenv("DETER_PACE_MIN_SECONDS", "8.0"))
+DETER_PACE_MAX_SECONDS   = float(os.getenv("DETER_PACE_MAX_SECONDS", "22.0"))
 ADMIN_BEARER_TOKEN       = os.getenv("ADMIN_BEARER_TOKEN", "")
 
 MAX_QUERY_LEN = 5000
@@ -961,6 +977,19 @@ async def set_athena_kill(body: KillSwitchBody, authorization: str | None = Head
     _require_admin(authorization)
     _kill_switches["athena_hunter"] = bool(body.killed)
     logger.warning("ADMIN kill-switch: athena_hunter=%s", _kill_switches["athena_hunter"])
+    # Surface the flip on the audit swim lane's KILL SWITCH column. Both
+    # directions are recorded: turning the switch OFF is as operationally
+    # important as turning it on, and a lane that only shows one half of the
+    # pair reads as "still killed" long after someone restored service.
+    with get_tracer().start_as_current_span("killswitch.athena_hunter") as span:
+        span.set_attribute("killswitch.kind", "agent_kill")
+        span.set_attribute("killswitch.agent", "athena_hunter")
+        span.set_attribute("killswitch.killed", bool(body.killed))
+        set_agent_span(
+            span,
+            input_value=("athena_hunter KILLED" if body.killed else "athena_hunter restored"),
+            name="KILL SWITCH",
+        )
     return dict(_kill_switches)
 
 
@@ -1238,6 +1267,25 @@ async def add_quarantine(
         )
         return {"quarantined": False, "reason": "unresolved_trace",
                 "trace_id": normalize_trace_id(body.trace_id) or None}
+    # Emit spans so the containment appears on the audit swim lane. Manifold's
+    # webhook lands on the WEB-SERVER, which is not in the OTEL span stream the
+    # dashboard reads -- so without this the single most consequential event in
+    # the system is invisible on the board. The span NAME is what routes it into
+    # the manifold-webhook and KILL SWITCH columns (see CONTROL_LANES in the
+    # audit-monitor UI); the service name is unchanged.
+    _tracer = get_tracer()
+    with _tracer.start_as_current_span("manifold.webhook.quarantine") as wspan:
+        wspan.set_attribute("quarantine.session_id", session_id)
+        wspan.set_attribute("quarantine.trace_id", normalize_trace_id(body.trace_id) or "-")
+        wspan.set_attribute("quarantine.reason", (body.reason or "-")[:300])
+        set_agent_span(wspan, input_value=(body.reason or "manifold threat"),
+                       name="manifold-webhook")
+    with _tracer.start_as_current_span("killswitch.quarantine_added") as kspan:
+        kspan.set_attribute("killswitch.kind", "session_quarantine")
+        kspan.set_attribute("killswitch.session_id", session_id)
+        set_agent_span(kspan, input_value=f"session {session_id} contained",
+                       name="KILL SWITCH")
+
     expires_at = quarantine_session(
         session_id, ttl_seconds=body.ttl_seconds, reason=body.reason,
     )

@@ -292,6 +292,80 @@
     flex-direction: column;
     gap: 5px;
   }
+  /* ---- Global search --------------------------------------------------- */
+  .search-wrap { display: inline-flex; align-items: center; gap: 6px; }
+  #search-box {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-bright);
+    color: var(--text, #d8e6f5);
+    font-family: inherit; font-size: 11px;
+    padding: 3px 8px; width: 190px; outline: none;
+  }
+  #search-box:focus { border-color: var(--frost, #00d4ff); }
+  #search-box::placeholder { color: var(--muted, #6d85a8); }
+  #search-count { font-size: 10px; color: var(--muted, #6d85a8); min-width: 62px; letter-spacing: 0.04em; }
+  #search-count.none { color: var(--red, #ff3050); }
+
+  /* Highlight, never filter: removing non-matching cards would destroy the
+     ordering and the neighbouring context that make a swim lane readable. */
+  .card.search-miss { opacity: 0.18; }
+  .card.search-hit  { outline: 1px solid var(--frost, #00d4ff); }
+  .card.search-current {
+    outline: 2px solid var(--yellow, #ffd000);
+    background: rgba(255,208,0,0.10) !important;
+  }
+  .lane.lane-nohit .lane-head { opacity: 0.35; }
+
+  /* ---- Control-plane lanes -------------------------------------------- */
+  /* The kill-switch lane is RED throughout: header, border and every card.
+     It is the one column where a single entry means someone was contained or
+     an agent was cut off, so it must read as an alarm from across the room
+     rather than as another card in a wall of cards. Empty is the normal and
+     healthy state — colour costs nothing until something lands. */
+  .lane[data-svc="KILL SWITCH"] {
+    border-color: var(--red, #ff3050);
+    box-shadow: inset 0 0 0 1px rgba(255,48,80,0.35);
+  }
+  .lane[data-svc="KILL SWITCH"] .lane-head {
+    background: rgba(255,48,80,0.16);
+    border-bottom-color: var(--red, #ff3050);
+  }
+  .lane[data-svc="KILL SWITCH"] .lane-name {
+    color: var(--red, #ff3050);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+  .lane[data-svc="KILL SWITCH"] .lane-count {
+    background: var(--red, #ff3050);
+    color: #0b0b0f;
+    font-weight: 700;
+  }
+  .lane[data-svc="KILL SWITCH"] .card {
+    border-left-color: var(--red, #ff3050) !important;
+    background: rgba(255,48,80,0.07);
+  }
+  .lane[data-svc="KILL SWITCH"] .card .kind-badge {
+    background: rgba(255,48,80,0.2);
+    color: var(--red, #ff3050);
+  }
+  /* A non-empty kill-switch lane pulses so it is noticed on a wall display that
+     nobody is actively watching. prefers-reduced-motion turns it off. */
+  .lane[data-svc="KILL SWITCH"].has-events .lane-head { animation: ks-pulse 1.6s ease-in-out infinite; }
+  @keyframes ks-pulse {
+    0%, 100% { background: rgba(255,48,80,0.16); }
+    50%      { background: rgba(255,48,80,0.38); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lane[data-svc="KILL SWITCH"].has-events .lane-head { animation: none; }
+  }
+
+  .lane[data-svc="manifold-webhook"] .lane-head {
+    background: rgba(192,132,252,0.14);
+    border-bottom-color: var(--purple, #c084fc);
+  }
+  .lane[data-svc="manifold-webhook"] .lane-name { color: var(--purple, #c084fc); font-weight: 600; }
+  .lane[data-svc="manifold-webhook"] .card { border-left-color: var(--purple, #c084fc) !important; }
+
   .lane-body::-webkit-scrollbar { width: 4px; }
   .lane-body::-webkit-scrollbar-thumb { background: var(--border-bright); }
 
@@ -477,6 +551,12 @@
       <span class="filter">
         <input type="checkbox" id="f-pause" /><label for="f-pause">PAUSE</label>
       </span>
+      <span class="search-wrap">
+        <input id="search-box" type="search" autocomplete="off" spellcheck="false"
+               placeholder="search all lanes…"
+               title="Search every visible lane. Enter jumps to the next match, Shift+Enter the previous, Esc clears." />
+        <span id="search-count"></span>
+      </span>
       <span class="status-dot" id="dot" title="stream status"></span>
       <button id="settings-open" class="gear-btn" title="Model settings: cloud, local or both">⚙</button>
       <button id="kill-athena" class="kill-btn" title="Emergency: stop routing user queries to the Athena agent. Users will see a generic 'nothing notable' response instead.">KILL ATHENA</button>
@@ -544,12 +624,35 @@
   </div>
 
 <script>
+  // Lane order, left to right. The two CONTROL lanes sit on the right so the
+  // agent lanes stay where operators are used to finding them.
   const FIXED_SERVICES = [
     "orchestrator", "alert-triage", "athena-hunter", "thousandeyes-analyst",
+    "deter",
+    "manifold-webhook", "KILL SWITCH",
   ];
   // Services we never want to display — they still emit spans but the dashboard
   // ignores them so the lanes split the viewport evenly.
   const HIDDEN_SERVICES = new Set(["threat-hunter"]);
+
+  // Lanes that are NOT an OTEL service. Manifold's webhook and the kill
+  // switch/quarantine path are control-plane events, not agent work, and
+  // burying them inside the orchestrator lane is how they went unwatched: they
+  // are rare, they are the highest-consequence thing on the board, and they
+  // scroll away in seconds among ordinary spans. Routed by SPAN NAME so no
+  // change to the telemetry service naming is needed.
+  const CONTROL_LANES = [
+    { lane: "manifold-webhook", match: (n) => n.startsWith("manifold.webhook") },
+    { lane: "KILL SWITCH",      match: (n) => n.startsWith("killswitch.") || n.startsWith("quarantine.") },
+  ];
+  const ALWAYS_SHOWN = new Set(["manifold-webhook", "KILL SWITCH"]);
+
+  /** Which column an event belongs in. */
+  function laneFor(event) {
+    const name = String(event && event.name || "");
+    for (const c of CONTROL_LANES) if (c.match(name)) return c.lane;
+    return (event && event.service) || "unknown";
+  }
   const MAX_CARDS_PER_LANE = 80;
 
   const state = {
@@ -581,6 +684,14 @@
     state.lanes.set(svc, laneObj);
     reorderLanes();
     return laneObj;
+  }
+
+  // Create the control lanes up front. A lane that only appears once it has an
+  // event is useless for watching: an empty KILL SWITCH column is a live
+  // statement that nothing has been contained, whereas a missing one is
+  // indistinguishable from a dashboard that would not show it anyway.
+  function ensureControlLanes() {
+    for (const c of CONTROL_LANES) ensureLane(c.lane);
   }
 
   function reorderLanes() {
@@ -697,9 +808,12 @@
     if (state.filters.pause) return;
     if (!passes(event)) return;
     if (event.span_id && state.byId.has(event.span_id)) return;
-    if (HIDDEN_SERVICES.has(event.service)) return;
+    const laneName = laneFor(event);
+    // A control-plane event is never hidden, even if the service that emitted
+    // it is on the hidden list — the whole point is that it cannot be missed.
+    if (!ALWAYS_SHOWN.has(laneName) && HIDDEN_SERVICES.has(event.service)) return;
 
-    const lane = ensureLane(event.service || 'unknown');
+    const lane = ensureLane(laneName);
     if (!lane) return;  // hidden service
     const card = document.createElement('div');
     card.className = `card kind-${event.kind || 'span'}`;
@@ -737,6 +851,11 @@
     while (lane.body.children.length > MAX_CARDS_PER_LANE) lane.body.removeChild(lane.body.lastChild);
     lane.count++;
     lane.countEl.textContent = lane.count;
+    // Drives the KILL SWITCH pulse. Set once, never cleared: a containment that
+    // happened an hour ago still happened, and silently un-alarming the lane
+    // would rewrite history on the wall display.
+    if (lane.count > 0) lane.el.classList.add('has-events');
+    applySearchToCard(card);
 
     if (event.span_id) state.byId.set(event.span_id, event);
 
@@ -839,6 +958,25 @@
   document.getElementById('d-close').addEventListener('click', () =>
     document.getElementById('drawer').classList.remove('open'));
 
+  // ESC closes the detail drawer. Reviewing a burst means opening and closing
+  // dozens of cards, and reaching for the close button each time is the slow
+  // part. Settings takes priority when both are open so ESC never skips past
+  // the thing actually on top.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const settings = document.getElementById('settings-back');
+    if (settings && settings.classList.contains('open')) {
+      settings.classList.remove('open');
+      e.preventDefault();
+      return;
+    }
+    const drawer = document.getElementById('drawer');
+    if (drawer && drawer.classList.contains('open')) {
+      drawer.classList.remove('open');
+      e.preventDefault();
+    }
+  });
+
   for (const id of ['llm','agent','athena','tool','http','span','pause']) {
     const el = document.getElementById('f-' + id);
     el.addEventListener('change', () => { state.filters[id] = el.checked; });
@@ -864,6 +1002,75 @@
       try { addCard(JSON.parse(ev.data)); } catch (_) {}
     });
   }
+  // ---- Global search across every visible lane --------------------------
+  // Highlights rather than filters. Filtering a swim lane destroys the thing it
+  // is for: you lose which lane the hit was in and what ran either side of it.
+  // So matches are marked, non-matches dimmed, lanes with no hit greyed, and
+  // Enter walks the hits in time order across all columns.
+  const search = { term: '', hits: [], idx: -1 };
+
+  function cardText(card) {
+    if (!card.__searchText) card.__searchText = (card.textContent || '').toLowerCase();
+    return card.__searchText;
+  }
+
+  function applySearchToCard(card) {
+    if (!search.term) { card.classList.remove('search-hit', 'search-miss'); return; }
+    const hit = cardText(card).includes(search.term);
+    card.classList.toggle('search-hit', hit);
+    card.classList.toggle('search-miss', !hit);
+  }
+
+  function runSearch(term) {
+    search.term = String(term || '').trim().toLowerCase();
+    search.hits = [];
+    search.idx = -1;
+    for (const [, lane] of state.lanes) {
+      let laneHits = 0;
+      for (const card of lane.body.children) {
+        applySearchToCard(card);
+        if (search.term && card.classList.contains('search-hit')) { laneHits++; search.hits.push(card); }
+      }
+      lane.el.classList.toggle('lane-nohit', Boolean(search.term) && laneHits === 0);
+    }
+    const countEl = document.getElementById('search-count');
+    if (countEl) {
+      countEl.textContent = !search.term ? '' :
+        (search.hits.length ? `${search.hits.length} match${search.hits.length === 1 ? '' : 'es'}` : 'no matches');
+      countEl.classList.toggle('none', Boolean(search.term) && !search.hits.length);
+    }
+  }
+
+  function jumpToHit(step) {
+    if (!search.hits.length) return;
+    if (search.idx >= 0 && search.hits[search.idx]) search.hits[search.idx].classList.remove('search-current');
+    search.idx = (search.idx + step + search.hits.length) % search.hits.length;
+    const card = search.hits[search.idx];
+    card.classList.add('search-current');
+    card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const countEl = document.getElementById('search-count');
+    if (countEl) countEl.textContent = `${search.idx + 1} / ${search.hits.length}`;
+  }
+
+  const searchBox = document.getElementById('search-box');
+  if (searchBox) {
+    let t;
+    searchBox.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => runSearch(searchBox.value), 120);
+    });
+    searchBox.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); jumpToHit(e.shiftKey ? -1 : 1); }
+      // ESC clears the search first; a second press falls through to the
+      // drawer handler, so one key does the obvious thing at each depth.
+      if (e.key === 'Escape' && searchBox.value) {
+        e.preventDefault(); e.stopPropagation();
+        searchBox.value = ''; runSearch('');
+      }
+    });
+  }
+
+  ensureControlLanes();
   connect();
 
   // ========== Kill switch ==========

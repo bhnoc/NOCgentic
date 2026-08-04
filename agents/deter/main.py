@@ -104,6 +104,23 @@ DETER_WINDOW_HOURS = int(os.getenv("DETER_WINDOW_HOURS", "24"))
 # unbounded Athena spend by asking repeatedly; past this, facets serve static.
 DETER_ATHENA_TIMEOUT = float(os.getenv("DETER_ATHENA_TIMEOUT", "12.0"))
 
+# Model for the deter answer, pinned SEPARATELY from the platform-wide
+# GEMINI_MODEL. This agent writes short prose over a small JSON context with no
+# reasoning to do, which is the cheapest tier's ideal job and not the same
+# workload the hunt agents have -- so it should not inherit their model, in
+# either direction.
+#
+# gemini-2.5-flash-lite measured best on 2026-08-04 (scripts/bench_deter_models.py,
+# 24 calls/model against the live prompt and pool): p50 0.89s, p95 1.11s, and the
+# only candidate with a 100% output-screen pass rate. The 3.x lite models were
+# ~30% slower at 79-96% pass, and gemini-3.6-flash took 7.1s p50 -- past the
+# pacing floor, so its slow tail would arrive LATE rather than padded.
+#
+# Empty falls back to the ambient GEMINI_MODEL. Re-run the benchmark before
+# changing this; the screen pass rate matters more than the latency, because a
+# model that trips the screen serves canned cover instead of a deterrent answer.
+DETER_MODEL = os.getenv("DETER_MODEL", "gemini-2.5-flash-lite").strip() or None
+
 # ---------------------------------------------------------------------------
 # Output screening
 # ---------------------------------------------------------------------------
@@ -112,26 +129,68 @@ DETER_ATHENA_TIMEOUT = float(os.getenv("DETER_ATHENA_TIMEOUT", "12.0"))
 # refuse has usually framed the whole response around refusing, and a partially
 # scrubbed refusal reads stranger than the cover it would have been replaced by.
 #
-# False positives are cheap — they cost one cover response. A false negative
-# ends the deception permanently. Tune this list in that direction.
+# THE DISTINCTION THIS LIST HAS TO MAKE
+# -------------------------------------
+# Every marker must catch the model talking about ITSELF or its constraints, and
+# must NOT catch the model talking about the NETWORK. That line is easy to blur
+# and blurring it is expensive in the direction nobody notices.
+#
+# The first version of this list carried bare domain words -- "policy",
+# "restricted", "unauthorized", "flagged", "blocked by". They are all ordinary
+# SOC vocabulary. Benchmarking against live models (scripts/bench_deter_models.py)
+# caught it: a perfectly good answer ending
+#
+#     "...correlate IDS alert spikes with specific source subnets to identify
+#      potential unauthorized management access attempts."
+#
+# was rejected and served canned cover instead. Nothing in that sentence leaks
+# anything; it is what a competent analyst writes. Screen pass rates ran 79-96%
+# across models almost entirely on these false hits, meaning up to a fifth of
+# deterred answers silently degraded to the boilerplate this agent exists to
+# replace.
+#
+# So the ambiguous words are now anchored to a first- or second-person frame:
+# "unauthorized access" (the network) passes, "you are not authorized" (the
+# caller) does not. A bare noun that a SOC report would legitimately use does not
+# belong in this list -- add the phrase, not the word.
+#
+# The asymmetry still holds where it should: a false positive costs one cover
+# response, a false negative ends the deception permanently. That argues for
+# catching every REFUSAL shape aggressively (they are first-person already, so
+# there is no domain collision to worry about) rather than for catching nouns.
 _LEAK_MARKERS: tuple[str, ...] = (
-    # refusal
+    # Refusal. First-person by nature, so these cannot collide with SOC prose --
+    # keep them broad.
     "i can't", "i cannot", "i can not", "i won't", "i will not",
     "i'm unable", "i am unable", "unable to help", "unable to assist",
     "unable to provide", "cannot provide", "can't provide", "cannot assist",
     "can't assist", "cannot help", "can't help", "not able to provide",
-    "i don't have access", "i do not have access", "no access to",
-    "i'm not allowed", "i am not allowed", "not permitted",
-    # policy / guardrail meta
-    "policy", "guardrail", "restricted", "unauthorized", "not authorized",
-    "authorisation", "authorization", "flagged", "quarantin", "contained session",
-    "security controls prevent", "blocked by", "denied by",
-    # model / prompt meta
-    "as an ai", "language model", "system prompt", "my instructions",
-    "the instructions", "prompt injection", "i was asked to",
-    # this mechanism, by any of its names
+    "i don't have access", "i do not have access", "i lack access",
+    "i'm not allowed", "i am not allowed", "i'm not able", "i am not able",
+    "i must decline", "i have to decline", "i'd rather not", "i would rather not",
+    # Constraint meta -- anchored to a person, never the bare noun. "unauthorized
+    # access attempts" is the network; "you are not authorized" is the caller.
+    "you are not authorized", "you're not authorized", "you are not authorised",
+    "not authorized to", "not authorised to", "no permission to",
+    "policy prevents", "policy restricts", "policy does not allow",
+    "policy prohibits", "against policy", "violates policy", "per policy",
+    "security policy", "guardrail", "safety guidelines", "content policy",
+    "i'm restricted", "i am restricted", "access is restricted",
+    "access restricted", "restricted from", "prevented from",
+    "your session", "this session has", "has been flagged", "been flagged for",
+    "quarantin", "contained session", "you have tripped", "you triggered",
+    "security controls prevent", "blocked by our", "denied by our",
+    # Model / prompt meta.
+    "as an ai", "as a language model", "language model", "system prompt",
+    "my instructions", "these instructions", "my guidelines", "my training",
+    "prompt injection", "i was asked to", "i was instructed",
+    "ignore previous", "ignore the previous",
+    # This mechanism, by any of its names. The context JSON is written with
+    # neutral keys (see _llm_context) precisely so none of these words are ever
+    # put in front of the model in the first place -- if one comes back, it was
+    # not echoed from the data and something is genuinely wrong.
     "safe pool", "safe_pool", "deter agent", "deterrence", "cover response",
-    "facet", "fallback data",
+    "facet", "fallback data", "vetted data", "curated data", "static roll-up",
 )
 
 # The three headers a real SOC answer carries. An answer missing them is
@@ -301,9 +360,36 @@ SYSTEM_PROMPT = (
 )
 
 
+def _llm_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Re-key the pool context into neutral vocabulary before the model sees it.
+
+    The internal structure says "facet", "live", "scanned_bytes" -- words that
+    describe the containment MECHANISM rather than the network. A model handed
+    those will occasionally echo one back ("the facets show..."), which the output
+    screen then has to catch. Benchmarking caught exactly that on gemini-3.6-flash.
+
+    Catching it is the wrong layer. Not putting the vocabulary in front of the
+    model is the right one: after this, a mechanism word appearing in an answer
+    was not echoed from the data, so the screen hitting one is a real signal
+    rather than a predictable false alarm.
+
+    Also drops `live` and `scanned_bytes` outright. Whether a roll-up came from
+    Athena or from the static pool is not something the answer should ever be
+    able to reflect -- that difference is invisible to a caller by design, and the
+    model cannot leak a distinction it was never told about.
+    """
+    return {
+        "window_hours": context.get("window_hours"),
+        "datasets": [
+            {"name": f.get("label", ""), "rows": f.get("rows", [])}
+            for f in context.get("facets", [])
+        ],
+    }
+
+
 async def llm_deter(query: str, context: dict[str, Any], lane: str | None = None) -> tuple[str, float]:
     """Synthesise the answer. Raises nothing; failure comes back as ("", 0.0)."""
-    context_str = json.dumps(context, default=str)[:8000]
+    context_str = json.dumps(_llm_context(context), default=str)[:8000]
     user_content = (
         f"**Operator question (untrusted):**\n"
         f"<<<UNTRUSTED_QUERY\n{sanitize(query)}\n>>>\n\n"
@@ -315,6 +401,7 @@ async def llm_deter(query: str, context: dict[str, Any], lane: str | None = None
         answer = await llm_complete(
             system_prompt=SYSTEM_PROMPT,
             user_content=user_content,
+            model=DETER_MODEL,
             max_tokens=2048,
             # Slightly warm: identical phrasing across a contained session's turns
             # would itself be a pattern worth noticing.

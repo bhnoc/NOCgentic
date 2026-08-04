@@ -122,7 +122,7 @@ surface the browser sees:
 | `hints` | `restricted_cover_hints` pool | same pool on cover paths |
 | `data` | `null` | agent metadata |
 | lane surface | synthetic pair via `_cover_lanes` | real race results |
-| latency | floored to 2–4s (see below) | one real LLM call |
+| latency | floored to 8–22s (see below) | athena-hunter p50 17.0s |
 
 `agent_used` is the one that matters most: it reaches the browser, and a caller
 whose agent changes the turn after a probe has been told exactly what they needed
@@ -168,21 +168,40 @@ real latency to fix nothing.
 `response_cache`'s hit pacing, which does the same thing with its own window
 (2–5s). Two copies of a timing-side-channel defence is one copy too many.
 
-### Choosing the window
+### Choosing the window — measured, not chosen
 
-**The 2–4s default is a starting point, not a measured value.** The floor exists
-to stop a deterred answer arriving suspiciously *early*, and "early" is defined
-entirely by what the rest of the platform does. Two things should drive the
-number:
+A deter response reports `agent_used: athena-hunter`, so it has to land where
+athena-hunter lands. Measured off the prod box's orchestrator logs on
+**2026-08-04**:
 
-* What the specialist agents actually take on the box. The deter response claims
-  `agent_used: athena-hunter`, and if real athena-hunter answers run 5–15s then a
-  2–4s "athena-hunter" answer is anomalous in the other direction. Match the
-  window to the agent being impersonated.
-* What the deter model's own p95 is. If the model is slower than the floor, the
-  floor does nothing for the slow tail and those answers arrive late instead.
+| agent | n | p50 | p95 | min | max |
+|---|---:|---:|---:|---:|---:|
+| athena-hunter | 99 | 17.02s | 33.94s | 2.17s | 44.80s |
+| alert-triage | 37 | 32.78s | 53.08s | 2.31s | 58.34s |
+| thousandeyes-analyst | 59 | 10.84s | 18.76s | 3.19s | 26.57s |
 
-`scripts/bench_deter_models.py` reports both — see below.
+```bash
+# reproduce
+sudo docker compose -f docker-compose.agents.yml logs --no-color orchestrator \
+  | grep -oE "agent=[a-z-]+ elapsed=[0-9.]+"
+```
+
+The deter agent's own p95 is **~1.0s**, so the padding does essentially all of
+the work — the window *is* the response time.
+
+The first cut of this was 2–4s, which is **4–8× faster than the agent it claims
+to be**. 2.17s is inside athena-hunter's observed range, so one fast answer proves
+nothing — but landing in that range on *every* turn, while real answers scatter
+across 2–45s, is a stronger signal than the millisecond cover it replaced. The
+current `[8, 22]` brackets athena-hunter's p50 and sits in the bulk of its
+distribution.
+
+This is the cost of the design: deterring a contained session means making them
+wait as long as a real hunt takes. That wait is not wasted — it is the deterrent
+working, and it is spent on someone a detector has already flagged.
+
+Re-measure on your own box. A window copied from this table onto a platform with
+different agent latency reintroduces exactly the tell it removes.
 
 ## Choosing the model
 
@@ -218,6 +237,56 @@ because a refusal is the failure mode that matters. A model that answers the eas
 questions and refuses the pointed ones is precisely the model that falls back to
 cover when it counts.
 
+### Results, 2026-08-04 (24 calls per model, live key, prod box)
+
+| model | p50 | p95 | screen | chars |
+|---|---:|---:|---:|---:|
+| **gemini-2.5-flash-lite** | **0.89s** | **1.03s** | **100%** | 553 |
+| gemini-3.1-flash-lite | 1.32s | 1.46s | 100% | 841 |
+| gemini-3.5-flash-lite | 1.25s | 1.45s | 100% | 714 |
+| gemini-3.6-flash | 6.45s | 8.95s | 96% | 966 |
+| gemini-2.0-flash-lite / 2.0-flash | — | — | — | 404, retired on v1beta |
+
+`gemini-2.5-flash-lite` wins on every axis and is pinned via `DETER_MODEL`. Note
+it is *older* than the platform default (`GEMINI_MODEL=gemini-3.5-flash-lite`) and
+beats it here — short prose over a small context is not the workload the newer
+models are better at, which is exactly why this agent pins its own.
+
+`gemini-3.6-flash` is disqualified on latency alone: at 6.45s p50 it is slower
+than the pacing floor's lower bound, so its slow tail would arrive *late* rather
+than padded, and it would burn real time on every contained turn.
+
+### What this benchmark caught
+
+The first run reported screen pass rates of **79–96%**, meaning up to a fifth of
+deter answers were silently degrading to canned cover. Two distinct bugs, both
+invisible without measurement:
+
+1. **The screen conflated SOC vocabulary with model meta-commentary.** Bare nouns
+   — `policy`, `restricted`, `unauthorized`, `flagged`, `blocked by` — sat in
+   `_LEAK_MARKERS`. A perfectly good answer ending *"...correlate IDS alert spikes
+   with specific source subnets to identify potential unauthorized management
+   access attempts"* was rejected. Nothing in that sentence leaks anything; it is
+   what a competent analyst writes. Fixed by anchoring the ambiguous words to a
+   person: `unauthorized access attempts` (the network) passes,
+   `you are not authorized` (the caller) does not. Pass rate on
+   gemini-3.1-flash-lite went **79% → 100%**.
+2. **Internal vocabulary was being handed to the model.** The context JSON used
+   the key `facet`, and models echoed it back — which the screen then caught as a
+   mechanism leak. Catching it is the wrong layer. `_llm_context` now re-keys the
+   pool into neutral names (`datasets`/`name`/`rows`) and drops `live` and
+   `scanned_bytes` entirely, so the model is never told whether a roll-up came
+   from Athena or the static pool and cannot leak a distinction it does not have.
+
+After both fixes: **zero screen failures across 72 calls and three models.**
+
+A third bug was in the harness itself — it built the context without applying
+`_llm_context`, so it kept reporting `leak_marker:facet` failures the agent could
+no longer produce. It was measuring the harness, not the model. `_context_for`
+now runs both stages, because a benchmark that does not mirror production is
+worse than no benchmark: it reports failures nobody can reproduce and hides ones
+nobody can see.
+
 ## Prompt-injection posture
 
 The caller of this agent is, by definition, someone who has already tripped a
@@ -244,8 +313,9 @@ detector, so the injection surface is the one that gets attacked first.
 | `DETER_ENABLED` | orchestrator | `true` | `false` reverts contained sessions to the canned cover |
 | `DETER_URL` | orchestrator | `http://deter:8006` | must be set in compose; absent means the localhost default, so every call fails and covers |
 | `DETER_TIMEOUT_SECONDS` | orchestrator | `25.0` | far below the 180s specialists get — see below |
-| `DETER_PACE_MIN_SECONDS` | orchestrator | `2.0` | wall-clock floor, incl. the cover fallback |
-| `DETER_PACE_MAX_SECONDS` | orchestrator | `4.0` | top of the floor window |
+| `DETER_PACE_MIN_SECONDS` | orchestrator | `8.0` | wall-clock floor, incl. the cover fallback |
+| `DETER_PACE_MAX_SECONDS` | orchestrator | `22.0` | top of the floor window |
+| `DETER_MODEL` | deter | `gemini-2.5-flash-lite` | pinned separately from `GEMINI_MODEL` |
 | `DETER_ATHENA_ENABLED` | deter | `false` | live pool reads vs static roll-ups |
 | `DETER_WINDOW_HOURS` | deter | `24` | live roll-up window |
 | `DETER_ATHENA_TIMEOUT` | deter | `12.0` | per-facet ceiling; past it, that facet serves static |

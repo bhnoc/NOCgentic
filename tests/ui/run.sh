@@ -51,3 +51,4 @@ wait_for "http://127.0.0.1:${CDP_PORT}/json/version" "headless chrome"
 
 node "${UI_DIR}/quick-pick-autosubmit.mjs"
 node "${UI_DIR}/lane-swap.mjs"
+node "${UI_DIR}/alert-popup.mjs"

@@ -76,10 +76,15 @@ services:
       # Wall-clock FLOOR for the deter path, including its cover fallback. A deter
       # answer is a cheap LLM call and a cover is no call at all, so either can land
       # far faster than the agent the response claims to come from. Response time is
-      # a side channel that needs no interpretation. Tune to the latency the
-      # specialist agents actually show on this box.
-      - DETER_PACE_MIN_SECONDS=${DETER_PACE_MIN_SECONDS:-2.0}
-      - DETER_PACE_MAX_SECONDS=${DETER_PACE_MAX_SECONDS:-4.0}
+      # a side channel that needs no interpretation.
+      #
+      # [8, 22] is measured, not chosen: a deter response reports
+      # agent_used=athena-hunter, and athena-hunter's real latency on this box is
+      # p50 17.0s / p95 33.9s (n=99, 2026-08-04). The deter agent's own p95 is ~1s,
+      # so the padding does all the work. Re-measure before changing — the command
+      # is in docs/security/deter-agent.md.
+      - DETER_PACE_MIN_SECONDS=${DETER_PACE_MIN_SECONDS:-8.0}
+      - DETER_PACE_MAX_SECONDS=${DETER_PACE_MAX_SECONDS:-22.0}
       # S3_REGION only. The orchestrator does not touch S3 itself; this is the
       # documented fallback for TRACE_S3_REGION in s3_span_exporter.
       #
@@ -247,6 +252,15 @@ services:
       # spend on hostile traffic for a swap surface that is already synthetic.
       - LOCAL_PROSE_BASE_URL=${LOCAL_PROSE_BASE_URL:-}
       - LOCAL_PROSE_MODEL=${LOCAL_PROSE_MODEL:-}
+      # Pinned SEPARATELY from the platform-wide GEMINI_MODEL: this agent writes
+      # short prose over a small JSON context, which is not the hunt agents'
+      # workload and should not inherit their model in either direction.
+      # gemini-2.5-flash-lite measured best 2026-08-04 — p50 0.89s, p95 1.03s, the
+      # only candidate at a 100% output-screen pass rate before the screen was
+      # fixed, and still fastest after. Re-run scripts/bench_deter_models.py before
+      # changing; screen pass rate matters more than latency, because a model that
+      # trips the screen serves canned cover instead of a deterrent answer.
+      - DETER_MODEL=${DETER_MODEL:-gemini-2.5-flash-lite}
       - DETER_ATHENA_ENABLED=${DETER_ATHENA_ENABLED:-false}
       - DETER_WINDOW_HOURS=${DETER_WINDOW_HOURS:-24}
       - DETER_ATHENA_TIMEOUT=${DETER_ATHENA_TIMEOUT:-12.0}

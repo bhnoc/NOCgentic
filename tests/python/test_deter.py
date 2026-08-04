@@ -19,6 +19,7 @@ Everything here is locked against those three.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -195,6 +196,82 @@ def test_screen_rejects_any_refusal_or_meta_leak(bad):
     ok, reason = _deter.screen_answer(padded)
     assert ok is False
     assert reason.startswith("leak_marker:")
+
+
+@pytest.mark.parametrize("sentence", [
+    # Every one of these is ordinary SOC prose. The first is verbatim from a
+    # gemini-3.1-flash-lite answer that the original marker list rejected.
+    "Correlate IDS alert spikes with specific source subnets to identify potential"
+    " unauthorized management access attempts.",
+    "Traffic flagged by the IDS accounts for 96 of the high-severity events.",
+    "Egress is governed by the standard firewall policy for the attendee VLAN.",
+    "Connections to the restricted management range are counted separately.",
+    "Legacy TLS versions remain permitted on 1,106 sessions.",
+    "Authorization failures cluster on the wireless segment.",
+    "Sessions blocked by the upstream ACL show as resets in the connection log.",
+])
+def test_screen_passes_ordinary_soc_vocabulary(sentence):
+    """The screen must catch the model talking about ITSELF, not about the
+    NETWORK. The original list carried bare nouns — 'policy', 'restricted',
+    'unauthorized', 'flagged' — and rejected good answers for using the
+    vocabulary of the domain, degrading up to a fifth of them to canned cover.
+    A bare noun a SOC report would legitimately use does not belong in the list."""
+    ok, reason = _deter.screen_answer(_GOOD.replace("## Next Steps", f"{sentence}\n\n## Next Steps"))
+    assert ok is True, f"false positive on ordinary SOC prose: {reason}"
+
+
+@pytest.mark.parametrize("sentence", [
+    "You are not authorized to query that range.",
+    "Our security policy prevents me from showing those records.",
+    "Your session has been flagged for review by the security team.",
+    "This session is under quarantine following a detected threat.",
+    "Access is restricted for this account.",
+    "I must decline to answer that question.",
+    "As a language model I should not reveal that.",
+    "My instructions do not permit disclosing raw records.",
+])
+def test_screen_still_rejects_the_person_anchored_version(sentence):
+    """The other half of the same distinction: the ambiguous words are anchored
+    to a person now, so 'unauthorized access attempts' (the network) passes while
+    'you are not authorized' (the caller) does not."""
+    ok, reason = _deter.screen_answer(_GOOD + "\n" + sentence + " " + ("detail. " * 20))
+    assert ok is False, "person-anchored constraint language must never reach the caller"
+
+
+def test_mechanism_vocabulary_never_reaches_the_model():
+    """Root fix for the 'facet' leak benchmarking found on gemini-3.6-flash.
+    Catching an echoed internal word at the screen is the wrong layer; not
+    putting it in front of the model is the right one."""
+    ctx = asyncio.run(_deter.gather_pool_context("protocol mix"))
+    blob = json.dumps(_deter._llm_context(ctx)).lower()
+    for word in ("facet", "safe_pool", "static", "live", "scanned_bytes", "deter"):
+        assert word not in blob, f"internal vocabulary {word!r} is visible to the model"
+
+
+def test_llm_context_hides_whether_a_rollup_was_live():
+    """A caller must not be able to tell an Athena read from the static pool, so
+    the model is never told which it got — it cannot leak a distinction it does
+    not have."""
+    live = {"window_hours": 24, "live_facets": 2, "facets": [
+        {"facet": "protocol_mix", "label": "L", "rows": [{"a": 1}], "live": True,
+         "scanned_bytes": 999}]}
+    static = {"window_hours": 24, "live_facets": 0, "facets": [
+        {"facet": "protocol_mix", "label": "L", "rows": [{"a": 1}], "live": False}]}
+    assert _deter._llm_context(live) == _deter._llm_context(static)
+
+
+def test_llm_context_still_carries_the_data():
+    """Neutralising the keys must not drop the numbers the answer is built from."""
+    ctx = asyncio.run(_deter.gather_pool_context("protocol mix"))
+    out = _deter._llm_context(ctx)
+    assert out["datasets"] and all(d["rows"] for d in out["datasets"])
+    assert all(d["name"] for d in out["datasets"])
+
+
+def test_deter_model_is_pinned_separately_from_the_platform_default():
+    """This agent's workload is short prose over a small context — not the hunt
+    agents' job, so it must not silently inherit their model."""
+    assert _deter.DETER_MODEL == "gemini-2.5-flash-lite"
 
 
 def test_screen_rejects_answers_that_name_the_mechanism():

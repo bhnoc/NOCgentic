@@ -681,7 +681,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 8px 10px;
-      cursor: default;
+      cursor: pointer;  /* opens the detail popup */
       transition: all var(--transition);
       animation: slideIn 0.3s ease;
       position: relative;
@@ -707,6 +707,7 @@
     }
 
     .alert-card:hover { border-color: var(--border-bright); background: rgba(30,144,255,0.04); }
+    .alert-card:focus-visible { outline: 1px solid var(--ice-400); outline-offset: 1px; }
 
     .alert-top {
       display: flex;
@@ -1047,6 +1048,176 @@
     /* Glitch effect on title hover */
     .header-title:hover {
       animation: glitch 0.3s linear;
+    }
+
+    /* ---- Alert detail popup ----
+       Sits under the CRT scanline/vignette overlays (9998/9999) on purpose, so
+       the popup wears the same screen treatment as everything behind it. */
+    .alert-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(1, 6, 14, 0.55);
+      z-index: 9000;
+    }
+
+    .alert-modal {
+      position: fixed;
+      z-index: 9001;
+      width: min(440px, calc(100vw - 24px));
+      max-height: calc(100vh - 40px);
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-card);
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius);
+      box-shadow: 0 0 0 1px rgba(30,144,255,0.08), 0 18px 50px rgba(0,0,0,0.65), 0 0 30px rgba(30,144,255,0.12);
+      animation: modalIn 0.16s ease;
+      overflow: hidden;
+    }
+
+    .alert-modal[hidden], .alert-modal-backdrop[hidden] { display: none; }
+    .alert-modal.dragging { animation: none; box-shadow: 0 0 0 1px rgba(30,144,255,0.18), 0 22px 60px rgba(0,0,0,0.75); }
+
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Severity stripe, same vocabulary as the feed card it came from. */
+    .alert-modal::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      width: 2px;
+    }
+    .alert-modal.sev-card-critical::before { background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+    .alert-modal.sev-card-high::before     { background: var(--accent-orange); box-shadow: 0 0 8px var(--accent-orange); }
+    .alert-modal.sev-card-medium::before   { background: var(--accent-yellow); }
+    .alert-modal.sev-card-low::before,
+    .alert-modal.sev-card-informational::before { background: var(--text-muted); }
+
+    .alert-modal-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      cursor: move;
+      user-select: none;
+      touch-action: none;   /* pointermove drag, not a page scroll */
+      flex-shrink: 0;
+    }
+
+    .alert-modal-grip { color: var(--text-muted); font-size: 12px; letter-spacing: -1px; }
+
+    .alert-modal-title {
+      flex: 1;
+      font-family: var(--font-display);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--ice-400);
+    }
+
+    .alert-modal-close {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1;
+      padding: 4px 7px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+    .alert-modal-close:hover { border-color: var(--accent-red); color: var(--accent-red); background: rgba(255,48,80,0.08); }
+    .alert-modal-close:focus-visible { outline: 2px solid var(--ice-400); outline-offset: 2px; }
+
+    .alert-modal-body {
+      padding: 12px 14px 14px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .alert-modal-body::-webkit-scrollbar { width: 3px; }
+    .alert-modal-body::-webkit-scrollbar-thumb { background: var(--border-bright); }
+
+    .alert-detail-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .alert-detail-time {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .alert-detail-desc {
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      overflow-wrap: anywhere;
+    }
+
+    .alert-detail-grid {
+      margin-top: 12px;
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .adg-row {
+      display: grid;
+      grid-template-columns: 84px 1fr;
+      gap: 10px;
+      align-items: baseline;
+    }
+
+    .adg-row dt {
+      font-family: var(--font-display);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+    }
+
+    .adg-row dd {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--ice-200);
+      overflow-wrap: anywhere;
+    }
+
+    .hunt-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* .hint-chip is styled for the answer bubbles as a <span>; these are real
+       buttons, so re-assert the inherited-font bits a UA stylesheet drops. */
+    .alert-modal .hint-chip {
+      font-family: var(--font-mono);
+      text-align: left;
+      display: inline-block;
+    }
+
+    .hunt-row .hints-label { color: var(--ice-400); }
+
+    @media (max-width: 480px) {
+      .alert-modal { width: calc(100vw - 16px); }
+      .alert-detail-desc { font-size: 12px; }
+      .adg-row { grid-template-columns: 70px 1fr; }
+      .alert-modal .hint-chip { font-size: 10px; padding: 5px 9px; }
     }
 
     @keyframes glitch {

@@ -110,6 +110,9 @@ def test_compose_agents_env_parity():
     for req in [
         "GEMINI_API_KEY",
         "LLM_PROVIDER",
+        # Absent, deter silently inherits the platform-wide GEMINI_MODEL, which is
+        # a different workload and measured slower on the deter prompt.
+        "DETER_MODEL",
         "DETER_ATHENA_ENABLED",
         "ATHENA_DATABASE",
         "ATHENA_REGION",

@@ -109,7 +109,11 @@ const server = createServer(async (req, res) => {
   // defined fillQuery/sendQuery, and every behavioural assertion failed with
   // "fillQuery is not defined" -- which looks like the page is broken rather than
   // like the harness is missing a route. Serve the sibling assets the page asks for.
-  const asset = { '/app.js': 'text/javascript', '/app.css': 'text/css' }[url.pathname];
+  const asset = {
+    '/app.js': 'text/javascript',
+    '/app.css': 'text/css',
+    '/alertHints.js': 'text/javascript',
+  }[url.pathname];
   if (asset) {
     res.writeHead(200, { 'content-type': asset });
     return res.end(await readFile(
