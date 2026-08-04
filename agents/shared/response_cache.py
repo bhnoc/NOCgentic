@@ -57,10 +57,11 @@ import hashlib
 import json
 import logging
 import os
-import random
 import re
 import time
 from typing import Any
+
+import pacing
 
 logger = logging.getLogger(__name__)
 
@@ -273,29 +274,21 @@ async def purge() -> int:
 def hit_delay_seconds(elapsed_seconds: float) -> float:
     """Seconds to wait so a cache hit lands at a plausible total wall-clock.
 
-    Takes what the request has already spent and returns the remainder of a target
-    drawn from [MIN, MAX]. Returns 0.0 when the request is already slower than the
-    target -- padding a slow hit further would be pure loss, and the tell this
-    guards against is answers arriving suspiciously EARLY.
+    The arithmetic lives in `pacing` because the deter path needs the same thing
+    with a different window, and two copies of a timing-side-channel defence is
+    one copy too many. This function keeps the cache's own policy: which bounds
+    apply, read at call time so a monkeypatched env still takes effect.
     """
-    lo, hi = HIT_DELAY_MIN_SECONDS, HIT_DELAY_MAX_SECONDS
-    if hi < lo:            # misconfigured env; treat as a single point
-        lo, hi = hi, lo
-    if hi <= 0:
-        return 0.0
-    target = random.uniform(lo, hi)
-    return max(0.0, target - max(0.0, elapsed_seconds))
+    return pacing.delay_for_window(
+        elapsed_seconds, HIT_DELAY_MIN_SECONDS, HIT_DELAY_MAX_SECONDS,
+    )
 
 
 async def pace_hit(elapsed_seconds: float) -> float:
-    """Sleep out the padding for a hit. Returns the seconds actually waited.
-
-    asyncio.sleep, so concurrent requests keep being served while this one waits.
-    """
-    delay = hit_delay_seconds(elapsed_seconds)
-    if delay > 0:
-        await asyncio.sleep(delay)
-    return delay
+    """Sleep out the padding for a hit. Returns the seconds actually waited."""
+    return await pacing.pace(
+        elapsed_seconds, HIT_DELAY_MIN_SECONDS, HIT_DELAY_MAX_SECONDS,
+    )
 
 
 async def health() -> dict[str, Any]:

@@ -22,6 +22,8 @@ import asyncio
 
 import pytest
 
+import pacing as _pacing
+
 from conftest import load_agent_main
 
 _deter = load_agent_main("deter", "deter_main")
@@ -465,6 +467,130 @@ def test_a_second_threat_updates_the_reason_without_shortening_the_ttl():
     _orch.quarantine_session("sid-A", ttl_seconds=1.0, reason="second")
     assert _orch._quarantined["sid-A"] == far
     assert _orch.quarantine_reason("sid-A") == "second"
+
+
+# ---------------------------------------------------------------------------
+# 4. Wall-clock floor: response time must not be the tell
+# ---------------------------------------------------------------------------
+
+def test_delay_pads_a_fast_response_into_the_window():
+    for _ in range(200):
+        d = _pacing.delay_for_window(0.05, 2.0, 4.0)
+        assert 2.0 - 0.05 - 1e-9 <= d <= 4.0 - 0.05 + 1e-9
+
+
+def test_delay_never_pads_an_already_slow_response():
+    """One-sided on purpose: the tell is answers arriving EARLY. Delaying a slow
+    one further spends real latency to fix nothing."""
+    assert _pacing.delay_for_window(9.0, 2.0, 4.0) == 0.0
+
+
+def test_delay_target_is_drawn_fresh_each_time():
+    """A constant total is its own signature — every deterred answer landing at
+    exactly 3.00s is more distinctive than one landing at 0.05s, because real
+    answers scatter and nothing else on the platform is that punctual."""
+    seen = {_pacing.delay_for_window(0.0, 2.0, 4.0) for _ in range(50)}
+    assert len(seen) > 10
+
+
+def test_delay_survives_an_inverted_window():
+    """Misconfigured env (min > max) must still pace, not divide by zero or
+    return a negative sleep."""
+    d = _pacing.delay_for_window(0.0, 4.0, 2.0)
+    assert 2.0 <= d <= 4.0
+
+
+def test_delay_of_zero_window_disables_pacing():
+    assert _pacing.delay_for_window(0.0, 0.0, 0.0) == 0.0
+
+
+def test_cache_pacing_still_uses_its_own_window(monkeypatch):
+    """response_cache delegates the arithmetic but keeps its own policy. Its
+    window is read at call time so a monkeypatched env still takes effect."""
+    import response_cache
+    monkeypatch.setattr(response_cache, "HIT_DELAY_MIN_SECONDS", 7.0)
+    monkeypatch.setattr(response_cache, "HIT_DELAY_MAX_SECONDS", 7.0)
+    assert abs(response_cache.hit_delay_seconds(0.0) - 7.0) < 1e-9
+
+
+def _serve_timed(monkeypatch, responder):
+    """Serve one deter request with a real clock, returning wall-clock seconds."""
+    import time as _time
+    monkeypatch.setattr(_orch, "call_deter", responder)
+    monkeypatch.setattr(_orch, "DETER_PACE_MIN_SECONDS", 0.30)
+    monkeypatch.setattr(_orch, "DETER_PACE_MAX_SECONDS", 0.45)
+    span = _Span()
+
+    async def _run():
+        t0 = _time.monotonic()
+        resp = await _orch._serve_deter(
+            "protocol mix", start=t0, session_id="sid-A", span=span,
+        )
+        return resp, _time.monotonic() - t0
+
+    return asyncio.run(_run()) + (span,)
+
+
+def test_a_fast_deter_answer_is_held_to_the_floor(monkeypatch):
+    async def _instant(query, *, reason=None, trace_headers=None):
+        return {"answer": _GOOD, "confidence": 0.72, "usable": True}
+
+    resp, wall, span = _serve_timed(monkeypatch, _instant)
+    assert wall >= 0.30, f"served in {wall:.3f}s, under the floor"
+    assert span.attrs["deter.pace_seconds"] > 0
+    assert "## Answer" in resp.answer
+
+
+def test_the_cover_fallback_is_paced_too(monkeypatch):
+    """The fallback needs the floor MORE than the success path: a cover costs no
+    LLM call at all, so unpaced it returns in milliseconds and announces that the
+    deter agent just failed."""
+    async def _down(query, *, reason=None, trace_headers=None):
+        raise ConnectionError("deter is down")
+
+    resp, wall, span = _serve_timed(monkeypatch, _down)
+    assert wall >= 0.30, f"cover fallback served in {wall:.3f}s, under the floor"
+    assert span.attrs["deter.served"] is False
+
+
+def test_a_screen_rejection_is_paced_too(monkeypatch):
+    async def _rejected(query, *, reason=None, trace_headers=None):
+        return {"answer": "", "usable": False, "screen_reason": "leak_marker:i can't"}
+
+    _resp, wall, _span = _serve_timed(monkeypatch, _rejected)
+    assert wall >= 0.30
+
+
+def test_a_slow_deter_answer_is_not_padded_further(monkeypatch):
+    """Padding is one-sided. An answer that already took longer than the window
+    must go straight out."""
+    async def _slow(query, *, reason=None, trace_headers=None):
+        await asyncio.sleep(0.5)
+        return {"answer": _GOOD, "confidence": 0.72, "usable": True}
+
+    _resp, wall, span = _serve_timed(monkeypatch, _slow)
+    assert span.attrs["deter.pace_seconds"] == 0.0
+    assert wall < 0.75, f"slow answer padded to {wall:.3f}s"
+
+
+def test_lane_timings_reflect_the_paced_total_not_the_real_cost(monkeypatch):
+    """The lane badge is user-visible. Pacing after building the response would
+    hold the answer for seconds and then hand the caller a badge reading '8 ms' —
+    stating the true cost of the path in the one place the padding was meant to
+    hide it."""
+    monkeypatch.setattr(_orch.llm_client, "lane_race_enabled", lambda: True)
+    monkeypatch.setattr(_orch, "lane_race_enabled", lambda: True)
+    monkeypatch.setattr(_orch.llm_client, "side_by_side_enabled", lambda: True)
+
+    async def _instant(query, *, reason=None, trace_headers=None):
+        return {"answer": _GOOD, "confidence": 0.72, "usable": True}
+
+    resp, _wall, _span = _serve_timed(monkeypatch, _instant)
+    assert resp.lanes, "expected a synthetic lane pair while racing"
+    winner = [lane for lane in resp.lanes if lane.winner][0]
+    assert winner.elapsed_ms >= 300, (
+        f"lane badge shows {winner.elapsed_ms}ms — the unpaced cost, not the paced total"
+    )
 
 
 def test_deter_path_never_touches_the_response_cache(monkeypatch):

@@ -72,6 +72,23 @@ const server = createServer(async (req, res) => {
     return res.end(JSON.stringify(job || { error: 'no such job' }));
   }
 
+  // Starter-hint draw. Deliberately NOT the static fallback set in index.html:
+  // the page must visibly replace those chips, and a test that can't tell the
+  // two apart would pass with the dynamic path dead.
+  if (url.pathname === '/api/v1/config') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      eventLabel: 'Black Hat STUB 2026',
+      starterHints: [
+        'STUB HINT: what is the biggest risk so far?',
+        'STUB HINT: are there any attacks happening right now?',
+        'STUB HINT: what is the most interesting attack?',
+        'STUB HINT: how is the network quality right now?',
+        'STUB HINT: is there any latency reported to AWS?',
+      ],
+    }));
+  }
+
   if (url.pathname === '/__received') {
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify(received));

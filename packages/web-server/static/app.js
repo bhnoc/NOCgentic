@@ -716,13 +716,32 @@
   function elapsed(start, end) { const ms = new Date(end) - new Date(start); return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`; }
   function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
 
-  // Pull the public event-edition label (composed server-side) from the
-  // server so re-branding is a single env change. Falls back to static markup.
-  async function loadEventLabel() {
+  // Replace the static welcome chips with the server's per-load draw. The
+  // markup keeps a hand-written set as the fallback, so a failed/empty fetch
+  // leaves the banner alone rather than blanking it.
+  function renderStarterHints(hints) {
+    if (!Array.isArray(hints) || hints.length === 0) return;
+    const container = document.getElementById('example-queries');
+    if (!container) return;
+    container.innerHTML = '';
+    hints.forEach(hint => {
+      const text = String(hint).slice(0, 200);
+      const btn = document.createElement('button');
+      btn.className = 'example-chip';
+      btn.textContent = text;   // textContent, not innerHTML: never parse server text as markup
+      btn.addEventListener('click', () => fillQuery(btn));
+      container.appendChild(btn);
+    });
+  }
+
+  // Pull public UI config (event-edition label composed server-side, starter
+  // hint draw) so re-branding is a single env change. Falls back to static markup.
+  async function loadConfig() {
     try {
       const resp = await fetch('/api/v1/config', { signal: AbortSignal.timeout(3000) });
       if (!resp.ok) return;
-      const { eventLabel } = await resp.json();
+      const { eventLabel, starterHints } = await resp.json();
+      renderStarterHints(starterHints);
       if (!eventLabel) return;
       const banner = document.getElementById('event-label');
       if (banner) banner.textContent = eventLabel;
@@ -746,7 +765,7 @@
 
   // ========== Boot ==========
   connectWS();
-  loadEventLabel();
+  loadConfig();
   loadInitialAlerts();
   applyMobileAlertMode();
   // Real alerts now trickle from the Athena-backed cache via WebSocket.

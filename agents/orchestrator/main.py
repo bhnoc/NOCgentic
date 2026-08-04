@@ -51,6 +51,7 @@ from llm_client import (  # noqa: E402
     llm_complete, LANE_CLOUD, LANE_LOCAL, lane_race_enabled,
 )
 import local_models  # noqa: E402
+import pacing  # noqa: E402
 import response_cache  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
@@ -96,6 +97,17 @@ DETER_ENABLED            = os.getenv("DETER_ENABLED", "true").lower() in ("1", "
 # longer than anyone else, so past this we stop waiting and serve cover — which
 # is fast, and lands inside the range a normal answer occupies.
 DETER_TIMEOUT_SECONDS    = float(os.getenv("DETER_TIMEOUT_SECONDS", "25.0"))
+# Wall-clock floor for the deter path. A deter answer is a real LLM call but a
+# cheap one, and its cover fallback costs nothing at all — either can land far
+# faster than the specialist agent the response claims to come from. Response
+# TIME is a side channel that needs no interpretation, so anything quicker than
+# this window is padded out to a target drawn from it.
+#
+# Tune these to the latency the specialist agents actually show on the box:
+# the floor exists to stop a deterred answer arriving suspiciously EARLY, and
+# "early" is defined by what everything else on the platform does.
+DETER_PACE_MIN_SECONDS   = float(os.getenv("DETER_PACE_MIN_SECONDS", "2.0"))
+DETER_PACE_MAX_SECONDS   = float(os.getenv("DETER_PACE_MAX_SECONDS", "4.0"))
 ADMIN_BEARER_TOKEN       = os.getenv("ADMIN_BEARER_TOKEN", "")
 
 MAX_QUERY_LEN = 5000
@@ -1707,6 +1719,22 @@ async def _serve_deter(
     """
     agent_used = "athena-hunter"
     reason = quarantine_reason(session_id)
+
+    async def _pace() -> None:
+        """Pad the request out to the deter window before anything is built.
+
+        Deliberately runs BEFORE the response is assembled, not after. The lane
+        timings in `_cover_lanes` are derived from the elapsed clock and they are
+        USER-VISIBLE on the swap control — pacing afterwards would hold the
+        response for three seconds and then hand the caller a lane badge reading
+        "8 ms", which states the true cost of the path in the one place the
+        padding was meant to hide it.
+        """
+        waited = await pacing.pace(
+            time.monotonic() - start, DETER_PACE_MIN_SECONDS, DETER_PACE_MAX_SECONDS,
+        )
+        span.set_attribute("deter.pace_seconds", round(waited, 3))
+
     try:
         result = await call_deter(query, reason=reason, trace_headers=inject_trace_headers())
     except Exception as exc:
@@ -1718,6 +1746,10 @@ async def _serve_deter(
         )
         span.set_attribute("deter.served", False)
         span.set_attribute("deter.fallback_reason", type(exc).__name__)
+        # The fallback needs the floor MORE than the success path does: a cover
+        # costs no LLM call at all, so an unpaced one returns in milliseconds and
+        # announces that the deter agent just failed.
+        await _pace()
         return _serve_cover(query, start=start, salt="quarantine")
 
     if not result.get("usable") or not result.get("answer"):
@@ -1729,8 +1761,10 @@ async def _serve_deter(
             "deter answer unusable (%s) — falling back to cover",
             result.get("screen_reason", "-"),
         )
+        await _pace()
         return _serve_cover(query, start=start, salt="quarantine")
 
+    await _pace()
     answer = sanitize_output_text(str(result["answer"]))
     confidence = float(result.get("confidence", 0.7))
     elapsed_ms = round((time.monotonic() - start) * 1000, 1)

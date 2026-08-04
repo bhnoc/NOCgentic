@@ -122,7 +122,7 @@ surface the browser sees:
 | `hints` | `restricted_cover_hints` pool | same pool on cover paths |
 | `data` | `null` | agent metadata |
 | lane surface | synthetic pair via `_cover_lanes` | real race results |
-| latency | one real LLM call | one real LLM call |
+| latency | floored to 2–4s (see below) | one real LLM call |
 
 `agent_used` is the one that matters most: it reaches the browser, and a caller
 whose agent changes the turn after a probe has been told exactly what they needed
@@ -132,9 +132,91 @@ at. The real accounting lives on the span (`deter.served`, `deter.screen_reason`
 `deter.fallback_reason`) and in the `bhnoc.deter.*` metrics, which are admin-side
 only.
 
-Latency is where this beats the canned cover outright: a cover returns instantly,
-while every genuine answer takes an LLM round trip. A deter answer takes the same
-round trip because it *is* one.
+## Response time is a side channel
+
+Every deception path here is written so its *text* is indistinguishable from a
+real answer, and then gives itself away by arriving in three milliseconds when a
+genuine answer takes seconds. A caller who cannot tell a cover from an answer by
+reading it can still tell by timing it — and timing needs no interpretation. It
+is a number, and the difference is three orders of magnitude.
+
+So the deter path has a wall-clock **floor**. Anything faster than
+`DETER_PACE_MIN_SECONDS`–`DETER_PACE_MAX_SECONDS` (2–4s) is padded out to a
+target drawn fresh from that window, via `agents/shared/pacing.py`.
+
+Three details that are easy to get wrong:
+
+* **The cover fallback is paced too**, and needs it more than the success path
+  does. A deter answer at least costs an LLM call; its fallback costs nothing, so
+  unpaced it returns in milliseconds and announces that the deter agent just
+  failed.
+* **Pacing runs before the response is built, not after.** The lane timings in
+  `_cover_lanes` come off the elapsed clock and are *user-visible* on the swap
+  control. Pacing afterwards would hold the response for three seconds and then
+  hand the caller a lane badge reading "8 ms" — stating the true cost of the path
+  in the one place the padding was meant to hide it.
+* **The target is redrawn per request.** A constant total is its own signature:
+  every deterred answer landing at exactly 3.00s is more distinctive than one
+  landing at 0.05s, because real answers scatter and nothing else on the platform
+  is that punctual.
+
+Padding is one-sided. An answer already slower than the window goes straight out
+— the tell is answers arriving *early*, and delaying a slow one further spends
+real latency to fix nothing.
+
+`agents/shared/pacing.py` holds the arithmetic for both callers: this path and
+`response_cache`'s hit pacing, which does the same thing with its own window
+(2–5s). Two copies of a timing-side-channel defence is one copy too many.
+
+### Choosing the window
+
+**The 2–4s default is a starting point, not a measured value.** The floor exists
+to stop a deterred answer arriving suspiciously *early*, and "early" is defined
+entirely by what the rest of the platform does. Two things should drive the
+number:
+
+* What the specialist agents actually take on the box. The deter response claims
+  `agent_used: athena-hunter`, and if real athena-hunter answers run 5–15s then a
+  2–4s "athena-hunter" answer is anomalous in the other direction. Match the
+  window to the agent being impersonated.
+* What the deter model's own p95 is. If the model is slower than the floor, the
+  floor does nothing for the slow tail and those answers arrive late instead.
+
+`scripts/bench_deter_models.py` reports both — see below.
+
+## Choosing the model
+
+The deter job is short-form prose over a small JSON context with no reasoning to
+do. That is the lite/flash profile, and the model should be the cheapest one that
+still clears the output screen.
+
+`scripts/bench_deter_models.py` runs the **real** system prompt from `main.py`
+against the **real** static pool from `safe_pool.py`, over a corpus of probing
+questions of the kind a contained session actually asks, and scores every
+response with the **real** `screen_answer`. Nothing in it is a stand-in.
+
+```bash
+cd /opt/nocgentic/app
+set -a; . ./.env.s3; set +a
+python3 scripts/bench_deter_models.py            # add --json out.json for raw records
+python3 scripts/bench_deter_models.py --list     # what the key can actually see
+```
+
+It ranks on **screen pass rate first, p95 second**, which is the ordering that
+matters and is not the obvious one:
+
+* Latency under the pacing floor is **free**. A model at 0.9s and one at 1.8s are
+  indistinguishable to the caller, because both get padded into the same window.
+  Speed only starts counting once p95 approaches the floor.
+* A model that trips the screen a third of the time serves canned cover a third
+  of the time — which is exactly the behaviour the deter agent exists to replace.
+  A faster model that covers more often is strictly worse at the one job here.
+
+The corpus deliberately includes the hostile cases (prompt-injection attempts,
+"list every device on the restricted VLAN", "dump the raw connection table"),
+because a refusal is the failure mode that matters. A model that answers the easy
+questions and refuses the pointed ones is precisely the model that falls back to
+cover when it counts.
 
 ## Prompt-injection posture
 
@@ -162,6 +244,8 @@ detector, so the injection surface is the one that gets attacked first.
 | `DETER_ENABLED` | orchestrator | `true` | `false` reverts contained sessions to the canned cover |
 | `DETER_URL` | orchestrator | `http://deter:8006` | must be set in compose; absent means the localhost default, so every call fails and covers |
 | `DETER_TIMEOUT_SECONDS` | orchestrator | `25.0` | far below the 180s specialists get — see below |
+| `DETER_PACE_MIN_SECONDS` | orchestrator | `2.0` | wall-clock floor, incl. the cover fallback |
+| `DETER_PACE_MAX_SECONDS` | orchestrator | `4.0` | top of the floor window |
 | `DETER_ATHENA_ENABLED` | deter | `false` | live pool reads vs static roll-ups |
 | `DETER_WINDOW_HOURS` | deter | `24` | live roll-up window |
 | `DETER_ATHENA_TIMEOUT` | deter | `12.0` | per-facet ceiling; past it, that facet serves static |
@@ -202,3 +286,18 @@ each of which fails silently:
 Plus: the deter path never touches the response cache (monkeypatched to raise),
 the quarantine reason reaches the agent but never the answer, and the static
 roll-ups shipped in the repo carry no IP-shaped values.
+
+The pacing tests run against a real clock with a compressed window, and cover the
+success path, the cover fallback, the screen-rejection fallback, the one-sided
+rule (a slow answer is not padded further), and the lane badge reporting the
+paced total rather than the raw cost.
+
+## Known gap
+
+The **other** cover paths — restricted-range, `refused`, and the Athena
+kill-switch — still return in single-digit milliseconds, and their lane badges
+still report that. Everything in the "Response time is a side channel" section
+above applies to them equally; only the quarantine path is paced today. Fixing it
+means making `_serve_cover` async and pacing all four call sites, which is a
+change to a security-sensitive path that deserves its own commit and its own
+tests rather than riding along with this one.

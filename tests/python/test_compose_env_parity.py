@@ -70,6 +70,11 @@ def test_compose_agents_env_parity():
         # is designed to be invisible. Exactly the failure this file exists for.
         "DETER_URL",
         "DETER_ENABLED",
+        # Absent, these fall back to the code defaults rather than failing, so a
+        # missing pacing window is invisible until someone times the deter path
+        # against a real answer and finds it 3s early.
+        "DETER_PACE_MIN_SECONDS",
+        "DETER_PACE_MAX_SECONDS",
         "OTEL_ENABLED",
         "EVENT_EDITION",
     ]:

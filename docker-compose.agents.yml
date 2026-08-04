@@ -73,6 +73,13 @@ services:
       - DETER_URL=http://deter:8006
       - DETER_ENABLED=${DETER_ENABLED:-true}
       - DETER_TIMEOUT_SECONDS=${DETER_TIMEOUT_SECONDS:-25.0}
+      # Wall-clock FLOOR for the deter path, including its cover fallback. A deter
+      # answer is a cheap LLM call and a cover is no call at all, so either can land
+      # far faster than the agent the response claims to come from. Response time is
+      # a side channel that needs no interpretation. Tune to the latency the
+      # specialist agents actually show on this box.
+      - DETER_PACE_MIN_SECONDS=${DETER_PACE_MIN_SECONDS:-2.0}
+      - DETER_PACE_MAX_SECONDS=${DETER_PACE_MAX_SECONDS:-4.0}
       # S3_REGION only. The orchestrator does not touch S3 itself; this is the
       # documented fallback for TRACE_S3_REGION in s3_span_exporter.
       #
