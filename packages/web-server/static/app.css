@@ -708,6 +708,14 @@
 
     .alert-card:hover { border-color: var(--border-bright); background: rgba(30,144,255,0.04); }
 
+    .alert-summary {
+      list-style: none;
+      cursor: pointer;
+      outline: none;
+    }
+    .alert-summary::-webkit-details-marker { display: none; }
+    .alert-summary::marker { content: ''; }
+
     .alert-top {
       display: flex;
       align-items: center;
@@ -748,6 +756,70 @@
       font-family: var(--font-mono);
       color: var(--text-muted);
       margin-top: 3px;
+    }
+
+    .alert-expand {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+
+    .alert-detail {
+      margin: 0 0 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .alert-detail-row {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 6px;
+      font-size: 9px;
+      line-height: 1.35;
+    }
+
+    .alert-detail-row dt {
+      margin: 0;
+      font-family: var(--font-display);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+
+    .alert-detail-row dd {
+      margin: 0;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+
+    .alert-detail-empty {
+      margin: 0 0 8px;
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+
+    .alert-triage-btn {
+      display: inline-block;
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ice-400);
+      background: rgba(30,144,255,0.12);
+      border: 1px solid rgba(30,144,255,0.35);
+      border-radius: 1px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .alert-triage-btn:hover {
+      background: rgba(30,144,255,0.22);
+      border-color: var(--ice-400);
+      color: var(--frost);
     }
 
     /* Stats row at sidebar bottom */
@@ -882,6 +954,8 @@
       }
       .alert-desc { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
       .alert-src, .alert-time { font-size: 9px; overflow-wrap: anywhere; }
+      .alert-detail-row { grid-template-columns: 78px 1fr; font-size: 10px; }
+      .alert-triage-btn { font-size: 10px; padding: 5px 12px; }
 
       /* Data tables / code — keep inside bubble, horizontal scroll locally */
       .data-table { font-size: 10px; }

@@ -1210,6 +1210,19 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
     uid = row.get("uid") or ""
     orig_h = row.get("orig_h") or ""
     resp_h = row.get("resp_h") or ""
+    network = (row.get("orig_network_name") or "").strip()
+
+    def _parse_port(raw: str | None) -> int | None:
+        if raw is None or raw == "":
+            return None
+        try:
+            p = int(raw)
+        except (ValueError, TypeError):
+            return None
+        return p if 0 <= p <= 65535 else None
+
+    src_port = _parse_port(row.get("orig_p"))
+    dst_port = _parse_port(row.get("resp_p"))
 
     # Identity is derived from the RAW host, before redaction, then hashed. Using
     # the redacted value would collapse every out-of-scope host onto one id, and
@@ -1230,13 +1243,17 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
         orig_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
     if resp_h and not ipscope.is_in_scope(resp_h):
         resp_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
+    if network:
+        network = credscrub.scrub_secrets(ipscope.redact_text(network))
+    if uid:
+        uid = credscrub.scrub_secrets(ipscope.redact_text(uid))
     alert_id = (
         f"{alert_name}|{host_key}|{ts_raw}"
         if alert_name
         else uid or f"alrt-{hash((ts_raw, description)) & 0xFFFFFFFF:08x}"
     )
 
-    return {
+    out: dict[str, Any] = {
         "id": alert_id,
         "timestamp": ts_raw,
         "severity": _normalize_severity(row.get("severity")),
@@ -1245,6 +1262,17 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
         "srcIp": orig_h or None,
         "dstIp": resp_h or None,
     }
+    if src_port is not None:
+        out["srcPort"] = src_port
+    if dst_port is not None:
+        out["dstPort"] = dst_port
+    if uid:
+        out["uid"] = uid
+    if network:
+        out["network"] = network
+    if occ > 0:
+        out["occurrences"] = occ
+    return out
 
 
 @app.get("/alerts/recent")
@@ -1277,6 +1305,9 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
             ARBITRARY(alert_detail) AS alert_detail,
             ARBITRARY(resp_h) AS resp_h,
             ARBITRARY(uid) AS uid,
+            ARBITRARY(orig_p) AS orig_p,
+            ARBITRARY(resp_p) AS resp_p,
+            ARBITRARY(orig_network_name) AS orig_network_name,
             COUNT(*) AS occurrences
         FROM alerts
         WHERE {dt}

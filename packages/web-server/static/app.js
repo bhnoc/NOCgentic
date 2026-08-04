@@ -29,6 +29,49 @@
   }
 
   // ========== Alert Feed ==========
+  function buildTriageQuery(a) {
+    const parts = [`Triage alert: ${a.description || 'unknown'}`];
+    const clauses = [];
+    if (a.srcIp) clauses.push(`src=${a.srcIp}`);
+    if (a.dstIp || a.dstPort) {
+      clauses.push(a.dstPort != null ? `dst=${a.dstIp || '?'}:${a.dstPort}` : `dst=${a.dstIp}`);
+    }
+    if (a.uid) clauses.push(`uid=${a.uid}`);
+    if (clauses.length) parts.push(clauses.join(' '));
+    return parts.join('. ') + (clauses.length ? '' : '.');
+  }
+
+  function triageAlert(alert, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (document.getElementById('send-btn').disabled) return;
+    const input = document.getElementById('query-input');
+    input.value = buildTriageQuery(alert);
+    autoResize(input);
+    input.focus();
+    sendQuery();
+  }
+
+  function alertDetailRows(a) {
+    const rows = [];
+    if (a.dstIp) rows.push(['Dst IP', a.dstIp]);
+    if (a.srcPort != null) rows.push(['Src port', String(a.srcPort)]);
+    if (a.dstPort != null) rows.push(['Dst port', String(a.dstPort)]);
+    if (a.network) rows.push(['Network', a.network]);
+    if (a.uid) rows.push(['UID', a.uid]);
+    if (a.observedAt) {
+      const obs = new Date(a.observedAt);
+      const obsStr = Number.isNaN(obs.getTime())
+        ? a.observedAt
+        : obs.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      rows.push(['Observed', obsStr]);
+    }
+    if (a.occurrences != null && a.occurrences > 0) rows.push(['Occurrences', String(a.occurrences)]);
+    return rows;
+  }
+
   function renderAlerts(alerts) {
     if (!alerts || alerts.length === 0) return;
     const feed = document.getElementById('alerts-feed');
@@ -36,8 +79,8 @@
     if (empty) empty.remove();
 
     alerts.reverse().forEach(a => {
-      if (feed.querySelector(`[data-id="${a.id}"]`)) return;
-      const card = document.createElement('div');
+      if (feed.querySelector(`[data-id="${CSS.escape(a.id)}"]`)) return;
+      const card = document.createElement('details');
       const sev = (a.severity || 'low').toLowerCase();
       card.className = 'alert-card sev-card-' + sev;
       card.dataset.id = a.id;
@@ -46,14 +89,28 @@
       const ts = new Date(a.timestamp);
       const timeStr = ts.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
 
+      const detailRows = alertDetailRows(a);
+      const detailHtml = detailRows.length
+        ? `<dl class="alert-detail">${detailRows.map(([k, v]) =>
+            `<div class="alert-detail-row"><dt>${escHtml(k)}</dt><dd>${escHtml(v)}</dd></div>`
+          ).join('')}</dl>`
+        : `<p class="alert-detail-empty">No additional fields</p>`;
+
       card.innerHTML = `
-        <div class="alert-top">
-          <span class="sev-badge ${sevClass}">${sev}</span>
-          <span class="alert-time">${timeStr}</span>
+        <summary class="alert-summary">
+          <div class="alert-top">
+            <span class="sev-badge ${sevClass}">${escHtml(sev)}</span>
+            <span class="alert-time">${timeStr}</span>
+          </div>
+          <div class="alert-desc">${escHtml(a.description)}</div>
+          <div class="alert-src">${escHtml(a.source||'')}${a.srcIp?' // '+escHtml(a.srcIp):''}</div>
+        </summary>
+        <div class="alert-expand">
+          ${detailHtml}
+          <button type="button" class="alert-triage-btn">Triage</button>
         </div>
-        <div class="alert-desc">${escHtml(a.description)}</div>
-        <div class="alert-src">${escHtml(a.source||'')}${a.srcIp?' // '+escHtml(a.srcIp):''}</div>
       `;
+      card.querySelector('.alert-triage-btn').addEventListener('click', (ev) => triageAlert(a, ev));
       feed.insertBefore(card, feed.firstChild);
       totalAlerts++;
       if (sev === 'critical') criticalAlerts++;
@@ -119,12 +176,12 @@
   function injectDemoAlerts() {
     const now = Date.now();
     renderAlerts([
-      { id:'d1', severity:'critical', source:'paloalto', description:'C2 beacon detected -- high frequency TCP/4444', srcIp:'10.220.44.88', dstPort:4444, timestamp:new Date(now-12000).toISOString() },
-      { id:'d2', severity:'high', source:'corelight', description:'Port scan -- 1,247 SYN packets in 10s', srcIp:'45.83.193.150', timestamp:new Date(now-45000).toISOString() },
-      { id:'d3', severity:'high', source:'paloalto', description:'Outbound DENY -- blocked TOR exit node connection', srcIp:'10.220.42.15', dstPort:9001, timestamp:new Date(now-90000).toISOString() },
-      { id:'d4', severity:'medium', source:'corelight', description:'DNS tunneling suspected -- 63-char subdomain', srcIp:'10.220.41.22', timestamp:new Date(now-130000).toISOString() },
-      { id:'d5', severity:'medium', source:'partner', description:'Threat intel match -- IP on Emerging Threats blocklist', srcIp:'185.220.101.45', timestamp:new Date(now-200000).toISOString() },
-      { id:'d6', severity:'low', source:'corelight', description:'Unusual protocol -- SSH on TCP/8022', srcIp:'10.220.65.14', dstPort:8022, timestamp:new Date(now-310000).toISOString() },
+      { id:'d1', severity:'critical', source:'paloalto', description:'C2 beacon detected -- high frequency TCP/4444', srcIp:'10.220.44.88', dstIp:'185.220.101.45', srcPort:49152, dstPort:4444, uid:'Cdemo001', network:'Vendor WiFi', occurrences:12, observedAt:new Date(now-12000).toISOString(), timestamp:new Date(now-12000).toISOString() },
+      { id:'d2', severity:'high', source:'corelight', description:'Port scan -- 1,247 SYN packets in 10s', srcIp:'45.83.193.150', dstIp:'10.220.40.10', dstPort:22, uid:'Cdemo002', network:'Core', occurrences:3, observedAt:new Date(now-45000).toISOString(), timestamp:new Date(now-45000).toISOString() },
+      { id:'d3', severity:'high', source:'paloalto', description:'Outbound DENY -- blocked TOR exit node connection', srcIp:'10.220.42.15', dstIp:'185.220.101.99', dstPort:9001, uid:'Cdemo003', observedAt:new Date(now-90000).toISOString(), timestamp:new Date(now-90000).toISOString() },
+      { id:'d4', severity:'medium', source:'corelight', description:'DNS tunneling suspected -- 63-char subdomain', srcIp:'10.220.41.22', dstIp:'8.8.8.8', dstPort:53, uid:'Cdemo004', network:'Attendee', observedAt:new Date(now-130000).toISOString(), timestamp:new Date(now-130000).toISOString() },
+      { id:'d5', severity:'medium', source:'partner', description:'Threat intel match -- IP on Emerging Threats blocklist', srcIp:'185.220.101.45', dstIp:'10.220.50.2', dstPort:443, observedAt:new Date(now-200000).toISOString(), timestamp:new Date(now-200000).toISOString() },
+      { id:'d6', severity:'low', source:'corelight', description:'Unusual protocol -- SSH on TCP/8022', srcIp:'10.220.65.14', dstIp:'10.220.10.5', srcPort:50222, dstPort:8022, uid:'Cdemo006', occurrences:2, observedAt:new Date(now-310000).toISOString(), timestamp:new Date(now-310000).toISOString() },
     ]);
   }
 
@@ -143,7 +200,14 @@
       renderAlerts([{
         id:'demo-'+(counter++), severity:t.severity, source:t.source,
         description:t.descriptions[Math.floor(Math.random()*t.descriptions.length)],
-        srcIp:randomIp(), timestamp:new Date().toISOString(),
+        srcIp:randomIp(), dstIp:randomIp(),
+        srcPort:1024 + Math.floor(Math.random()*60000),
+        dstPort:[22, 443, 80, 445, 3389, 53][Math.floor(Math.random()*6)],
+        uid:'Cdemo' + String(counter).padStart(6, '0'),
+        network:['Core', 'Vendor WiFi', 'Attendee', 'Partner'][Math.floor(Math.random()*4)],
+        occurrences:1 + Math.floor(Math.random()*20),
+        observedAt:new Date(Date.now() - Math.floor(Math.random()*3600000)).toISOString(),
+        timestamp:new Date().toISOString(),
       }]);
     }, 8000 + Math.random()*12000);
   }

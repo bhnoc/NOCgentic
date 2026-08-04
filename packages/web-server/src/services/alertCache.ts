@@ -48,6 +48,11 @@ export interface RawAlert {
   description: string;
   srcIp?: string | null;
   dstIp?: string | null;
+  srcPort?: number | null;
+  dstPort?: number | null;
+  uid?: string | null;
+  network?: string | null;
+  occurrences?: number | null;
 }
 
 class AlertCache {
@@ -125,6 +130,14 @@ class AlertCache {
     };
     const srcIp = maskIp(raw.srcIp);
     const dstIp = maskIp(raw.dstIp);
+    const network = scrubString(raw.network);
+    const uid = raw.uid ? (scrubString(raw.uid) ?? raw.uid) : undefined;
+    const srcPort = typeof raw.srcPort === 'number' && Number.isFinite(raw.srcPort) ? raw.srcPort : undefined;
+    const dstPort = typeof raw.dstPort === 'number' && Number.isFinite(raw.dstPort) ? raw.dstPort : undefined;
+    const occurrences =
+      typeof raw.occurrences === 'number' && Number.isFinite(raw.occurrences) && raw.occurrences > 0
+        ? raw.occurrences
+        : undefined;
     const alert: Alert = {
       id: scrubString(raw.id) ?? raw.id,
       timestamp: new Date().toISOString(),
@@ -133,6 +146,12 @@ class AlertCache {
       description: scrubString(raw.description) ?? raw.description,
       ...(srcIp ? { srcIp } : {}),
       ...(dstIp ? { dstIp } : {}),
+      ...(srcPort !== undefined ? { srcPort } : {}),
+      ...(dstPort !== undefined ? { dstPort } : {}),
+      ...(uid ? { uid } : {}),
+      ...(network ? { network } : {}),
+      ...(raw.timestamp ? { observedAt: raw.timestamp } : {}),
+      ...(occurrences !== undefined ? { occurrences } : {}),
     };
     this.emitted.push(alert);
     while (this.emitted.length > 50) this.emitted.shift();
