@@ -322,7 +322,7 @@ APP_DIR=/opt/nocgentic/app bash ops/deploy.sh
 
 | Signal | Where |
 |--------|--------|
-| Distributed traces | Manifold + S3 NDJSON under `nocgentic/traces/` |
+| Distributed traces | Manifold + S3 NDJSON under `corelight/dev/traces/` on prod (`TRACE_S3_PREFIX`; the code default is `nocgentic/traces`) |
 | Admin swim lanes | audit-monitor UI |
 | API / agent health | compose healthchecks + `/health` |
 | Response cache | `bhnoc.orchestrator.cache_hits` / `cache_misses`; `GET /admin/cache` |

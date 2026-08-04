@@ -38,20 +38,20 @@ Data Sources → S3 bucket (NDJSON) → Agents query via boto3
 | Bucket | Region | Purpose | Access |
 |--------|--------|---------|--------|
 | `bhasia-noc-data` | us-east-1 | Seeded synthetic data (170 events) | IAM user `bhasia-noc-s3-readonly` |
-| `blackhat-pope-dev-logs` | (TBD) | EC2 direct access — no credentials needed | EC2 instance role |
+| `blackhatnoc` | (TBD) | EC2 direct access — no credentials needed | EC2 instance role |
 
-> **ACTION NEEDED:** Reconcile which bucket to use as primary. The EC2 at <EC2-PUBLIC-IP> has direct instance-role access to `blackhat-pope-dev-logs` (no IAM keys required). Consider switching `S3_BUCKET` to `blackhat-pope-dev-logs` and seeding data there instead, which would eliminate the need for AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY in .env.
+> **ACTION NEEDED:** Reconcile which bucket to use as primary. The EC2 at <EC2-PUBLIC-IP> has direct instance-role access to `blackhatnoc` (no IAM keys required). Consider switching `S3_BUCKET` to `blackhatnoc` and seeding data there instead, which would eliminate the need for AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY in .env.
 
 **EC2 Direct S3 Usage (no credentials):**
 ```bash
 # Upload logs
-aws s3 cp /var/log/myapp.log s3://blackhat-pope-dev-logs/
+aws s3 cp /var/log/myapp.log s3://blackhatnoc/
 
 # Sync a directory
-aws s3 sync /var/log/corelight/ s3://blackhat-pope-dev-logs/corelight/
+aws s3 sync /var/log/corelight/ s3://blackhatnoc/corelight/
 
 # List bucket contents
-aws s3 ls s3://blackhat-pope-dev-logs/
+aws s3 ls s3://blackhatnoc/
 ```
 
 ---
@@ -155,16 +155,16 @@ Format: NDJSON files at `{prefix}/events-{timestamp}.ndjson`
 ## Completed (2026-04-21)
 
 1. ~~Deploy updated UI to EC2~~ — DONE, hacker-themed UI live at http://<EC2-PUBLIC-IP>
-2. ~~Resolve S3 bucket~~ — DONE, switched to `blackhat-pope-dev-logs` with instance-role access (no IAM keys)
+2. ~~Resolve S3 bucket~~ — DONE, switched to `blackhatnoc` with instance-role access (no IAM keys)
 3. ~~Integrate Gemini API~~ — DONE, unified `llm_client.py` supports Gemini + OpenRouter with auto-fallback
-4. ~~Seed data to production bucket~~ — DONE, 170 events seeded to `blackhat-pope-dev-logs`
+4. ~~Seed data to production bucket~~ — DONE, 170 events seeded to `blackhatnoc`
 5. ~~Test full stack on EC2~~ — DONE, all 5 containers healthy, E2E query returns Gemini-powered triage report
 6. ~~SSL/TLS~~ — DONE, Let's Encrypt cert issued via Cloudflare DNS-01, HTTPS live at https://aing.bhnoc.com (cert expires 2026-07-20, auto-renewal enabled)
 
 ## Remaining
 
 1. **Additional agents** — Expand beyond threat-hunter and alert-triage (log-investigator, incident-responder per CLAUDE.md spec)
-2. **Real data ingestion** — Connect actual Corelight/Palo Alto feeds to `blackhat-pope-dev-logs` bucket
+2. **Real data ingestion** — Connect actual Corelight/Palo Alto feeds to `blackhatnoc` bucket
 3. **WebSocket streaming** — Wire up real-time streaming of LLM responses via WebSocket
 
 ---
@@ -175,7 +175,7 @@ Format: NDJSON files at `{prefix}/events-{timestamp}.ndjson`
 OPENROUTER_API_KEY=<set>
 GEMINI_API_KEY=<set>
 LLM_PROVIDER=gemini
-S3_BUCKET=blackhat-pope-dev-logs
+S3_BUCKET=blackhatnoc
 S3_REGION=us-west-2
 S3_PREFIX=
 PORT=3000

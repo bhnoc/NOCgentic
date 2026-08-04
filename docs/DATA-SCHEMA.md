@@ -4,7 +4,7 @@
 
 Live network telemetry from Corelight sensors deployed at the Black Hat conference network.
 
-- **S3 Bucket:** `blackhat-pope-dev-logs`
+- **S3 Bucket:** `blackhatnoc`
 - **Region:** `us-west-2`
 - **Prefix:** `nocgentic/corelight/{YYYY-MM-DD}/`
 - **Format:** Gzipped Zeek TSV (`.log.gz`) with `#fields` header rows

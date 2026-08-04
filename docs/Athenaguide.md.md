@@ -34,22 +34,22 @@ This document provides everything needed to build an application that queries Co
 - **AWS Profile:** VirtualPOC-admins (for CLI access)
 
 ### Athena Configuration
-- **Workgroup:** `blackhat-pope-dev`
-- **Database:** `blackhat_pope_logs`
-- **Results Bucket:** `s3://blackhat-pope-dev-athena-results/`
+- **Workgroup:** `blackhatnoc-usa2026`
+- **Database:** `blackhatnoc_glue`
+- **Results Bucket:** `s3://blackhatnoc-usa2026-athena-results/`
 
 ### S3 Buckets
 | Bucket | Purpose |
 |--------|---------|
-| `blackhat-pope-dev-logs` | Raw Corelight logs (TSV/gzip) |
-| `blackhat-pope-dev-parquet` | Optimized Parquet tables |
-| `blackhat-pope-dev-athena-results` | Athena query results |
+| `blackhatnoc` | Raw Corelight logs (TSV/gzip) |
+| `blackhatnoc-usa2026-parquet` | Optimized Parquet tables |
+| `blackhatnoc-usa2026-athena-results` | Athena query results |
 
 ---
 
 ## IAM Permissions Required
 
-Any application querying Athena needs these permissions. The EC2 instance `<INSTANCE-ID>` (AING) already has these via role `blackhat-pope-dev-ec2-role`.
+Any application querying Athena needs these permissions. The EC2 instance `<INSTANCE-ID>` (AING) already has these via role `blackhatnoc-usa2026-ec2-role`.
 
 ```json
 {
@@ -67,7 +67,7 @@ Any application querying Athena needs these permissions. The EC2 instance `<INST
         "athena:ListQueryExecutions"
       ],
       "Resource": [
-        "arn:aws:athena:us-west-2:<ACCOUNT-ID>:workgroup/blackhat-pope-dev"
+        "arn:aws:athena:us-west-2:<ACCOUNT-ID>:workgroup/blackhatnoc-usa2026"
       ]
     },
     {
@@ -83,8 +83,8 @@ Any application querying Athena needs these permissions. The EC2 instance `<INST
       ],
       "Resource": [
         "arn:aws:glue:us-west-2:<ACCOUNT-ID>:catalog",
-        "arn:aws:glue:us-west-2:<ACCOUNT-ID>:database/blackhat_pope_logs",
-        "arn:aws:glue:us-west-2:<ACCOUNT-ID>:table/blackhat_pope_logs/*"
+        "arn:aws:glue:us-west-2:<ACCOUNT-ID>:database/blackhatnoc_glue",
+        "arn:aws:glue:us-west-2:<ACCOUNT-ID>:table/blackhatnoc_glue/*"
       ]
     },
     {
@@ -95,10 +95,10 @@ Any application querying Athena needs these permissions. The EC2 instance `<INST
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::blackhat-pope-dev-logs",
-        "arn:aws:s3:::blackhat-pope-dev-logs/*",
-        "arn:aws:s3:::blackhat-pope-dev-parquet",
-        "arn:aws:s3:::blackhat-pope-dev-parquet/*"
+        "arn:aws:s3:::blackhatnoc",
+        "arn:aws:s3:::blackhatnoc/*",
+        "arn:aws:s3:::blackhatnoc-usa2026-parquet",
+        "arn:aws:s3:::blackhatnoc-usa2026-parquet/*"
       ]
     },
     {
@@ -111,8 +111,8 @@ Any application querying Athena needs these permissions. The EC2 instance `<INST
         "s3:GetBucketLocation"
       ],
       "Resource": [
-        "arn:aws:s3:::blackhat-pope-dev-athena-results",
-        "arn:aws:s3:::blackhat-pope-dev-athena-results/*"
+        "arn:aws:s3:::blackhatnoc-usa2026-athena-results",
+        "arn:aws:s3:::blackhatnoc-usa2026-athena-results/*"
       ]
     }
   ]
@@ -209,7 +209,7 @@ All 58 Corelight log types are available. Additional tables include:
 
 ```sql
 SELECT columns
-FROM blackhat_pope_logs.table_name
+FROM blackhatnoc_glue.table_name
 WHERE dt = 'YYYY-MM-DD'  -- REQUIRED for performance
   AND other_conditions
 LIMIT n
@@ -220,7 +220,7 @@ LIMIT n
 ```sql
 -- Find all connections from an IP
 SELECT ts_datetime, uid, orig_h, orig_p, resp_h, resp_p, proto, service, duration
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
   AND orig_h = '10.220.38.21'
 ORDER BY ts DESC
@@ -228,7 +228,7 @@ LIMIT 100
 
 -- Find all connections to an IP
 SELECT ts_datetime, uid, orig_h, orig_p, resp_h, resp_p, proto, service
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
   AND resp_h = '8.8.8.8'
 LIMIT 100
@@ -239,26 +239,26 @@ LIMIT 100
 ```sql
 -- Find all logs related to a session UID (FASTEST - uses pre-computed index)
 SELECT uid, log_type, ts, orig_h, resp_h, orig_network_name
-FROM blackhat_pope_logs.uid_lookup
+FROM blackhatnoc_glue.uid_lookup
 WHERE dt = '2026-04-22'
   AND uid = 'CzIENj4a7IGKR8UWed'
 ORDER BY ts
 
 -- Get full connection details for a UID
 SELECT *
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
   AND uid = 'CzIENj4a7IGKR8UWed'
 
 -- Get DNS queries for a session
 SELECT ts_datetime, query, qtype_name, answers
-FROM blackhat_pope_logs.dns
+FROM blackhatnoc_glue.dns
 WHERE dt = '2026-04-22'
   AND uid = 'CzIENj4a7IGKR8UWed'
 
 -- Get HTTP requests for a session
 SELECT ts_datetime, method, host, uri, status_code, user_agent
-FROM blackhat_pope_logs.http
+FROM blackhatnoc_glue.http
 WHERE dt = '2026-04-22'
   AND uid = 'CzIENj4a7IGKR8UWed'
 ```
@@ -268,21 +268,21 @@ WHERE dt = '2026-04-22'
 ```sql
 -- Get all alerts (unified notice + suricata)
 SELECT ts_datetime, alert_type, alert_name, alert_detail, severity, orig_h, resp_h
-FROM blackhat_pope_logs.alerts
+FROM blackhatnoc_glue.alerts
 WHERE dt = '2026-04-22'
 ORDER BY ts DESC
 LIMIT 100
 
 -- Get alerts by severity
 SELECT ts_datetime, alert_type, alert_name, orig_h, resp_h, uid
-FROM blackhat_pope_logs.alerts
+FROM blackhatnoc_glue.alerts
 WHERE dt = '2026-04-22'
   AND severity IN ('1', '2', 'critical', 'error')
 LIMIT 100
 
 -- Top alerts by count
 SELECT alert_name, alert_type, COUNT(*) as count
-FROM blackhat_pope_logs.alerts
+FROM blackhatnoc_glue.alerts
 WHERE dt = '2026-04-22'
 GROUP BY alert_name, alert_type
 ORDER BY count DESC
@@ -290,7 +290,7 @@ LIMIT 20
 
 -- Alerts for a specific IP
 SELECT ts_datetime, alert_type, alert_name, alert_detail, uid
-FROM blackhat_pope_logs.alerts
+FROM blackhatnoc_glue.alerts
 WHERE dt = '2026-04-22'
   AND (orig_h = '10.220.38.21' OR resp_h = '10.220.38.21')
 ORDER BY ts DESC
@@ -301,21 +301,21 @@ ORDER BY ts DESC
 ```sql
 -- Search for domain queries
 SELECT ts_datetime, orig_h, query, qtype_name, answers, orig_network_name
-FROM blackhat_pope_logs.dns
+FROM blackhatnoc_glue.dns
 WHERE dt = '2026-04-22'
   AND query LIKE '%microsoft.com%'
 LIMIT 100
 
 -- Find queries to suspicious TLDs
 SELECT ts_datetime, orig_h, query, answers, orig_network_name
-FROM blackhat_pope_logs.dns
+FROM blackhatnoc_glue.dns
 WHERE dt = '2026-04-22'
   AND (icann_tld = 'ru' OR icann_tld = 'cn' OR icann_tld = 'xyz')
 LIMIT 100
 
 -- DNS query statistics by domain
 SELECT icann_domain, COUNT(*) as query_count
-FROM blackhat_pope_logs.dns
+FROM blackhatnoc_glue.dns
 WHERE dt = '2026-04-22'
 GROUP BY icann_domain
 ORDER BY query_count DESC
@@ -327,26 +327,26 @@ LIMIT 50
 ```sql
 -- Find files by hash
 SELECT ts_datetime, fuid, uid, orig_h, resp_h, mime_type, filename, seen_bytes
-FROM blackhat_pope_logs.files
+FROM blackhatnoc_glue.files
 WHERE dt = '2026-04-22'
   AND sha256 = '5281ebc6a6cfeb71f183036e1d1fcb228bfed1a54898323fbbd19732cdb7be40'
 
 -- Find files by FUID (uses pre-computed index)
 SELECT *
-FROM blackhat_pope_logs.fuid_lookup
+FROM blackhatnoc_glue.fuid_lookup
 WHERE dt = '2026-04-22'
   AND fuid = 'FsNiuH2kQN4C4YZoHj'
 
 -- Find executable files
 SELECT ts_datetime, fuid, uid, orig_h, resp_h, filename, mime_type, sha256, seen_bytes
-FROM blackhat_pope_logs.files
+FROM blackhatnoc_glue.files
 WHERE dt = '2026-04-22'
   AND (mime_type LIKE '%executable%' OR mime_type LIKE '%x-dosexec%' OR filename LIKE '%.exe')
 LIMIT 100
 
 -- Large file transfers
 SELECT ts_datetime, fuid, orig_h, resp_h, mime_type, filename, seen_bytes
-FROM blackhat_pope_logs.files
+FROM blackhatnoc_glue.files
 WHERE dt = '2026-04-22'
   AND seen_bytes > 10000000  -- > 10MB
 ORDER BY seen_bytes DESC
@@ -358,21 +358,21 @@ LIMIT 50
 ```sql
 -- Find connections by server name (SNI)
 SELECT ts_datetime, uid, orig_h, resp_h, server_name, version, cipher, ja3
-FROM blackhat_pope_logs.ssl
+FROM blackhatnoc_glue.ssl
 WHERE dt = '2026-04-22'
   AND server_name LIKE '%discord%'
 LIMIT 100
 
 -- Find by JA3 fingerprint
 SELECT ts_datetime, orig_h, resp_h, server_name, ja3, ja3s
-FROM blackhat_pope_logs.ssl
+FROM blackhatnoc_glue.ssl
 WHERE dt = '2026-04-22'
   AND ja3 = 'e7d705a3286e19ea42f587b344ee6865'
 LIMIT 100
 
 -- Self-signed or expired certificate alerts
 SELECT ts_datetime, uid, orig_h, resp_h, note, msg
-FROM blackhat_pope_logs.notice
+FROM blackhatnoc_glue.notice
 WHERE dt = '2026-04-22'
   AND note LIKE 'SSL::%'
 LIMIT 100
@@ -386,7 +386,7 @@ SELECT orig_h,
        SUM(CAST(orig_bytes AS bigint)) as bytes_sent,
        SUM(CAST(resp_bytes AS bigint)) as bytes_received,
        COUNT(*) as connection_count
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
 GROUP BY orig_h
 ORDER BY bytes_sent DESC
@@ -394,7 +394,7 @@ LIMIT 20
 
 -- Connections by network/room
 SELECT orig_network_name, COUNT(*) as conn_count
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
 GROUP BY orig_network_name
 ORDER BY conn_count DESC
@@ -402,7 +402,7 @@ LIMIT 20
 
 -- Protocol distribution
 SELECT proto, service, COUNT(*) as count
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
 GROUP BY proto, service
 ORDER BY count DESC
@@ -414,7 +414,7 @@ LIMIT 30
 ```sql
 -- Activity in a time window (using epoch timestamp)
 SELECT ts_datetime, uid, orig_h, resp_h, proto, service
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
   AND ts BETWEEN 1776752400 AND 1776756000  -- 1 hour window
 ORDER BY ts
@@ -422,7 +422,7 @@ LIMIT 1000
 
 -- Activity for last N hours (relative)
 SELECT ts_datetime, uid, orig_h, resp_h, proto, service
-FROM blackhat_pope_logs.conn
+FROM blackhatnoc_glue.conn
 WHERE dt = '2026-04-22'
   AND ts > (to_unixtime(now()) - 3600)  -- last hour
 ORDER BY ts DESC
@@ -443,8 +443,8 @@ import time
 class AthenaQueryClient:
     def __init__(self, region='us-west-2'):
         self.athena = boto3.client('athena', region_name=region)
-        self.database = 'blackhat_pope_logs'
-        self.workgroup = 'blackhat-pope-dev'
+        self.database = 'blackhatnoc_glue'
+        self.workgroup = 'blackhatnoc-usa2026'
     
     def execute_query(self, query, wait=True, timeout=300):
         """Execute Athena query and optionally wait for results."""
@@ -567,8 +567,8 @@ export AWS_PROFILE=VirtualPOC-admins  # Or use instance role on EC2
 
 # Execute query
 QUERY_ID=$(aws athena start-query-execution \
-  --work-group blackhat-pope-dev \
-  --query-execution-context Database=blackhat_pope_logs \
+  --work-group blackhatnoc-usa2026 \
+  --query-execution-context Database=blackhatnoc_glue \
   --query-string "SELECT * FROM conn WHERE dt='2026-04-22' LIMIT 10" \
   --query 'QueryExecutionId' --output text)
 
@@ -584,7 +584,7 @@ aws athena get-query-results --query-execution-id $QUERY_ID --output json
 pip install athenacli
 
 # Connect with default database
-athenacli --region us-west-2 --work-group blackhat-pope-dev --database blackhat_pope_logs
+athenacli --region us-west-2 --work-group blackhatnoc-usa2026 --database blackhatnoc_glue
 
 # Then run queries directly:
 # > SELECT * FROM conn WHERE dt='2026-04-22' LIMIT 10;
@@ -648,7 +648,7 @@ The AING EC2 instance is pre-configured with Athena access.
 | **Type** | g6e.4xlarge |
 | **Public IP** | `<EC2-PUBLIC-IP>` |
 | **DNS** | `ng.bhnoc.com` |
-| **IAM Role** | `blackhat-pope-dev-ec2-role` |
+| **IAM Role** | `blackhatnoc-usa2026-ec2-role` |
 | **SSH** | `ssh ubuntu@ng.bhnoc.com` |
 
 The instance role already has all required Athena, Glue, and S3 permissions.
@@ -658,18 +658,18 @@ The instance role already has all required Athena, Glue, and S3 permissions.
 ## Data Refresh Schedule
 
 ### During Conference (Apr 22-25, 2026)
-- **Hourly refresh** enabled via Lambda `blackhat-pope-athena-refresh`
+- **Hourly refresh** enabled via Lambda `blackhatnoc-athena-refresh`
 - New log types automatically detected and converted to Parquet
 - UID/FUID/alerts indexes rebuilt with new data
 
 ### After Conference (Apr 26+)
 - Auto-disabled Saturday Apr 26 01:00 SGT
 - No cost when idle
-- Re-enable with: `aws events enable-rule --name blackhat-pope-athena-hourly`
+- Re-enable with: `aws events enable-rule --name blackhatnoc-athena-hourly`
 
 ### Manual Refresh
 ```bash
-aws lambda invoke --function-name blackhat-pope-athena-refresh \
+aws lambda invoke --function-name blackhatnoc-athena-refresh \
   --invocation-type Event \
   --payload '{"date": "2026-04-22"}' \
   --cli-binary-format raw-in-base64-out \
@@ -733,8 +733,8 @@ Corelight adds rich context to every log:
 - Ensure S3 bucket policies allow access
 
 ### Data Not Updated
-- Manual refresh: Invoke `blackhat-pope-athena-refresh` Lambda
-- Check Lambda logs: `/aws/lambda/blackhat-pope-athena-refresh`
+- Manual refresh: Invoke `blackhatnoc-athena-refresh` Lambda
+- Check Lambda logs: `/aws/lambda/blackhatnoc-athena-refresh`
 - Verify new data exists in source bucket
 
 ---

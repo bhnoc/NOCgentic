@@ -68,4 +68,4 @@ A cross-check of all 48 unique findings against what was actually fixed turned u
 - **to-111:** moot. It lived in `seed-opensearch.py`, removed in sweep 3.
 
 ## Accepted residual (by design)
-- **sanitize_sql:** a comment-less `OR 1=1` still parses. It sits behind the LLM and read-only single-DB Athena creds, so the blast radius is cross-table disclosure within `blackhat_pope_logs`, not writes. Fully closing it needs a real SQL parser or parameterized inputs, which is a design change, not a bug fix.
+- **sanitize_sql:** a comment-less `OR 1=1` still parses. It sits behind the LLM and read-only single-DB Athena creds, so the blast radius is cross-table disclosure within `blackhatnoc_glue`, not writes. Fully closing it needs a real SQL parser or parameterized inputs, which is a design change, not a bug fix.

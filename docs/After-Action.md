@@ -65,7 +65,7 @@ The platform uses five specialized Python agents, each a FastAPI service with it
 | Agent | Role | Data Source |
 |-------|------|-------------|
 | **Orchestrator** (:8001) | Routing brain — classifies intent, enforces guardrails, sanitizes output, manages trace context | LLM classifier (Gemini Flash-Lite) |
-| **Athena Hunter** (:8005) | Primary threat hunt — generates SQL from natural language, executes against Corelight Parquet data | AWS Athena (`blackhat_pope_logs`) |
+| **Athena Hunter** (:8005) | Primary threat hunt — generates SQL from natural language, executes against Corelight Parquet data | AWS Athena (`blackhatnoc_glue`) |
 | **Alert Triage** (:8003) | Active alert prioritization and IDS feed summarization | Athena `alerts` / `suricata_corelight` tables |
 | **Threat Hunter** (:8002) | Legacy S3-backed raw Zeek scanning, auto-secondary fallback | S3 raw NDJSON logs |
 | **ThousandEyes Analyst** (:8004) | BGP health, packet loss, latency, reachability analysis | ThousandEyes v7 REST API |
@@ -101,7 +101,7 @@ Every Python agent calls `init_telemetry(service_name="bhnocgentic-<role>")` at 
 - **Traces** → Manifold OTLP-HTTP (`blackcap.app.manifoldsecurity.io:4318/v1/traces`)
 - **Metrics** → Manifold (`/v1/metrics`)
 - **Logs** → Manifold (`/v1/logs`)
-- **Traces (parallel)** → S3 gzipped NDJSON archive (`s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/`)
+- **Traces (parallel)** → S3 gzipped NDJSON archive (`s3://blackhatnoc/bh-asia-26/aing-trace/`)
 
 Five services emit telemetry: `bhnocgentic-orchestrator`, `bhnocgentic-athena-hunter`, `bhnocgentic-alert-triage`, `bhnocgentic-threat-hunter`, `bhnocgentic-thousandeyes-analyst`.
 
@@ -160,7 +160,7 @@ When `ChatGoogleGenerativeAI.ainvoke()` is called, LangSmith intercepts it and e
 Every span exported to Manifold is simultaneously written to S3 via a parallel `BatchSpanProcessor`:
 
 ```
-s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/
+s3://blackhatnoc/bh-asia-26/aing-trace/
   service=bhnocgentic-orchestrator/dt=2026-04-23/hour=14/orchestrator-20260423T140532-a3f8b2c1.jsonl.gz
   service=bhnocgentic-athena-hunter/dt=2026-04-23/hour=14/athena-hunter-20260423T140535-e7d91ab4.jsonl.gz
   ...
@@ -408,7 +408,7 @@ The Asia deployment proved the concept. Vegas is where we prove the partnership.
 | `OTEL_SAMPLE_RATE` | `1.0` | Parent-based ratio sampler |
 | `OTEL_METRICS_INTERVAL_MS` | `60000` | Metric export cadence |
 | `TRACE_S3_ENABLED` | `true` | S3 sister exporter toggle |
-| `TRACE_S3_BUCKET` | `blackhat-pope-dev-logs` | Span archive bucket |
+| `TRACE_S3_BUCKET` | `blackhatnoc` | Span archive bucket |
 | `TRACE_S3_PREFIX` | `bh-asia-26/aing-trace` | S3 path prefix |
 
 ---

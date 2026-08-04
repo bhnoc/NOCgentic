@@ -37,8 +37,8 @@ An agentic NOC/SOC dashboard. Docker Compose stack at `/opt/nocgentic/app` on th
 
 Agent ports (8001-8005) are `expose:`-only, not published to the host; nginx (80/443) is the only public entry.
 
-Backend data: **Athena** (`blackhat_pope_logs` DB, `blackhat-pope-dev` workgroup, `us-west-2`)
-over Corelight logs in S3 (`blackhat-pope-dev-logs`). LLM: **Gemini** by default
+Backend data: **Athena** (`blackhatnoc_glue` DB, `blackhatnoc-usa2026` workgroup, `us-west-2`)
+over Corelight logs in S3 (`blackhatnoc`). LLM: **Gemini** by default
 (`GEMINI_MODEL`, provider selectable via `LLM_PROVIDER`, OpenRouter as fallback).
 
 ## Current deployed instance — the nocgentic box (verified 2026-08-01)
@@ -59,8 +59,8 @@ This is the live host. Values below came from IMDS on the box itself, not the AP
 | CI runner | `/opt/nocgentic/actions-runner-nocgentic` (label `nocgentic`) |
 | TLS | `/etc/letsencrypt/live/current` -> `/etc/letsencrypt/live/ng.bhnoc.com` |
 
-> The Athena backend still lives in the **other** account (`blackhat_pope_logs`,
-> workgroup `blackhat-pope-dev`, `us-west-2`), so the box's region is not the data's
+> The Athena backend still lives in the **other** account (`blackhatnoc_glue`,
+> workgroup `blackhatnoc-usa2026`, `us-west-2`), so the box's region is not the data's
 > region. Do not "fix" `ATHENA_REGION` to match the instance.
 
 ### Retired: the aing box (do not use)
@@ -261,7 +261,7 @@ Place it per the account's TME conventions. **Recommendation:** the app needs no
 a `m7i.xlarge` (or similar CPU instance) starts instantly, costs ~10× less, and never
 hits the GPU capacity wall the g6e does. Only keep g6e if something else on the box needs it.
 
-- Attach the IAM instance profile with Athena/Glue/S3 (`blackhat-pope-dev-ec2-role`).
+- Attach the IAM instance profile with Athena/Glue/S3 (`blackhatnoc-usa2026-ec2-role`).
 - Security group: SSH (22) from your IP, HTTPS (443) from the allow-list, HTTP (80) open
   (needed for the ACME HTTP challenge fallback and the →HTTPS redirect).
 - Ubuntu AMI.
@@ -450,7 +450,7 @@ CI runner moved off aing onto the Product-Research **nocgentic box**.
   (`--delete`, no nginx exclude) would otherwise clobber a box's server_name/cert path; the
   catch-all + symlink makes one conf safe everywhere. (deploy.sh health-check still sends
   `Host: ng.bhnoc.com` — harmless, catch-all answers any Host.)
-- **Per-tenant catalog:** athena-hunter rewrites AQLight's baked-in `blackhat_pope_logs.`
+- **Per-tenant catalog:** athena-hunter rewrites AQLight's baked-in `blackhatnoc_glue.`
   prefix → `ATHENA_DATABASE` (no-op when equal). Set `ATHENA_DATABASE/WORKGROUP/REGION` in
   `.env.s3`.
 - **Per-tenant origin + traces:** compose passes `ALLOWED_ORIGIN` (web-server WS origin check —

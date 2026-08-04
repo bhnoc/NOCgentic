@@ -47,8 +47,8 @@ alert-triage  thousandeyes   athena-hunter
 - **Python 3.11** (all four agents, FastAPI)
 - **LangChain** + **LangSmith OTEL bridge** for LLM spans
 - **OpenTelemetry** → Manifold (`blackcap.app.manifoldsecurity.io`) for monitoring
-- **S3 span archive** at `s3://blackhat-pope-dev-logs/nocgentic/traces/` (NDJSON.gz, Hive partitions)
-- **AWS Athena** — `blackhat_pope_logs.{conn,dns,http,ssl,files,alerts,suricata_corelight,uid_lookup,fuid_lookup,…}`
+- **S3 span archive** at `s3://blackhatnoc/corelight/dev/traces/` (NDJSON.gz, Hive partitions)
+- **AWS Athena** — `blackhatnoc_glue.{conn,dns,http,ssl,files,alerts,suricata_corelight,uid_lookup,fuid_lookup,…}`
 - **Docker Compose** stack on EC2 `ng.bhnoc.com`
 - **Gemini 3.1 Flash-Lite-Preview** (swappable via `GEMINI_MODEL`); OpenRouter available as alternate provider
 
@@ -200,7 +200,7 @@ the admin purge route: [`docs/cache/response-cache.md`](docs/cache/response-cach
 
 - **URL**: `https://ng.bhnoc.com/bh/1337/thetraces/`
 - **Auth**: bearer token → HTTPOnly signed cookie (HMAC(expiry))
-- **Data source**: polls `s3://blackhat-pope-dev-logs/nocgentic/traces/` every 2 s
+- **Data source**: polls `s3://blackhatnoc/corelight/dev/traces/` every 2 s
 - **UI**: one swim-lane per service, color-coded card kinds (LLM, athena, agent, tool, http). Cards show query/prompt/SQL preview (≤300 chars). Click-to-expand for full attributes including LLM prompt/completion.
 - **Startup preload**: pulls last 5 min of spans so lanes are populated immediately.
 - **Raw admin view**: spans show **unredacted** queries, IPs, zone names — the restricted-range filter only touches end-user responses.
@@ -210,7 +210,7 @@ the admin purge route: [`docs/cache/response-cache.md`](docs/cache/response-cach
 ## Deployment
 
 - **Target**: `ng.bhnoc.com` (EC2 `<INSTANCE-ID>`, us-west-2)
-- **Creds**: instance role `blackhat-pope-dev-ec2-role` (S3 + Athena + Glue read; S3 write scoped to `blackhat-pope-dev-logs`)
+- **Creds**: instance role `blackhatnoc-usa2026-ec2-role` (S3 + Athena + Glue read; S3 write scoped to `blackhatnoc`)
 - **Refresh STS**: `bash scripts/refresh-env-creds.sh .env.s3` on the host before `docker compose up`
 - **SSH**: `ssh -i ~/.ssh/id_macmini ubuntu@ng.bhnoc.com`, app at `/opt/nocgentic/app`
 
@@ -257,13 +257,13 @@ docker compose -f docker-compose.agents.yml up -d --build
 | `RESPONSE_CACHE_TTL_SECONDS` | `900` | how long a cached answer stays valid |
 | `RESPONSE_CACHE_HIT_DELAY_MIN` | `2.0` | cache hits are paced to a random total in this window |
 | `RESPONSE_CACHE_HIT_DELAY_MAX` | `5.0` | so a hit does not look instant |
-| `ATHENA_DATABASE` | `blackhat_pope_logs` | |
-| `ATHENA_WORKGROUP` | `blackhat-pope-dev` | |
-| `ATHENA_REGION` | `us-west-2` | |
+| `ATHENA_DATABASE` | `blackhatnoc_glue` | |
+| `ATHENA_WORKGROUP` | `blackhatnoc-usa2026` | |
+| `ATHENA_REGION` | `us-east-2` | |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Manifold | trace export |
 | `OTEL_EXPORTER_OTLP_API_KEY` | — | Manifold bearer |
-| `TRACE_S3_BUCKET` | `blackhat-pope-dev-logs` | span archive bucket |
-| `TRACE_S3_PREFIX` | `nocgentic/traces` | |
+| `TRACE_S3_BUCKET` | `blackhatnoc` | span archive bucket |
+| `TRACE_S3_PREFIX` | `nocgentic/traces` | prod overrides to `corelight/dev/traces`; must match `AUDIT_PREFIX` or the swim lanes read an empty path |
 | `AUDIT_BEARER_TOKEN` | — | required for audit monitor |
 | `AUDIT_COOKIE_SECRET` | — | HMAC key for admin cookie |
 | `ADMIN_BEARER_TOKEN` | n/a | bearer token guarding the orchestrator `/admin/*` routes; audit monitor forwards it |

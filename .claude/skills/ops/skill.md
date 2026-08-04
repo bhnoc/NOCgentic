@@ -24,7 +24,7 @@ Living document — append incidents, fixes, and gotchas as they happen.
 | DNS | `ng.bhnoc.com` |
 | SSH | `ssh nocgentic` (see `~/.ssh/config`; 1Password agent, biometric-gated) |
 | CI runner | `actions.runner.bhnoc-NOCgentic.nocgentic-box.service` at `/opt/nocgentic/actions-runner-nocgentic` |
-| Athena backend | still in the OTHER account: `blackhat_pope_logs`, `blackhat-pope-dev`, `us-west-2` |
+| Athena backend | `blackhatnoc_glue`, workgroup `blackhatnoc-usa2026`, **`us-east-2`**, SAME account as the box (`104738328073`). Verified 2026-08-03 from the instance role. |
 
 > **Host moved 2026-07-31, URL shortened 2026-08-01.** aing
 > (`i-0430224b1ac82701e`, `552440750419`, `us-west-2`, `aing.bhnoc.com`) is retired: runner deregistered, and SSH to it times out from the
@@ -402,10 +402,12 @@ bucket isn't the demo parquet bucket.
 > consider a cron that re-dates daily rather than doing it by hand.
 
 ### How the data is laid out (know this before touching it)
-- Athena DB `blackhat_pope_logs`, workgroup `blackhat-pope-dev`, region `us-west-2`. The
+- Athena DB `blackhatnoc_glue`, workgroup `blackhatnoc-usa2026`, region **`us-east-2`**. A
+  Glue call against `us-west-2` returns `EntityNotFoundException`, which reads like a
+  missing table rather than a wrong region, so check the region first when that appears. The
   `athena-hunter` / `alert-triage` agents query this DB directly (containers use temp creds
   from `.env.s3`, not the app URL).
-- Tables live in bucket **`blackhat-pope-parquet`**, Hive-partitioned by **`dt=YYYY-MM-DD`**
+- Tables live in bucket **`blackhatnoc`**, Hive-partitioned by **`dt=YYYY-MM-DD`**
   (the partition is the *ingestion* date, so a partition's `ts_datetime` can sprawl across
   a couple of calendar days — pick your window by inspecting `ts_datetime`, not by trusting `dt`).
 - **Time columns to shift:** `ts` (epoch **double**) and `ts_datetime` (**string**

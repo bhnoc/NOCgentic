@@ -149,7 +149,7 @@ triage  analyst      :8005           :8002
   </thead>
   <tbody>
     <tr><td><strong>Orchestrator</strong> (:8001)</td><td>Routing brain &mdash; classifies intent, enforces guardrails, sanitizes output, manages trace context</td><td>LLM classifier (Gemini Flash-Lite)</td></tr>
-    <tr><td><strong>Athena Hunter</strong> (:8005)</td><td>Primary threat hunt &mdash; generates SQL from natural language, executes against Corelight Parquet data</td><td>AWS Athena (<code>blackhat_pope_logs</code>)</td></tr>
+    <tr><td><strong>Athena Hunter</strong> (:8005)</td><td>Primary threat hunt &mdash; generates SQL from natural language, executes against Corelight Parquet data</td><td>AWS Athena (<code>blackhatnoc_glue</code>)</td></tr>
     <tr><td><strong>Alert Triage</strong> (:8003)</td><td>Active alert prioritization and IDS feed summarization</td><td>Athena <code>alerts</code> / <code>suricata_corelight</code> tables</td></tr>
     <tr><td><strong>Threat Hunter</strong> (:8002)</td><td>Legacy S3-backed raw Zeek scanning, auto-secondary fallback</td><td>S3 raw NDJSON logs</td></tr>
     <tr><td><strong>ThousandEyes Analyst</strong> (:8004)</td><td>BGP health, packet loss, latency, reachability analysis</td><td>ThousandEyes v7 REST API</td></tr>
@@ -187,7 +187,7 @@ triage  analyst      :8005           :8002
   <li><strong>Traces</strong> &rarr; Manifold OTLP-HTTP (<code>blackcap.app.manifoldsecurity.io:4318/v1/traces</code>)</li>
   <li><strong>Metrics</strong> &rarr; Manifold (<code>/v1/metrics</code>)</li>
   <li><strong>Logs</strong> &rarr; Manifold (<code>/v1/logs</code>)</li>
-  <li><strong>Traces (parallel)</strong> &rarr; S3 gzipped NDJSON archive (<code>s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/</code>)</li>
+  <li><strong>Traces (parallel)</strong> &rarr; S3 gzipped NDJSON archive (<code>s3://blackhatnoc/bh-asia-26/aing-trace/</code>)</li>
 </ul>
 
 <p>Five services emit telemetry: <code>bhnocgentic-orchestrator</code>, <code>bhnocgentic-athena-hunter</code>, <code>bhnocgentic-alert-triage</code>, <code>bhnocgentic-threat-hunter</code>, <code>bhnocgentic-thousandeyes-analyst</code>.</p>
@@ -254,7 +254,7 @@ os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")  # don't also send to Lan
 
 <p>Every span exported to Manifold is simultaneously written to S3 via a parallel <code>BatchSpanProcessor</code>:</p>
 
-<pre><code>s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/
+<pre><code>s3://blackhatnoc/bh-asia-26/aing-trace/
   service=bhnocgentic-orchestrator/dt=2026-04-23/hour=14/orchestrator-20260423T140532-a3f8b2c1.jsonl.gz
   service=bhnocgentic-athena-hunter/dt=2026-04-23/hour=14/athena-hunter-20260423T140535-e7d91ab4.jsonl.gz
   ...</code></pre>
@@ -526,7 +526,7 @@ Audit Monitor (FastAPI) ──httpx──▶ Orchestrator (state owner)
     <tr><td><code>OTEL_SAMPLE_RATE</code></td><td><code>1.0</code></td><td>Parent-based ratio sampler</td></tr>
     <tr><td><code>OTEL_METRICS_INTERVAL_MS</code></td><td><code>60000</code></td><td>Metric export cadence</td></tr>
     <tr><td><code>TRACE_S3_ENABLED</code></td><td><code>true</code></td><td>S3 sister exporter toggle</td></tr>
-    <tr><td><code>TRACE_S3_BUCKET</code></td><td><code>blackhat-pope-dev-logs</code></td><td>Span archive bucket</td></tr>
+    <tr><td><code>TRACE_S3_BUCKET</code></td><td><code>blackhatnoc</code></td><td>Span archive bucket</td></tr>
     <tr><td><code>TRACE_S3_PREFIX</code></td><td><code>bh-asia-26/aing-trace</code></td><td>S3 path prefix</td></tr>
   </tbody>
 </table>

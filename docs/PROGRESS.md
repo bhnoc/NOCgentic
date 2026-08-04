@@ -45,7 +45,7 @@ This file tracks periodic progress summaries for the AI-Powered SOC Platform pro
 ### Major shifts today
 
 #### 1. Data plane: S3 raw Zeek → AWS Athena (Parquet)
-- New `athena-hunter` agent (port 8005) — LLM-generated SQL against `blackhat_pope_logs` workgroup `blackhat-pope-dev`.
+- New `athena-hunter` agent (port 8005) — LLM-generated SQL against `blackhatnoc_glue` workgroup `blackhatnoc-usa2026`.
 - `alert-triage` fully migrated off S3 raw-TSV onto Athena for sub-second triage queries.
 - Shared `agents/shared/athena_client.py` — SELECT-only wrapper with date-partition helpers (fixed to cover every day in a multi-day range; previously only emitted first+last dates).
 - SQL generation prompt now carries **verified column schema**:
@@ -101,7 +101,7 @@ This file tracks periodic progress summaries for the AI-Powered SOC Platform pro
 #### 7. Observability: Manifold OTel + S3 span archive
 - Every agent runs `init_telemetry()` at startup — traces/metrics/logs exported to Manifold (`blackcap.app.manifoldsecurity.io:4318`) via OTLP-HTTP with bearer auth.
 - **LangSmith OTEL bridge** (set `LANGSMITH_TRACING=true` + `LANGSMITH_OTEL_ENABLED=true` BEFORE LangChain import) → every `ChatGoogleGenerativeAI.ainvoke()` auto-emits GenAI spans with prompt, completion, token counts, finish reason.
-- **S3SpanExporter** (new `agents/shared/s3_span_exporter.py`) — BatchSpanProcessor writes gzipped NDJSON batches to `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/service=<svc>/dt=YYYY-MM-DD/hour=HH/…jsonl.gz`. Hive-partitioned for Athena queryability later. Running in parallel to Manifold exporter, zero impact on latency.
+- **S3SpanExporter** (new `agents/shared/s3_span_exporter.py`) — BatchSpanProcessor writes gzipped NDJSON batches to `s3://blackhatnoc/bh-asia-26/aing-trace/service=<svc>/dt=YYYY-MM-DD/hour=HH/…jsonl.gz`. Hive-partitioned for Athena queryability later. Running in parallel to Manifold exporter, zero impact on latency.
 - Custom metrics: `bhnoc.tokens`, `bhnoc.cost.usd`, `bhnoc.llm.duration_ms` with `gen_ai.system` / `gen_ai.request.model` attrs.
 - Every query now carries `client.ip` / `client.user_agent` / `client.session_id` attrs on the root span through to S3.
 
@@ -138,7 +138,7 @@ This file tracks periodic progress summaries for the AI-Powered SOC Platform pro
 - 15/15 routing tests pass — including 5 guardrail probes (no leak words detected in any response)
 - 6/6 starter-prompt smoke tests return actionable answers (NetSupport RAT C2 found, Registration Web→DB lateral detected, 27 Zoho TLS connections identified, etc.)
 - `10.220.199.0/24` cover path returns in ~500 ms with hunt hints and no indication of filter
-- S3 span archive verified populating every ~5 s at `s3://blackhat-pope-dev-logs/bh-asia-26/aing-trace/`
+- S3 span archive verified populating every ~5 s at `s3://blackhatnoc/bh-asia-26/aing-trace/`
 - Audit monitor serves live swim-lane view with real prompts/SQL visible
 
 ---

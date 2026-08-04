@@ -22,13 +22,30 @@ Idempotent: drops any existing dt=<target> partition (Glue + S3) before insertin
 
 Dates derive from "today" (UTC) at runtime, so there is no manual day-offset to keep in
 sync. Override with DAYS_AHEAD env or positional table args as before.
+
+RETIRED, AND DELIBERATELY LEFT POINTING AT A DEAD TARGET
+-------------------------------------------------------
+The dev slice this script re-dated lived in the blackhat_pope_logs catalog and the
+blackhat-pope-parquet bucket. Both are gone; prod is blackhatnoc_glue over
+s3://blackhatnoc/corelight/usa2026/parquet. So this script no longer runs.
+
+It has NOT been retargeted at prod, and it should not be. clear_dst_partition()
+DELETES the dt=<target> partition from Glue and S3 before each insert, and the only
+thing standing between that and real data is the BUCKET guard in main(). Pointing
+that at the bucket holding live conference traffic would convert the guard into a
+loaded gun for the sake of a demo-seeding tool nobody needs during the show.
+
+If a dev slice is ever wanted again, stand up a SEPARATE bucket for it and set
+BUCKET to that. Do not set BUCKET to a bucket that holds data you want to keep.
 """
 import boto3, time, sys, os
 from datetime import datetime, timezone, timedelta
 
 REGION   = "us-west-2"
-DB       = "blackhat_pope_logs"
-WG       = "blackhat-pope-dev"
+# Retired dev-slice coordinates. See the note above before changing any of these:
+# the BUCKET value is a safety interlock, not just configuration.
+DB       = "blackhat-pope-retired-dev"
+WG       = "blackhat-pope-retired-dev"
 BUCKET   = "blackhat-pope-parquet"
 
 SRC_DT   = "2026-04-24"
