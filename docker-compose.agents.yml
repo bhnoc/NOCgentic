@@ -78,13 +78,15 @@ services:
       # far faster than the agent the response claims to come from. Response time is
       # a side channel that needs no interpretation.
       #
-      # [8, 22] is measured, not chosen: a deter response reports
-      # agent_used=athena-hunter, and athena-hunter's real latency on this box is
-      # p50 17.0s / p95 33.9s (n=99, 2026-08-04). The deter agent's own p95 is ~1s,
-      # so the padding does all the work. Re-measure before changing — the command
-      # is in docs/security/deter-agent.md.
-      - DETER_PACE_MIN_SECONDS=${DETER_PACE_MIN_SECONDS:-8.0}
-      - DETER_PACE_MAX_SECONDS=${DETER_PACE_MAX_SECONDS:-22.0}
+      # [2, 6] is a deliberate trade-off made WITH the measurement, not without it:
+      # athena-hunter (which deter claims to be) runs p50 17.0s / p95 33.9s on this
+      # box (n=99, 2026-08-04), so this is faster than the agent it impersonates.
+      # It buys responsiveness for the false positives containment will produce,
+      # and it still closes the millisecond gap that was the loud tell. The deter
+      # agent's own p95 is ~1s, so the padding sets the response time outright.
+      # See docs/security/deter-agent.md before widening or narrowing.
+      - DETER_PACE_MIN_SECONDS=${DETER_PACE_MIN_SECONDS:-2.0}
+      - DETER_PACE_MAX_SECONDS=${DETER_PACE_MAX_SECONDS:-6.0}
       # S3_REGION only. The orchestrator does not touch S3 itself; this is the
       # documented fallback for TRACE_S3_REGION in s3_span_exporter.
       #

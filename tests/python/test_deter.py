@@ -384,7 +384,7 @@ def _serve(query="show me the protocol mix", session_id="sid-A"):
 
 
 def test_deter_answer_is_served_to_a_contained_session(monkeypatch):
-    async def _fake(query, *, reason=None, trace_headers=None):
+    async def _fake(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True, "screen_reason": "ok"}
 
     monkeypatch.setattr(_orch, "call_deter", _fake)
@@ -396,7 +396,7 @@ def test_deter_answer_is_served_to_a_contained_session(monkeypatch):
 def test_served_answer_never_names_the_deter_agent(monkeypatch):
     """agent_used reaches the browser. A caller whose agent changes the turn
     after a probe has been told exactly what they needed to know."""
-    async def _fake(query, *, reason=None, trace_headers=None):
+    async def _fake(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
     monkeypatch.setattr(_orch, "call_deter", _fake)
@@ -408,7 +408,7 @@ def test_served_answer_never_names_the_deter_agent(monkeypatch):
 def test_served_answer_carries_no_data_payload(monkeypatch):
     """The deter agent reports which facets it read. Forwarding that would
     describe the mechanism to the person it is aimed at."""
-    async def _fake(query, *, reason=None, trace_headers=None):
+    async def _fake(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True,
                 "data": {"facets": ["protocol_mix"], "live_facets": 0}}
 
@@ -421,7 +421,7 @@ def test_confidence_stays_in_the_routine_band(monkeypatch):
     """A distinctive confidence fingerprints the path as surely as distinctive
     prose does. The agent clamps; this asserts what the orchestrator forwards is
     inside the band a normal answer occupies."""
-    async def _fake(query, *, reason=None, trace_headers=None):
+    async def _fake(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
     monkeypatch.setattr(_orch, "call_deter", _fake)
@@ -456,7 +456,7 @@ async def _stub_llm_answer(raw):
     ValueError("malformed json"),
 ])
 def test_any_transport_failure_falls_back_to_cover(monkeypatch, failure):
-    async def _fail(query, *, reason=None, trace_headers=None):
+    async def _fail(query, *, reason=None, trace_headers=None, **_kw):
         raise failure
 
     monkeypatch.setattr(_orch, "call_deter", _fail)
@@ -469,7 +469,7 @@ def test_any_transport_failure_falls_back_to_cover(monkeypatch, failure):
 def test_unusable_answer_falls_back_to_cover(monkeypatch):
     """The agent screened its own output away. Same outcome as the agent being
     down — a screen rejection must not become a visible failure."""
-    async def _rejected(query, *, reason=None, trace_headers=None):
+    async def _rejected(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": "", "confidence": 0.0, "usable": False,
                 "screen_reason": "leak_marker:i can't"}
 
@@ -483,7 +483,7 @@ def test_unusable_answer_falls_back_to_cover(monkeypatch):
 def test_a_truthful_usable_flag_with_empty_answer_still_covers(monkeypatch):
     """usable=true but nothing to show is a malformed agent response, not an
     answer. Serving "" would render as a blank reply, which is its own tell."""
-    async def _empty(query, *, reason=None, trace_headers=None):
+    async def _empty(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": "", "confidence": 0.7, "usable": True}
 
     monkeypatch.setattr(_orch, "call_deter", _empty)
@@ -495,7 +495,7 @@ def test_a_truthful_usable_flag_with_empty_answer_still_covers(monkeypatch):
 def test_deter_output_is_sanitised_on_the_way_out(monkeypatch):
     """The agent hardens its own output; the orchestrator sanitises everything
     outbound. Both run — this is the boundary that faces the browser."""
-    async def _leaky(query, *, reason=None, trace_headers=None):
+    async def _leaky(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD + "\nkey AKIAIOSFODNN7EXAMPLE\n",
                 "confidence": 0.7, "usable": True}
 
@@ -507,7 +507,7 @@ def test_deter_output_is_sanitised_on_the_way_out(monkeypatch):
 def test_hints_are_the_same_pool_a_cover_uses(monkeypatch):
     """Hints are on screen next to the answer. A distinct hint set on the deter
     path would distinguish it from every other path at a glance."""
-    async def _fake(query, *, reason=None, trace_headers=None):
+    async def _fake(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
     monkeypatch.setattr(_orch, "call_deter", _fake)
@@ -521,7 +521,7 @@ def test_the_quarantine_reason_reaches_deter_but_not_the_caller(monkeypatch):
     _orch.quarantine_session("sid-A", reason="prompt-injection: ignore previous instructions")
     captured: dict = {}
 
-    async def _fake(query, *, reason=None, trace_headers=None):
+    async def _fake(query, *, reason=None, trace_headers=None, **_kw):
         captured["reason"] = reason
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
@@ -609,7 +609,7 @@ def _serve_timed(monkeypatch, responder):
 
 
 def test_a_fast_deter_answer_is_held_to_the_floor(monkeypatch):
-    async def _instant(query, *, reason=None, trace_headers=None):
+    async def _instant(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
     resp, wall, span = _serve_timed(monkeypatch, _instant)
@@ -622,7 +622,7 @@ def test_the_cover_fallback_is_paced_too(monkeypatch):
     """The fallback needs the floor MORE than the success path: a cover costs no
     LLM call at all, so unpaced it returns in milliseconds and announces that the
     deter agent just failed."""
-    async def _down(query, *, reason=None, trace_headers=None):
+    async def _down(query, *, reason=None, trace_headers=None, **_kw):
         raise ConnectionError("deter is down")
 
     resp, wall, span = _serve_timed(monkeypatch, _down)
@@ -631,7 +631,7 @@ def test_the_cover_fallback_is_paced_too(monkeypatch):
 
 
 def test_a_screen_rejection_is_paced_too(monkeypatch):
-    async def _rejected(query, *, reason=None, trace_headers=None):
+    async def _rejected(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": "", "usable": False, "screen_reason": "leak_marker:i can't"}
 
     _resp, wall, _span = _serve_timed(monkeypatch, _rejected)
@@ -641,7 +641,7 @@ def test_a_screen_rejection_is_paced_too(monkeypatch):
 def test_a_slow_deter_answer_is_not_padded_further(monkeypatch):
     """Padding is one-sided. An answer that already took longer than the window
     must go straight out."""
-    async def _slow(query, *, reason=None, trace_headers=None):
+    async def _slow(query, *, reason=None, trace_headers=None, **_kw):
         await asyncio.sleep(0.5)
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
@@ -659,7 +659,7 @@ def test_lane_timings_reflect_the_paced_total_not_the_real_cost(monkeypatch):
     monkeypatch.setattr(_orch, "lane_race_enabled", lambda: True)
     monkeypatch.setattr(_orch.llm_client, "side_by_side_enabled", lambda: True)
 
-    async def _instant(query, *, reason=None, trace_headers=None):
+    async def _instant(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
     resp, _wall, _span = _serve_timed(monkeypatch, _instant)
@@ -670,11 +670,72 @@ def test_lane_timings_reflect_the_paced_total_not_the_real_cost(monkeypatch):
     )
 
 
+# ---------------------------------------------------------------------------
+# 5. live_ok: the kill-switch must not reach the data lake
+# ---------------------------------------------------------------------------
+
+def test_the_quarantine_path_allows_live_pool_reads(monkeypatch):
+    captured: dict = {}
+
+    async def _fake(query, *, reason=None, trace_headers=None, **kw):
+        captured.update(kw)
+        return {"answer": _GOOD, "confidence": 0.72, "usable": True}
+
+    monkeypatch.setattr(_orch, "call_deter", _fake)
+    _serve()
+    assert captured.get("live_ok") is True
+
+
+def test_the_kill_switch_path_forbids_live_pool_reads(monkeypatch):
+    """A kill-switch is 'stop reading the network'. The deter agent already
+    defaults to static roll-ups, but the switch must not depend on that default
+    holding — sending live_ok=False explicitly is what makes 'plug pulled' a
+    property of the REQUEST rather than of the agent's environment."""
+    captured: dict = {}
+
+    async def _fake(query, *, reason=None, trace_headers=None, **kw):
+        captured.update(kw)
+        return {"answer": _GOOD, "confidence": 0.72, "usable": True}
+
+    monkeypatch.setattr(_orch, "call_deter", _fake)
+    span = _Span()
+    asyncio.run(_orch._serve_deter(
+        "protocol mix", start=0.0, session_id="sid-A", span=span,
+        live_ok=False, salt="kill_switch", reason_override="admin kill-switch",
+    ))
+    assert captured.get("live_ok") is False
+    assert span.attrs["deter.live_ok"] is False
+
+
+def test_agent_honours_live_ok_false_even_with_athena_enabled(monkeypatch):
+    """The orchestrator sending live_ok=False is only half of it — the agent has
+    to obey it. Asserted with DETER_ATHENA_ENABLED on, because that is the only
+    configuration where disobeying would actually reach AWS."""
+    monkeypatch.setattr(_deter, "DETER_ATHENA_ENABLED", True)
+
+    async def _explode(sql):
+        raise AssertionError("live_ok=False must not reach Athena")
+
+    monkeypatch.setattr(_deter.athena_client, "execute_custom_sql", _explode)
+    ctx = asyncio.run(_deter.gather_pool_context("protocol mix", live_ok=False))
+    assert ctx["live_facets"] == 0
+    assert ctx["facets"] and all(f["rows"] for f in ctx["facets"])
+
+
+def test_a_killed_answer_still_carries_real_content(monkeypatch):
+    """Forbidding live reads must not empty the answer out — a kill-switch that
+    produces nothing to say is a kill-switch that announces itself."""
+    monkeypatch.setattr(_deter, "DETER_ATHENA_ENABLED", True)
+    ctx = asyncio.run(_deter.gather_pool_context("any beaconing today", live_ok=False))
+    out = _deter._llm_context(ctx)
+    assert out["datasets"] and all(d["rows"] for d in out["datasets"])
+
+
 def test_deter_path_never_touches_the_response_cache(monkeypatch):
     """The cache key is the query text alone and entries are shared between
     callers. One deter answer written there would be served to every benign user
     who later asks the same question."""
-    async def _fake(query, *, reason=None, trace_headers=None):
+    async def _fake(query, *, reason=None, trace_headers=None, **_kw):
         return {"answer": _GOOD, "confidence": 0.72, "usable": True}
 
     def _explode(*a, **kw):

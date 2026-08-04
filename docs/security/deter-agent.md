@@ -122,7 +122,7 @@ surface the browser sees:
 | `hints` | `restricted_cover_hints` pool | same pool on cover paths |
 | `data` | `null` | agent metadata |
 | lane surface | synthetic pair via `_cover_lanes` | real race results |
-| latency | floored to 8–22s (see below) | athena-hunter p50 17.0s |
+| latency | floored to 2–6s (see below) | athena-hunter p50 17.0s |
 
 `agent_used` is the one that matters most: it reaches the browser, and a caller
 whose agent changes the turn after a probe has been told exactly what they needed
@@ -186,22 +186,39 @@ sudo docker compose -f docker-compose.agents.yml logs --no-color orchestrator \
   | grep -oE "agent=[a-z-]+ elapsed=[0-9.]+"
 ```
 
-The deter agent's own p95 is **~1.0s**, so the padding does essentially all of
-the work — the window *is* the response time.
+The deter agent's own p95 is **~1.0s**, so the padding sets the response time
+outright — the window *is* the latency.
 
-The first cut of this was 2–4s, which is **4–8× faster than the agent it claims
-to be**. 2.17s is inside athena-hunter's observed range, so one fast answer proves
-nothing — but landing in that range on *every* turn, while real answers scatter
-across 2–45s, is a stronger signal than the millisecond cover it replaced. The
-current `[8, 22]` brackets athena-hunter's p50 and sits in the bulk of its
-distribution.
+### The window is `[2, 6]`, and that is a trade-off, not an oversight
 
-This is the cost of the design: deterring a contained session means making them
-wait as long as a real hunt takes. That wait is not wasted — it is the deterrent
-working, and it is spent on someone a detector has already flagged.
+Recorded in full so nobody "corrects" it back without knowing what was weighed.
 
-Re-measure on your own box. A window copied from this table onto a platform with
-different agent latency reintroduces exactly the tell it removes.
+A deter response reports `agent_used: athena-hunter`, whose p50 is 17s. `[2, 6]`
+is therefore **faster than the agent it impersonates**, and a caller who times
+enough turns against a known-good athena-hunter answer can see that. What it buys:
+
+* **2–6s is plausible tool latency in absolute terms**, and 2.17s is inside
+  athena-hunter's real observed range. Nothing about any single response looks
+  wrong.
+* **It closes the loud gap.** The millisecond cover was three orders of magnitude
+  out and visible in one turn with no baseline to compare against. This leaves a
+  ~3× gap visible only across many turns *with* a baseline — a much higher bar,
+  requiring a caller who already suspects enough to go looking.
+* **A 4-second spread scatters more than the 2-second one it replaced.** A narrow
+  window is its own signature wherever it sits.
+* **Responsiveness for false positives.** Containment is triggered by a detector,
+  so legitimate operators will be caught by it. Making them wait 17s for every
+  answer is a real cost paid by real people.
+
+Caveat on the measurement itself: those agent numbers come from production logs
+and may reflect shared load rather than intrinsic model cost. They are still what
+callers actually experience, which is what the comparison turns on — but if the
+box gets quieter, re-measure rather than assuming the gap held.
+
+If timing indistinguishability starts to matter more than responsiveness, widen
+toward the table above; `[8, 22]` would bracket athena-hunter's p50. Re-measure
+first — a window copied onto a platform with different agent latency reintroduces
+exactly the tell it removes.
 
 ## Choosing the model
 
@@ -313,8 +330,8 @@ detector, so the injection surface is the one that gets attacked first.
 | `DETER_ENABLED` | orchestrator | `true` | `false` reverts contained sessions to the canned cover |
 | `DETER_URL` | orchestrator | `http://deter:8006` | must be set in compose; absent means the localhost default, so every call fails and covers |
 | `DETER_TIMEOUT_SECONDS` | orchestrator | `25.0` | far below the 180s specialists get — see below |
-| `DETER_PACE_MIN_SECONDS` | orchestrator | `8.0` | wall-clock floor, incl. the cover fallback |
-| `DETER_PACE_MAX_SECONDS` | orchestrator | `22.0` | top of the floor window |
+| `DETER_PACE_MIN_SECONDS` | orchestrator | `2.0` | wall-clock floor, incl. the cover fallback |
+| `DETER_PACE_MAX_SECONDS` | orchestrator | `6.0` | top of the floor window |
 | `DETER_MODEL` | deter | `gemini-2.5-flash-lite` | pinned separately from `GEMINI_MODEL` |
 | `DETER_ATHENA_ENABLED` | deter | `false` | live pool reads vs static roll-ups |
 | `DETER_WINDOW_HOURS` | deter | `24` | live roll-up window |
