@@ -68,8 +68,14 @@ const server = createServer(async (req, res) => {
         answer: 'QUERY TABS: answer text.',
         confidence: 0.8,
         data: {
-          query_details: [{ sql: longSql, rows: 3, time_ms: 120, scanned_mb: 4.2 }],
-          total_rows: 3,
+          query_details: [{
+            sql: longSql, row_count: 2, time_ms: 120, scanned_mb: 4.2,
+            sample_rows: [
+              { orig_h: '10.220.40.7', resp_h: '45.83.193.150', alert_name: 'Port scan' },
+              { orig_h: '10.220.40.9', resp_h: '45.83.193.150', alert_name: 'Port scan' },
+            ],
+          }],
+          total_rows: 2,
         },
       });
     } else {

@@ -1471,9 +1471,13 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             "query_details": [
                 {
                     "sql": qr["sql"][:200],
-                    "rows": qr["row_count"],
+                    "row_count": qr["row_count"],
                     "time_ms": qr["execution_time_ms"],
                     "scanned_mb": qr["data_scanned_mb"],
+                    # The actual rows Athena returned, not just the count — the
+                    # UI's "Raw" panel shows these, capped the same way the LLM
+                    # context is (see gather_athena_context: rows[:100]).
+                    "sample_rows": qr["rows"],
                 }
                 for qr in context.get("query_results", [])
             ],

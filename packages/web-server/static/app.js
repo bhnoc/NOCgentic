@@ -661,46 +661,50 @@
   }
 
   /**
-   * Query / Raw Data tabs for one lane's data blob. Query shows the SQL
-   * athena-hunter actually ran (data.query_details, when present); Raw Data is
-   * the full JSON. Both live in a scrollable, WORD-WRAPPED box — pre.code-block
-   * used overflow-x:auto, so a long SQL string or JSON line forced the analyst
-   * to scroll sideways instead of just reading down. Only one tab when there's
-   * no SQL to show (alert-triage/thousandeyes shapes don't expose query text).
+   * "Raw" collapsed section for one lane's data blob. Default-collapsed so a
+   * bubble isn't dominated by machinery the analyst didn't ask for — expanding
+   * it shows the actual rows Athena returned (data.query_details[].sample_rows),
+   * not the summary JSON and not the SQL. Each query that ran gets its own
+   * nested "View SQL" toggle showing the statement that produced its rows;
+   * that toggle is what the old always-visible SQL/Raw-Data tabs collapsed
+   * into — it's what the query DID, not the results, so it belongs one level
+   * in from the results themselves. Falls back to the summary JSON (word-
+   * wrapped, not the old overflow-x:auto box) for agent shapes with no rows
+   * to show (alert-triage/thousandeyes).
    */
   function renderDataTabs(data) {
     const queries = Array.isArray(data.query_details) ? data.query_details : [];
-    const queryHtml = queries.length
-      ? queries.map((q, i) => `
+    const hasSampleRows = queries.some(q => Array.isArray(q.sample_rows) && q.sample_rows.length > 0);
+
+    let bodyHtml;
+    if (hasSampleRows) {
+      bodyHtml = queries.map((q, i) => {
+        const rowsHtml = Array.isArray(q.sample_rows) && q.sample_rows.length
+          ? renderData(q.sample_rows)
+          : '<p class="query-item-empty">No rows returned</p>';
+        const sqlId = `sql-${Math.random().toString(36).slice(2, 9)}`;
+        return `
           <div class="query-item">
             ${queries.length > 1 ? `<div class="query-item-index">Query ${i + 1}</div>` : ''}
-            <pre class="code-block code-wrap">${escHtml(q.sql || '')}</pre>
+            ${rowsHtml}
             <div class="query-item-stats">
-              ${q.rows != null ? `<span>${q.rows} rows</span>` : ''}
+              ${q.row_count != null ? `<span>${q.row_count} rows</span>` : ''}
               ${q.time_ms != null ? `<span>${q.time_ms}ms</span>` : ''}
               ${q.scanned_mb != null ? `<span>${q.scanned_mb}MB scanned</span>` : ''}
             </div>
-          </div>`).join('')
-      : '';
-    const rawDataHtml = renderData({ ...data, llm_metrics: undefined, query_details: undefined });
-    if (!queryHtml && !rawDataHtml) return '';
-
-    const tabs = [];
-    if (queryHtml) tabs.push({ key: 'query', label: 'Query', html: queryHtml });
-    if (rawDataHtml) tabs.push({ key: 'raw', label: 'Raw Data', html: rawDataHtml });
-    if (tabs.length === 1) {
-      // Nothing to switch between — skip the tab strip, keep the box.
-      return `<div class="data-panel">${tabs[0].html}</div>`;
+            <details class="sql-collapse" id="${sqlId}">
+              <summary>View SQL</summary>
+              <pre class="code-block code-wrap">${escHtml(q.sql || '')}</pre>
+            </details>
+          </div>`;
+      }).join('');
+    } else {
+      const rawDataHtml = renderData({ ...data, llm_metrics: undefined, query_details: undefined });
+      if (!rawDataHtml) return '';
+      bodyHtml = rawDataHtml;
     }
-    const tabId = `datatabs-${Math.random().toString(36).slice(2, 9)}`;
-    const tabButtons = tabs.map((t, i) =>
-      `<button type="button" class="data-tab${i === 0 ? ' active' : ''}" data-tab-key="${t.key}">${t.label}</button>`
-    ).join('');
-    const tabPanels = tabs.map((t, i) =>
-      `<div class="data-panel${i === 0 ? ' active' : ''}" data-tab-key="${t.key}">${t.html}</div>`
-    ).join('');
-    return `<div class="data-tabs" id="${tabId}">` +
-      `<div class="data-tab-strip">${tabButtons}</div>${tabPanels}</div>`;
+
+    return `<details class="raw-collapse"><summary>Raw</summary>${bodyHtml}</details>`;
   }
 
   /**
@@ -779,18 +783,6 @@
     const btn = ev.target.closest && ev.target.closest('.lane-swap');
     if (!btn) return;
     swapLane(btn.getAttribute('data-lane-key'));
-  });
-
-  // Delegated for the same reason: a swap replaces the whole lane body,
-  // Query/Raw Data tab strip included.
-  document.addEventListener('click', (ev) => {
-    const btn = ev.target.closest && ev.target.closest('.data-tab');
-    if (!btn) return;
-    const strip = btn.closest('.data-tabs');
-    if (!strip) return;
-    const key = btn.getAttribute('data-tab-key');
-    strip.querySelectorAll('.data-tab').forEach(b => b.classList.toggle('active', b === btn));
-    strip.querySelectorAll('.data-panel').forEach(p => p.classList.toggle('active', p.getAttribute('data-tab-key') === key));
   });
 
   // ========== Message rendering ==========
@@ -1156,6 +1148,49 @@
   }
 
   window.addEventListener('hashchange', applyHashView);
+
+  /**
+   * Clicking the logo: end the current investigation and start a fresh one.
+   * Not just a view switch (setView('chat') alone leaves every rendered
+   * message and its lane/poll state in place) — the analyst asked for this
+   * specifically to get OUT of an investigation, so the transcript, the
+   * per-job hint pollers, and the lane-swap state all have to go with it.
+   */
+  function resetToHome() {
+    for (const timer of pollIntervals.values()) clearInterval(timer);
+    pollIntervals.clear();
+    laneState.clear();
+    renderedJobs.clear();
+    queryCount = 0;
+    const statQueries = document.getElementById('stat-queries');
+    if (statQueries) statQueries.textContent = '0';
+
+    const msgs = document.getElementById('chat-messages');
+    if (msgs) {
+      msgs.innerHTML = `
+        <div class="welcome" id="welcome-banner">
+          <img src="https://blackhat.com/images/logo.png" alt="Black Hat" style="height:48px; margin-bottom:8px; filter: brightness(1.2);" />
+          <h2>BlackHat NOCGentic Operations</h2>
+          <div class="tagline">AI-Powered Network Operations Center // <span id="event-label">Black Hat</span></div>
+          <p>
+            Query live network threats, investigate IOCs, triage firewall alerts,
+            or ask about suspicious activity. AI agents analyze NOC telemetry in real time.
+          </p>
+          <div class="example-queries" id="example-queries">
+            <button class="example-chip" onclick="fillQuery(this)">What is the biggest risk so far?</button>
+            <button class="example-chip" onclick="fillQuery(this)">Are there any attacks happening right now?</button>
+            <button class="example-chip" onclick="fillQuery(this)">What is the most interesting attack so far?</button>
+            <button class="example-chip" onclick="fillQuery(this)">How is the network quality right now?</button>
+            <button class="example-chip" onclick="fillQuery(this)">Is there any latency reported to AWS?</button>
+          </div>
+        </div>`;
+    }
+    // Re-fetch rather than re-use the fallback markup above: loadConfig() draws
+    // a fresh starter-hint set from the server and re-applies the event label,
+    // matching what a real page load does.
+    loadConfig();
+    setView('chat');
+  }
 
   // ========== Toasts ==========
   function showToast(tone, text) {

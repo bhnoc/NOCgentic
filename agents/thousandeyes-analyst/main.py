@@ -74,10 +74,12 @@ sanitize = sanitize_for_llm
 
 TE_BEARER_TOKEN = os.getenv("THOUSANDEYES_BEARER_TOKEN", "")
 TE_BASE_URL     = os.getenv("THOUSANDEYES_BASE_URL", "https://api.thousandeyes.com/v7")
-# Pin to a specific account group. Default to BH ASIA (2094085) — the tokens
+# Pin to a specific account group. Default to BH USA (2094129) — the tokens
 # we use often have access to multiple account groups (BlackHat default,
-# BH ASIA, BH USA, BH Europe) and tests are partitioned by conference.
-TE_ACCOUNT_GROUP = os.getenv("THOUSANDEYES_ACCOUNT_GROUP", "2094085")
+# BH ASIA 2094085, BH USA 2094129, BH Europe 2094130) and tests are
+# partitioned by conference. Update this default (and THOUSANDEYES_ACCOUNT_GROUP
+# in .env.s3) ahead of each new show.
+TE_ACCOUNT_GROUP = os.getenv("THOUSANDEYES_ACCOUNT_GROUP", "2094129")
 TE_TIMEOUT      = 20.0
 TE_FETCH_CONCURRENCY = 8  # parallel result fetches
 

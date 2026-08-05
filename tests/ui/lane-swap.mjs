@@ -200,41 +200,123 @@ const confPill = await evaluate(`(() => {
 check('single-lane confidence pill renders', confPill.pillText === '42%', JSON.stringify(confPill));
 check('still no swap control alongside a bare confidence pill', confPill.swapButtons === 0);
 
-// Query / Raw Data tabs: both present when query_details carries SQL, the
-// Query panel is shown first, and the long single-line SQL wraps rather than
-// forcing horizontal scroll.
+// Raw section: default-collapsed, expands to the actual rows (not the
+// summary JSON, not the SQL), and a nested "View SQL" toggle reveals the
+// statement. The long single-line SQL must wrap rather than scroll sideways.
 await evaluate(`(() => {
   document.getElementById('query-input').value = 'query tabs check';
   sendQuery();
 })()`);
 await sleep(2800);
-const queryTabs = await evaluate(`(() => {
+const rawSection = await evaluate(`(() => {
   const bubbles = [...document.querySelectorAll('.message.agent')];
   const last = bubbles[bubbles.length - 1];
-  const tabs = [...last.querySelectorAll('.data-tab')].map(b => b.textContent.trim());
-  const activeTab = last.querySelector('.data-tab.active');
-  const activePanel = last.querySelector('.data-panel.active');
-  const pre = last.querySelector('.data-panel.active pre.code-block');
-  const rawTab = [...last.querySelectorAll('.data-tab')].find(b => b.textContent.trim() === 'Raw Data');
-  rawTab && rawTab.click();
-  const afterClickPanel = last.querySelector('.data-panel.active');
+  const raw = last.querySelector('details.raw-collapse');
+  // The 'open' attribute IS the collapse state the browser renders from —
+  // verified visually via a real screenshot (headless Chrome's layout APIs
+  // for closed <details> content are unreliable in this environment:
+  // getBoundingClientRect/getClientRects report the content as painted even
+  // though a screenshot shows only the "▶ Raw" summary line).
+  const initiallyOpen = raw ? raw.hasAttribute('open') : null;
+  const summaryText = raw ? raw.querySelector('summary').textContent.trim() : null;
+  raw && raw.setAttribute('open', '');
+  const table = last.querySelector('details.raw-collapse table.data-table');
+  const tableText = table ? table.textContent : '';
+  const sql = last.querySelector('details.sql-collapse');
+  const sqlInitiallyOpen = sql ? sql.hasAttribute('open') : null;
+  const sqlSummaryText = sql ? sql.querySelector('summary').textContent.trim() : null;
+  sql && sql.setAttribute('open', '');
+  const pre = sql ? sql.querySelector('pre.code-block') : null;
   return {
-    tabs,
-    activeTabLabel: activeTab ? activeTab.textContent.trim() : null,
-    firstPanelHasSql: activePanel ? activePanel.textContent.includes('SELECT') : false,
+    hasRawSection: !!raw,
+    initiallyOpen,
+    summaryText,
+    tableHasSampleRow: tableText.includes('10.220.40.7') && tableText.includes('Port scan'),
+    hasSqlToggle: !!sql,
+    sqlInitiallyOpen,
+    sqlSummaryText,
     preWraps: pre ? pre.classList.contains('code-wrap') : false,
     preOverflowX: pre ? getComputedStyle(pre).overflowX : null,
     preWhiteSpace: pre ? getComputedStyle(pre).whiteSpace : null,
-    afterClickShowsRawData: afterClickPanel ? afterClickPanel.getAttribute('data-tab-key') === 'raw' : false,
-    afterClickHasTotalRows: afterClickPanel ? afterClickPanel.textContent.includes('total_rows') : false,
+    preHasSql: pre ? pre.textContent.includes('SELECT') : false,
   };
 })()`);
-check('Query and Raw Data tabs both present', JSON.stringify(queryTabs.tabs) === '["Query","Raw Data"]', JSON.stringify(queryTabs.tabs));
-check('Query tab is active by default', queryTabs.activeTabLabel === 'Query', queryTabs.activeTabLabel);
-check('Query panel shows the actual SQL', queryTabs.firstPanelHasSql === true);
-check('the SQL block wraps instead of scrolling sideways', queryTabs.preWraps === true && queryTabs.preOverflowX === 'hidden' && queryTabs.preWhiteSpace === 'pre-wrap', JSON.stringify(queryTabs));
-check('clicking Raw Data switches panels', queryTabs.afterClickShowsRawData === true);
-check('Raw Data panel shows the JSON blob', queryTabs.afterClickHasTotalRows === true);
+check('Raw section is present', rawSection.hasRawSection === true);
+check('Raw section is collapsed by default', rawSection.initiallyOpen === false);
+check('Raw section is labeled "Raw"', rawSection.summaryText === 'Raw', rawSection.summaryText);
+check('expanding Raw shows the actual rows, not the summary JSON', rawSection.tableHasSampleRow === true, JSON.stringify(rawSection));
+check('a nested View SQL toggle exists inside Raw', rawSection.hasSqlToggle === true);
+check('the SQL toggle is collapsed by default', rawSection.sqlInitiallyOpen === false);
+check('the SQL toggle is labeled "View SQL"', rawSection.sqlSummaryText === 'View SQL', rawSection.sqlSummaryText);
+check('expanding View SQL shows the actual statement', rawSection.preHasSql === true);
+check('the SQL block wraps instead of scrolling sideways', rawSection.preWraps === true && rawSection.preOverflowX === 'hidden' && rawSection.preWhiteSpace === 'pre-wrap', JSON.stringify(rawSection));
+
+// Confidence pill sits at the FAR RIGHT of the lane bar, immediately left of
+// the model/lane label — not stranded at the left edge. Regression: the swap
+// button's leftover `margin-left: auto` ate the parent's flex-end alignment,
+// so the pill+label cluster rendered at the left with only the swap button
+// pushed right.
+const pillAlignment = await evaluate(`(() => {
+  // Bare-confidence bubble (no swap button, so the pill+label cluster IS the
+  // right-most content) proves the bar itself right-aligns. The raced bubble
+  // (has a swap button, checked separately below) proves ordering within the
+  // cluster: pill immediately left of the label, wherever the cluster sits.
+  const bars = [...document.querySelectorAll('.lane-bar')];
+  const bareBar = bars.find(b => b.querySelector('.confidence-pill') && !b.querySelector('.lane-current') && !b.querySelector('.lane-swap'));
+  const racedBar = bars.find(b => b.querySelector('.confidence-pill') && b.querySelector('.lane-current'));
+  if (!bareBar || !racedBar) return { ok: false, hasBareBar: !!bareBar, hasRacedBar: !!racedBar };
+  const barePill = bareBar.querySelector('.confidence-pill');
+  const bareBarRect = bareBar.getBoundingClientRect();
+  const barePillRect = barePill.getBoundingClientRect();
+  const racedPill = racedBar.querySelector('.confidence-pill');
+  const racedLabel = racedBar.querySelector('.lane-current');
+  const racedPillRect = racedPill.getBoundingClientRect();
+  const racedLabelRect = racedLabel.getBoundingClientRect();
+  return {
+    ok: true,
+    // A left-stranded pill (the regression) would put this near 0, not near
+    // the bar's width.
+    pillNearRightEdge: (bareBarRect.right - barePillRect.right) < 40,
+    pillLeftOfLabel: racedPillRect.right <= racedLabelRect.left + 2,
+  };
+})()`);
+check('confidence pill anchors to the right edge of the lane bar', pillAlignment.ok && pillAlignment.pillNearRightEdge, JSON.stringify(pillAlignment));
+check('confidence pill sits immediately left of the model label', pillAlignment.ok && pillAlignment.pillLeftOfLabel, JSON.stringify(pillAlignment));
+
+// Logo click: ends the investigation, not just a view switch. Several jobs
+// have been sent by this point in the run, so there IS a transcript and
+// per-job state (pollIntervals/laneState/renderedJobs) to actually clear.
+const beforeReset = await evaluate(`(() => ({
+  messageCount: document.querySelectorAll('.message').length,
+  hasWelcomeBanner: !!document.getElementById('welcome-banner'),
+}))()`);
+check('sanity: messages exist before reset', beforeReset.messageCount > 0, JSON.stringify(beforeReset));
+check('sanity: welcome banner is gone before reset (first query removed it)', beforeReset.hasWelcomeBanner === false);
+
+await evaluate(`(() => document.getElementById('header-logo-home').click())()`);
+await sleep(300);
+const afterReset = await evaluate(`(() => ({
+  messageCount: document.querySelectorAll('.message').length,
+  hasWelcomeBanner: !!document.getElementById('welcome-banner'),
+  chipCount: document.querySelectorAll('#example-queries .example-chip').length,
+  view: document.getElementById('hunt-view').hidden ? 'chat' : 'hunt',
+}))()`);
+check('logo click clears the transcript', afterReset.messageCount === 0, JSON.stringify(afterReset));
+check('logo click restores the welcome banner', afterReset.hasWelcomeBanner === true);
+check('logo click restores the starter chips', afterReset.chipCount > 0, JSON.stringify(afterReset));
+check('logo click lands on the chat view', afterReset.view === 'chat');
+
+// A fresh query after reset must still work end to end — reset must not have
+// left pollIntervals/renderedJobs in a state that wedges the next send.
+await evaluate(`(() => {
+  document.getElementById('query-input').value = 'ordinary single lane question';
+  sendQuery();
+})()`);
+await sleep(2200);
+const afterResetQuery = await evaluate(`(() => ({
+  text: document.querySelector('.message.agent:last-child')?.textContent.replace(/\\s+/g, ' ').trim() || '',
+}))()`);
+check('sending a query after reset still works', /stub answer for/.test(afterResetQuery.text), afterResetQuery.text);
 
 check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
 

@@ -309,6 +309,9 @@ services:
       - "8004"
     environment:
       - THOUSANDEYES_BEARER_TOKEN=${THOUSANDEYES_BEARER_TOKEN}
+      # Account group is partitioned by conference (BH ASIA 2094085, BH USA
+      # 2094129, BH Europe 2094130). Update alongside EVENT_EDITION per show.
+      - THOUSANDEYES_ACCOUNT_GROUP=${THOUSANDEYES_ACCOUNT_GROUP:-2094129}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}

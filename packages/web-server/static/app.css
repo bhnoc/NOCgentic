@@ -113,19 +113,24 @@
       display: flex;
       align-items: center;
       gap: 14px;
+    }
+
+    .header-logo-btn {
+      display: flex;
+      align-items: center;
       background: none;
       border: none;
       padding: 0;
       cursor: pointer;
-      text-align: left;
-      font: inherit;
-      color: inherit;
+      line-height: 0;
     }
-    .header-brand:focus-visible { outline: 1px solid var(--ice-400); outline-offset: 2px; }
+    .header-logo-btn:focus-visible { outline: 1px solid var(--ice-400); outline-offset: 2px; border-radius: 2px; }
+    .header-logo-btn:hover .header-logo-img { filter: brightness(1.4); }
 
     .header-logo-img {
       height: 36px;
       filter: brightness(1.2);
+      transition: filter 0.15s ease;
     }
     .header-logo {
       width: 40px;
@@ -956,7 +961,7 @@
     .lane-delta  { color: var(--accent-yellow); }
     .lane-pending { color: var(--dim); opacity: 0.75; text-transform: none; letter-spacing: 0; }
     .lane-swap {
-      margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+      display: inline-flex; align-items: center; gap: 6px;
       background: rgba(30,144,255,0.08); border: 1px solid rgba(30,144,255,0.3);
       color: var(--frost); padding: 4px 10px; border-radius: 2px;
       font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
@@ -969,7 +974,6 @@
     @media (max-width: 640px) {
       /* The full model name blows out the bar on a phone; the ⇄ icon carries it. */
       .lane-swap-label { display: none; }
-      .lane-swap { margin-left: auto; }
     }
 
     /* Follow-up hint chips */
@@ -1010,50 +1014,65 @@
       word-break: break-word;
     }
 
-    /* Query / Raw Data tabs — replaces the old single always-collapsed
-       details block so both views live in the same spot instead of one
-       being buried under a click. */
-    .data-tabs { margin-top: 8px; }
-    .data-tab-strip {
-      display: flex; gap: 2px;
-      border-bottom: 1px solid var(--border);
+    /* Raw — default-collapsed. Expanding shows the actual rows the SQL
+       returned; a nested "View SQL" toggle per query shows the statement
+       itself, one level in because it's what the query DID, not the result. */
+    details.raw-collapse, details.sql-collapse {
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
     }
-    .data-tab {
+    details.raw-collapse summary, details.sql-collapse summary {
       cursor: pointer;
       padding: 6px 12px;
-      font-size: 10px;
+      font-size: 11px;
       font-family: var(--font-mono);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--text-muted);
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
+      color: var(--ice-500);
+      background: var(--bg-void);
+      user-select: none;
+      list-style: none;
     }
-    .data-tab:hover { color: var(--ice-300); }
-    .data-tab.active { color: var(--ice-400); border-bottom-color: var(--ice-500); }
-    .data-panel { display: none; }
-    .data-panel.active { display: block; }
-    .data-panel > pre.code-block {
+    details.raw-collapse summary::-webkit-details-marker,
+    details.sql-collapse summary::-webkit-details-marker { display: none; }
+    details.raw-collapse summary::before, details.sql-collapse summary::before {
+      content: '\25B6  ';
+      font-size: 9px;
+      transition: transform 0.15s;
+      display: inline-block;
+    }
+    details.raw-collapse[open] summary::before, details.sql-collapse[open] summary::before {
+      transform: rotate(90deg);
+    }
+    details.raw-collapse > pre.code-block,
+    details.sql-collapse > pre.code-block {
       margin-top: 0;
-      border-top: none;
-      border-top-left-radius: 0;
-      border-top-right-radius: 0;
+      border: none;
+      border-top: 1px solid var(--border);
+      border-radius: 0;
       max-height: 400px;
-      overflow-y: auto;
     }
-    .data-panel > .data-table-wrap { margin-top: 0; border-top: none; max-height: 400px; }
+    details.raw-collapse > .data-table-wrap {
+      border-top: 1px solid var(--border);
+      max-height: 400px;
+      overflow: auto;
+    }
+    /* First child inside Raw when it's a query-item, not a bare table/pre. */
+    details.raw-collapse > .query-item:first-of-type { border-top: 1px solid var(--border); }
+    details.raw-collapse > .query-item { padding: 10px 12px; }
 
-    .query-item + .query-item { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .query-item + .query-item { margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--border); }
     .query-item-index {
       font-size: 9px; font-family: var(--font-display); text-transform: uppercase;
-      letter-spacing: 0.08em; color: var(--text-muted); margin-top: 8px;
+      letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 6px;
     }
+    .query-item-empty { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
     .query-item-stats {
-      display: flex; gap: 12px; margin-top: 4px;
+      display: flex; gap: 12px; margin-top: 6px;
       font-size: 9px; font-family: var(--font-mono); color: var(--text-muted);
     }
+    details.sql-collapse { margin-top: 8px; }
+    details.sql-collapse summary { font-size: 10px; }
 
     .empty-feed {
       text-align: center;
