@@ -240,6 +240,70 @@ def _fix_endpoint_prefix(sql: str) -> str:
     return sql
 
 
+# ---------------------------------------------------------------------------
+# Near-miss column names on a single table.
+#
+# The last two Athena failures on the AQLight v4 probe, both COLUMN_NOT_FOUND on a
+# SELECT-list column that does not exist on the one table being read:
+#
+#   SELECT ..., alert_severity FROM alerts        -- alerts has `severity`
+#   SELECT ..., confidence FROM entity_context    -- it has `id_confidence`
+#
+# The prompt already says both, explicitly and by name ("alerts has NO
+# alert_severity ... the severity is `severity`", and id_confidence is in the column
+# list). Telling it a third time is not a plan. Both are the same shape as the id_
+# prefix bug: the model reached for a plausible synonym of a column that really is
+# on that table.
+#
+# Each entry below is only allowed to exist because the target is unambiguous ON
+# THAT TABLE, verified against information_schema on prod 2026-08-04: `alerts` has
+# exactly one severity column out of 13, and `entity_context` has exactly one
+# id-confidence column (the other four are org_/owner_name_/internal_domain_/home_,
+# which are confidences about DIFFERENT things and would be a guess).
+#
+# This is deliberately a per-table synonym table and not a fuzzy matcher. A fuzzy
+# match on `confidence` against entity_context has five candidates and would pick
+# one by edit distance, which is how you turn a visible error into a wrong answer.
+_COLUMN_SYNONYMS: dict[str, dict[str, str]] = {
+    "alerts": {
+        # Bare `severity` is the real column. suricata_corelight is where
+        # alert_severity lives, and the model is borrowing the name across tables.
+        "alert_severity": "severity",
+        "alert_signature": "alert_name",
+        "alert_category": "alert_type",
+    },
+    "entity_context": {
+        # NOT the org_/owner_name_/internal_domain_/home_ confidences: those answer
+        # different questions. id_confidence is the one about the host identity,
+        # which is what "tell me about this host" is asking.
+        "confidence": "id_confidence",
+    },
+}
+
+
+def _fix_column_synonyms(sql: str) -> str:
+    """Rename known near-miss columns to the real one on this table.
+
+    Single-table queries only, and unqualified references only, for the same reason
+    as _fix_endpoint_prefix: with two tables in play the name might belong to the
+    other one, and an alias needs FROM-clause resolution to attribute. An `AS`
+    alias is left alone because it is a result header, not a column reference.
+    """
+    tables = {t.lower() for t in _RE_TABLE_REF.findall(sql)}
+    if len(tables) != 1:
+        return sql
+    table = next(iter(tables))
+    stem = re.sub(r"_\d{4}_\d{2}_\d{2}$", "", table)
+    syn = _COLUMN_SYNONYMS.get(table) or _COLUMN_SYNONYMS.get(stem)
+    if not syn:
+        return sql
+    for wrong, right in syn.items():
+        # (?<![.\w]) keeps qualified refs and longer names containing this one out.
+        # (?<!AS ) keeps an output alias of the same name from being renamed.
+        sql = re.sub(rf"(?i)(?<!AS )(?<![.\w]){wrong}\b", right, sql)
+    return sql
+
+
 # sanitize() lives in agents/shared/llm_sanitize.py: it was four identical
 # copies, and a policy change had to be made in all four without missing one.
 sanitize = sanitize_for_llm
@@ -889,6 +953,7 @@ async def generate_sql(
             # so the table census sees a bare table name to match on. Single-table
             # queries only; see _fix_endpoint_prefix for why.
             s = _fix_endpoint_prefix(s)
+            s = _fix_column_synonyms(s)
             return s
 
         # Inject date partition if missing.
