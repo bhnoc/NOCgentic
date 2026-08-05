@@ -1255,3 +1255,473 @@
       75%  { text-shadow: -1px 0 var(--accent-red), 1px 0 var(--frost); }
       100% { text-shadow: 0 0 10px rgba(30,144,255,0.4); }
     }
+
+    /* ==================== HEADER TABS (chat | threat hunt) ==================== */
+    /* main/sidebar have their own display rules, so [hidden] needs to win. */
+    main[hidden], .sidebar[hidden], .hunt-view[hidden] { display: none !important; }
+
+    .header-tabs {
+      display: flex;
+      gap: 8px;
+    }
+
+    .header-tab {
+      padding: 6px 16px;
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      background: rgba(0,10,20,0.6);
+      color: var(--text-secondary);
+      font-family: var(--font-display);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .header-tab:hover {
+      border-color: var(--ice-500);
+      color: var(--ice-200);
+    }
+
+    .header-tab.active {
+      border-color: var(--frost);
+      color: var(--frost);
+      background: rgba(0,212,255,0.08);
+      box-shadow: 0 0 10px rgba(0,212,255,0.2), inset 0 0 10px rgba(0,212,255,0.05);
+      text-shadow: 0 0 8px rgba(0,212,255,0.5);
+    }
+
+    /* ==================== THREAT HUNT VIEW ==================== */
+    .hunt-view {
+      grid-column: 1 / -1;
+      grid-row: 2 / -1;
+      overflow-y: auto;
+      padding: 20px;
+      background: var(--bg-primary);
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    /* Panels (Card equivalent) */
+    .hunt-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .hunt-panel-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-display);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--ice-300);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-card) 100%);
+    }
+
+    .hunt-meta {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 400;
+      color: var(--text-muted);
+      text-transform: none;
+      letter-spacing: 0.04em;
+    }
+
+    .hunt-panel-body {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Briefing */
+    .hunt-briefing {
+      display: flex;
+      justify-content: center;
+      padding-top: 48px;
+    }
+
+    .hunt-briefing-card { width: 560px; max-width: 100%; }
+
+    .hunt-picker-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .hunt-picker-item {
+      text-align: left;
+      align-items: flex-start;
+      gap: 4px;
+    }
+
+    .hunt-picker-title {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: var(--ice-100);
+    }
+
+    .hunt-picker-meta {
+      display: block;
+      margin: 0;
+    }
+
+    .hunt-briefing-title {
+      font-family: var(--font-display);
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--ice-100);
+      letter-spacing: 0.06em;
+      text-shadow: 0 0 12px rgba(30,144,255,0.4);
+    }
+
+    .hunt-briefing-text {
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--text-primary);
+    }
+
+    /* Glossary ELI5 terms (hover / focus tooltip) */
+    .hunt-term {
+      border-bottom: 1px dotted var(--ice-400);
+      cursor: help;
+      color: inherit;
+    }
+
+    button.hunt-btn.hunt-term {
+      border-bottom: 1px solid var(--border-bright);
+      text-decoration: underline dotted var(--ice-400);
+      text-underline-offset: 3px;
+    }
+
+    .hunt-glossary-tip {
+      position: fixed;
+      z-index: 400;
+      max-width: min(320px, calc(100vw - 16px));
+      padding: 8px 10px;
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius);
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 400;
+      line-height: 1.55;
+      letter-spacing: 0.02em;
+      text-transform: none;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+    }
+
+    .hunt-chip .hunt-term {
+      border-bottom-color: var(--ice-300);
+    }
+
+    .hunt-separator {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-bright), transparent);
+    }
+
+    .hunt-hint {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* Buttons */
+    .hunt-btn {
+      padding: 8px 14px;
+      border: 1px solid var(--border-bright);
+      border-radius: 1px;
+      background: rgba(30,144,255,0.04);
+      color: var(--ice-300);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: all var(--transition);
+      letter-spacing: 0.02em;
+      width: 100%;
+    }
+
+    .hunt-btn:hover:not(:disabled) {
+      background: rgba(30,144,255,0.12);
+      border-color: var(--ice-500);
+      color: var(--ice-100);
+      box-shadow: 0 0 10px rgba(30,144,255,0.15);
+    }
+
+    .hunt-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .hunt-btn-primary {
+      border-color: var(--frost);
+      color: var(--frost);
+      background: rgba(0,212,255,0.08);
+      font-family: var(--font-display);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      text-align: center;
+      width: auto;
+      align-self: flex-start;
+    }
+
+    .hunt-btn-primary:hover:not(:disabled) {
+      background: rgba(0,212,255,0.16);
+      border-color: var(--frost);
+      color: var(--ice-100);
+      box-shadow: 0 0 14px rgba(0,212,255,0.3);
+    }
+
+    /* Playing layout: narration feed left, node/evidence rail right */
+    .hunt-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 16px;
+      align-items: start;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .hunt-rail {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .hunt-exit {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    /* Timer badge (right-aligned in the feed panel head) */
+    .hunt-timer {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent-green);
+      border: 1px solid rgba(0,255,136,0.3);
+      background: rgba(0,255,136,0.08);
+      padding: 2px 8px;
+      border-radius: 1px;
+      letter-spacing: 0.04em;
+      text-transform: none;
+    }
+
+    .hunt-timer.hunt-timer-warn {
+      color: var(--accent-yellow);
+      border-color: rgba(255,208,0,0.35);
+      background: rgba(255,208,0,0.08);
+    }
+
+    /* Narration feed */
+    .hunt-feed {
+      height: calc(100vh - 190px);
+      min-height: 260px;
+      overflow-y: auto;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .hunt-line {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      animation: msgIn 0.3s ease;
+    }
+
+    .hunt-line-time {
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
+    }
+
+    .hunt-line-tag { flex-shrink: 0; }
+    .hunt-line-text { color: var(--text-primary); min-width: 0; }
+
+    .hunt-tone-info     .hunt-line-tag { color: var(--ice-400); }
+    .hunt-tone-ok       .hunt-line-tag { color: var(--accent-green); }
+    .hunt-tone-warn     .hunt-line-tag { color: var(--accent-yellow); }
+    .hunt-tone-critical .hunt-line-tag { color: var(--accent-red); }
+    .hunt-tone-debug    .hunt-line-tag { color: var(--text-muted); }
+    .hunt-tone-ok       .hunt-line-text { color: var(--accent-green); }
+    .hunt-tone-critical .hunt-line-text { color: #ff6080; }
+
+    /* Evidence chips */
+    .hunt-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .hunt-chip {
+      padding: 3px 10px;
+      border: 1px solid rgba(0,255,136,0.3);
+      border-radius: 1px;
+      background: rgba(0,255,136,0.06);
+      color: var(--accent-green);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.03em;
+      cursor: default;
+    }
+
+    /* End dialog */
+    .hunt-dialog-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 4, 10, 0.75);
+      backdrop-filter: blur(2px);
+      animation: msgIn 0.25s ease;
+    }
+
+    .hunt-dialog {
+      width: 480px;
+      max-width: calc(100vw - 32px);
+      background: var(--bg-card);
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius);
+      box-shadow: 0 0 40px rgba(30,144,255,0.2);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .hunt-dialog-title {
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--ice-100);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      text-shadow: 0 0 12px rgba(30,144,255,0.4);
+    }
+
+    .hunt-dialog-meta {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+    }
+
+    .hunt-dialog-narration {
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--text-primary);
+    }
+
+    .hunt-dialog-note {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--text-secondary);
+    }
+
+    .hunt-badge-ok {
+      align-self: flex-start;
+      padding: 2px 8px;
+      border: 1px solid rgba(0,255,136,0.3);
+      background: rgba(0,255,136,0.08);
+      color: var(--accent-green);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      border-radius: 1px;
+      letter-spacing: 0.04em;
+    }
+
+    .hunt-dialog-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .hunt-dialog-footer .hunt-btn { width: auto; }
+    .hunt-dialog-footer .hunt-btn-primary { align-self: auto; }
+
+    /* ==================== TOASTS ==================== */
+    .toast-stack {
+      position: fixed;
+      top: 72px;
+      right: 16px;
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast {
+      padding: 10px 14px;
+      border-radius: 1px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.03em;
+      max-width: 340px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-bright);
+      color: var(--text-primary);
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+      animation: msgIn 0.3s ease;
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+
+    .toast-ok {
+      border-color: rgba(0,255,136,0.4);
+      color: var(--accent-green);
+      box-shadow: 0 0 16px rgba(0,255,136,0.12);
+    }
+
+    .toast-critical {
+      border-color: rgba(255,48,80,0.4);
+      color: #ff6080;
+      box-shadow: 0 0 16px rgba(255,48,80,0.12);
+    }
+
+    .toast-out {
+      opacity: 0;
+      transform: translateX(12px);
+    }
+
+    /* Hunt responsive: rail stacks under the feed */
+    @media (max-width: 768px) {
+      .hunt-view { padding: 12px; }
+      .hunt-layout { grid-template-columns: 1fr; }
+      .hunt-feed { height: 40vh; min-height: 200px; }
+      .hunt-briefing { padding-top: 16px; }
+      .header-tabs { gap: 4px; }
+      .header-tab { padding: 5px 10px; font-size: 9px; }
+    }

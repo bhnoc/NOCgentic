@@ -23,6 +23,10 @@
         <div class="header-subtitle">AI-Powered Network Operations Center // <span id="event-label-header">NOC</span></div>
       </div>
     </div>
+    <nav class="header-tabs" id="header-tabs">
+      <button class="header-tab active" id="tab-chat" onclick="setView('chat')">Chat</button>
+      <button class="header-tab" id="tab-hunt" onclick="setView('hunt')">Threat Hunt</button>
+    </nav>
     <div class="header-status">
       <div class="status-pill" id="ws-status">
         <div class="status-dot" id="ws-dot"></div>
@@ -112,6 +116,9 @@
       </div>
     </div>
   </aside>
+
+  <!-- ===== THREAT HUNT (full content area, hidden until the tab is opened) ===== -->
+  <section id="hunt-view" class="hunt-view" hidden></section>
 </div>
 
 <!-- ===== ALERT DETAIL POPUP =====
@@ -128,7 +135,12 @@
   <div class="alert-modal-body" id="alert-modal-body"></div>
 </div>
 
+<!-- Toast stack (hunt win/lose outcomes) -->
+<div id="toast-stack" class="toast-stack"></div>
+
 <script src="/alertHints.js"></script>
+<script src="/threat-hunt-config.js"></script>
+<script src="/threat-hunt.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

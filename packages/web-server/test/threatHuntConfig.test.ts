@@ -1,0 +1,153 @@
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+// The "MUD as code" contract (docs/threat-hunt-mud/ThreatHunt.d.ts): the
+// engine in static/threat-hunt.js is content-free and trusts this shape, so
+// a malformed hunt config is the only way the game can break. Validate every
+// registered hunt against the contract.
+
+interface HuntEvidence { id: string; label: string; detail: string }
+interface HuntExit { to: string; label: string; requiresEvidence?: number }
+interface HuntAction { id: string; label: string; correct?: boolean; resultNote: string }
+interface HuntNode {
+  name: string; tag: string; narration: string;
+  evidence?: HuntEvidence[]; exits?: HuntExit[];
+  isDecision?: boolean; actions?: HuntAction[];
+}
+interface HuntConfig {
+  id: string;
+  meta: { title: string; briefing: string; targetSeconds: number };
+  glossary?: Record<string, string>;
+  startNode: string;
+  nodes: Record<string, HuntNode>;
+  endings: Record<string, { title: string; narration: string } | undefined>;
+}
+
+function loadRegistry(): HuntConfig[] {
+  const file = path.join(__dirname, '../static/threat-hunt-config.js');
+  const src = readFileSync(file, 'utf8');
+  const window: { THREAT_HUNTS?: HuntConfig[] } = {};
+  new Function('window', src)(window);
+  if (!window.THREAT_HUNTS) throw new Error('threat-hunt-config.js did not set window.THREAT_HUNTS');
+  return window.THREAT_HUNTS;
+}
+
+const hunts = loadRegistry();
+
+describe('threat hunt registry', () => {
+  it('registers at least one hunt with a stable id', () => {
+    expect(hunts.length).toBeGreaterThan(0);
+    for (const hunt of hunts) expect(hunt.id).toMatch(/^[a-z0-9-]+$/);
+  });
+
+  it('ships fakecorp-cleartext-mcp with True Positive as the correct close code', () => {
+    const hunt = hunts.find(h => h.id === 'fakecorp-cleartext-mcp');
+    expect(hunt).toBeDefined();
+    expect(hunt!.startNode).toBe('observed-logs');
+    for (const key of [
+      'observed-logs', 'http-conn', 'dns-logs', 'device-profile', 'class-context', 'decision'
+    ]) {
+      expect(hunt!.nodes[key], key).toBeDefined();
+    }
+    const correct = (hunt!.nodes.decision.actions ?? []).filter(a => a.correct);
+    expect(correct).toHaveLength(1);
+    expect(correct[0].id).toBe('true-positive');
+    expect(correct[0].label).toBe('True Positive');
+  });
+
+  it('ships northlab-cleartext-siem-login with BH Benign as the correct close code', () => {
+    const hunt = hunts.find(h => h.id === 'northlab-cleartext-siem-login');
+    expect(hunt).toBeDefined();
+    expect(hunt!.startNode).toBe('observed-logs');
+    for (const key of [
+      'observed-logs', 'http-login', 'dest-context', 'class-peers', 'decision'
+    ]) {
+      expect(hunt!.nodes[key], key).toBeDefined();
+    }
+    const correct = (hunt!.nodes.decision.actions ?? []).filter(a => a.correct);
+    expect(correct).toHaveLength(1);
+    expect(correct[0].id).toBe('bh-benign');
+    expect(correct[0].label).toBe('BH Benign');
+  });
+});
+
+describe.each(hunts.map(h => [h.id, h] as const))('hunt contract: %s', (_id, hunt) => {
+  it('has briefing meta and a soft time target', () => {
+    expect(hunt.meta.title.length).toBeGreaterThan(0);
+    expect(hunt.meta.briefing.length).toBeGreaterThan(0);
+    expect(hunt.meta.targetSeconds).toBeGreaterThan(0);
+  });
+
+  it('startNode exists and every exit resolves to a node', () => {
+    expect(hunt.nodes[hunt.startNode]).toBeDefined();
+    for (const [nodeId, node] of Object.entries(hunt.nodes)) {
+      for (const exit of node.exits ?? []) {
+        expect(hunt.nodes[exit.to], `exit "${exit.label}" from ${nodeId}`).toBeDefined();
+        expect(exit.label.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('a decision node is reachable from startNode', () => {
+    const seen = new Set<string>();
+    const queue = [hunt.startNode];
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const exit of hunt.nodes[id].exits ?? []) queue.push(exit.to);
+    }
+    const reachableDecision = [...seen].some(id => hunt.nodes[id].isDecision);
+    expect(reachableDecision).toBe(true);
+  });
+
+  it('decision nodes carry actions with exactly one correct choice; others carry exits', () => {
+    for (const [nodeId, node] of Object.entries(hunt.nodes)) {
+      if (node.isDecision) {
+        const actions = node.actions ?? [];
+        expect(actions.length, `decision node ${nodeId}`).toBeGreaterThan(1);
+        expect(actions.filter(a => a.correct).length, `decision node ${nodeId}`).toBe(1);
+        for (const action of actions) expect(action.resultNote.length).toBeGreaterThan(0);
+      } else {
+        expect((node.exits ?? []).length, `node ${nodeId} needs exits`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('every non-decision node yields evidence (no punishing dead ends)', () => {
+    for (const [nodeId, node] of Object.entries(hunt.nodes)) {
+      if (node.isDecision) continue;
+      expect((node.evidence ?? []).length, `node ${nodeId}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('evidence ids are unique and requiresEvidence gates are attainable', () => {
+    const ids = Object.values(hunt.nodes).flatMap(n => (n.evidence ?? []).map(e => e.id));
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const node of Object.values(hunt.nodes)) {
+      for (const exit of node.exits ?? []) {
+        if (exit.requiresEvidence) expect(exit.requiresEvidence).toBeLessThanOrEqual(ids.length);
+      }
+    }
+  });
+
+  it('win and lose endings are authored', () => {
+    for (const key of ['win', 'lose'] as const) {
+      const ending = hunt.endings[key];
+      expect(ending, `${key} ending`).toBeDefined();
+      expect(ending!.title.length).toBeGreaterThan(0);
+      expect(ending!.narration.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('glossary entries are non-empty when present', () => {
+    if (!hunt.glossary) return;
+    const entries = Object.entries(hunt.glossary);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [term, tip] of entries) {
+      expect(term.trim().length, `glossary key`).toBeGreaterThan(0);
+      expect(tip.trim().length, `glossary tip for ${term}`).toBeGreaterThan(0);
+    }
+  });
+});
