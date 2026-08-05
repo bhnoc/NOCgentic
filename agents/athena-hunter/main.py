@@ -1556,7 +1556,14 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 }
                 for qr in context.get("query_results", [])
             ],
-            "errors": context.get("errors", []),
+            # Never ship the raw SQL of a FAILED query to the browser: it isn't
+            # capped like query_details[].sql is, and for a scope-rejected query
+            # it carries ipscope.OUT_OF_SCOPE_PLACEHOLDER baked into the WHERE
+            # clause, e.g. "id_resp_h = '[OUT-OF-SCOPE-IP]'". The web-server's
+            # own "Raw" panel is meant to show query_details, not this — see
+            # renderDataTabs() in app.js, which now also strips this client-side
+            # as a second layer, but the client shouldn't receive it at all.
+            "errors": [{"error": e.get("error")} for e in context.get("errors", [])],
             "llm_metrics": llm_metrics,
         }
 

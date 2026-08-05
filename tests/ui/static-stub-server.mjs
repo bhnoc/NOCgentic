@@ -16,6 +16,7 @@ const LANE_TRIGGER = 'lane race';
 const CONFIDENCE_TRIGGER = 'confidence pill check';
 const QUERY_TABS_TRIGGER = 'query tabs check';
 const NEXT_STEPS_TRIGGER = 'next steps merge check';
+const SCOPE_ERROR_TRIGGER = 'scope error raw check';
 const laneOf = (name, over = {}) => ({
   lane: name,
   label: name === 'cloud' ? 'Cloud (Gemini)' : 'Local (AQLight)',
@@ -97,6 +98,27 @@ const server = createServer(async (req, res) => {
         confidence: 0.81,
       });
       hintPolls.set(jobId, 0);
+    } else if (String(query || '').toLowerCase().includes(SCOPE_ERROR_TRIGGER)) {
+      // Real shape from a scope-rejected athena-hunter query: no query_details
+      // (every attempted SQL failed), but data.errors[] carries the raw SQL —
+      // including ipscope.OUT_OF_SCOPE_PLACEHOLDER baked into the WHERE clause
+      // — which the "Raw" fallback panel used to JSON.stringify verbatim.
+      jobs.set(jobId, {
+        jobId, status: 'done', agentUsed: 'athena-hunter', hints: [],
+        answer: '## Answer\nThe lookup could not be completed because the target is out of scope.\n\n' +
+          '## Evidence\n- Target IP restricted by operational scope parameters.\n',
+        confidence: 0.1,
+        data: {
+          iocs_searched: ['[OUT-OF-SCOPE-IP]'],
+          sql_queries_executed: 0,
+          total_rows: 0,
+          query_details: [],
+          errors: [{
+            sql: "SELECT id_orig_h, proto FROM conn WHERE id_resp_h = '[OUT-OF-SCOPE-IP]' LIMIT 200",
+            error: 'Out-of-scope IP in query: [OUT-OF-SCOPE-IP]',
+          }],
+        },
+      });
     } else {
       jobs.set(jobId, { jobId, status: 'done', answer: 'stub answer for: ' + query, agentUsed: 'stub', hints: [] });
     }
