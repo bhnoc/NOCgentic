@@ -264,7 +264,11 @@ const STORY_ANCHORS: Record<string, RegExp[]> = {
   'northlab-singleton-c2': [/A-6610/, /10\.44\.31\.21/, /starbright\.ddns\.example/, /3 day|~3 day|multi-day/i],
   'stagecast-license-pii-http': [/A-6621/, /10\.44\.32\.40/, /activate\.stagecast\.example/, /SC-77419/, /activate\.php/],
   'noc-log4j-sensor-test': [/A-6633/, /10\.44\.1\.14/, /alwayshttp\.example/, /same minute/, /Suricata/, /NGFW/],
-  'rivertide-azure-background': [/A-6644/, /10\.44\.33\.36/, /40m/, /RIVERTIDE/, /flexops\.azure\.intra\.rivertide\.example/],
+  'rivertide-azure-background': [
+    /A-6644/, /10\.44\.33\.36/, /40m/, /RIVERTIDE/,
+    /flexops\.azure\.intra\.rivertide\.example/,
+    /rivdirect\.postgres\.azure\.intra\.rivertide\.example/,
+  ],
 };
 
 describe.each(

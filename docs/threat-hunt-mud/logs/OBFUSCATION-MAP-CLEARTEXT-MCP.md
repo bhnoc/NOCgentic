@@ -7,7 +7,9 @@ Shipped captures live in `fakecorp-cleartext-mcp.obfuscated.json` and
 | Real (do not ship) | Fiction |
 | --- | --- |
 | Source host from Slack/XQL | `10.44.18.72` |
+| Cloud destination IPs | `203.0.113.11–15` (RFC 5737 TEST-NET-3) |
 | Cloud MCP ALB hostname | `mcp-alb.cloud-vendor.example` |
+| Zeek connection UIDs | `Cfict0000001`… |
 | `/google-secops/mcp` | `/vaultwatch/mcp` |
 | `/recorded-future/mcp` | `/redline-intel/mcp` |
 | `/falcon/mcp` | `/talon/mcp` |

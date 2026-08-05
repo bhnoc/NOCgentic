@@ -25,7 +25,13 @@
     </div>
     <nav class="header-tabs" id="header-tabs">
       <button class="header-tab active" id="tab-chat" onclick="setView('chat')">Chat</button>
-      <button class="header-tab" id="tab-hunt" onclick="setView('hunt')">Threat Hunt</button>
+      <button class="header-tab header-tab-hunt" id="tab-hunt" onclick="setView('hunt')">
+        <span class="header-tab-label">Threat Hunt</span>
+        <span class="gemini-ent-chip" title="Includes Gemini Enterprise apps">
+          <span class="gemini-ent-spark" aria-hidden="true"></span>
+          <span class="gemini-ent-chip-text">Gemini Enterprise</span>
+        </span>
+      </button>
     </nav>
     <div class="header-status">
       <div class="status-pill" id="ws-status">

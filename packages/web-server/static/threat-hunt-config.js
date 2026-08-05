@@ -144,9 +144,9 @@ window.THREAT_HUNTS = [
               "note=Bearer MCP API key in client_headers on cleartext port 80 to a multi-product security MCP ALB",
               "",
               "# Example row (fields compacted)",
-              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.12\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/talon/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\",\"client_headers\":{\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Accept\":\"text/event-stream\",\"mcp-protocol-version\":\"2025-11-25\"}}",
-              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.14\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/graph-ti/mcp\",\"status_code\":200,\"client_headers\":{\"Authorization\":\"Bearer mcpk_[REDACTED]\"}}",
-              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.11\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/redline-intel/mcp\",\"status_code\":200,\"client_headers\":{\"Authorization\":\"Bearer mcpk_[REDACTED]\"}}"
+              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.12\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/talon/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\",\"client_headers\":{\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Accept\":\"text/event-stream\",\"mcp-protocol-version\":\"2025-11-25\"}}",
+              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.14\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/graph-ti/mcp\",\"status_code\":200,\"client_headers\":{\"Authorization\":\"Bearer mcpk_[REDACTED]\"}}",
+              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.11\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/redline-intel/mcp\",\"status_code\":200,\"client_headers\":{\"Authorization\":\"Bearer mcpk_[REDACTED]\"}}"
             ]
           },
           {
@@ -164,27 +164,27 @@ window.THREAT_HUNTS = [
               "",
               "# Timed session samples (chronological · secrets redacted, identities fiction)",
               "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.417367Z\",\"uid\":\"C3355045073\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.15\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/pulsefeed/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.417367Z\",\"uid\":\"Cfict0000001\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.15\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/pulsefeed/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "post_body={\"method\":\"resources/list\",\"jsonrpc\":\"2.0\",\"id\":3}",
               "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"resources\":[]}}\r\n\r\n",
               "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.497267Z\",\"uid\":\"C3323906924\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.13\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/notekeep/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.497267Z\",\"uid\":\"Cfict0000002\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.13\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/notekeep/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "post_body={\"method\":\"prompts/list\",\"jsonrpc\":\"2.0\",\"id\":2}",
               "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"prompts\":[]}}\r\n\r\n",
               "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.501729Z\",\"uid\":\"C9310847385\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.11\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/redline-intel/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.501729Z\",\"uid\":\"Cfict0000003\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.11\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/redline-intel/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "post_body={\"method\":\"resources/list\",\"jsonrpc\":\"2.0\",\"id\":3}",
               "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"resources\":[]}}\r\n\r\n",
               "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T17:15:48.190159Z\",\"uid\":\"C2640323717\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.14\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/graph-ti/mcp\",\"status_code\":200,\"user_agent\":\"-\"}",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T17:15:48.190159Z\",\"uid\":\"Cfict0000004\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.14\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/graph-ti/mcp\",\"status_code\":200,\"user_agent\":\"-\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"-\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "post_body={\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"elicitation\":{\"form\":{},\"url\":{}}},\"clientInfo\":{\"name\":\"lab-mcp-client\",\"title\":\"LabMCP\",\"version\":\"0.146.0-alpha.3.1\"}}}",
               "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":fa",
               "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T18:12:13.361926Z\",\"uid\":\"C8373631799\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.12\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/talon/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T18:12:13.361926Z\",\"uid\":\"Cfict0000005\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"203.0.113.12\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/talon/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "",
               "# tools/list samples · cleartext JSON-RPC (listing bodies truncated in sensor · untimed)",
@@ -1324,7 +1324,7 @@ window.THREAT_HUNTS = [
     "id": "rivertide-azure-background",
     "meta": {
       "title": "Corp cloud DNS, mismatched class",
-      "briefing": "Alert A-6644 is open: classroom IP 10.44.33.36 heavily queries RIVERTIDE Azure and intranet-looking names over a 40m window while sitting on a Physical Access Lab VLAN. Names include flexops.azure.intra.rivertide.example, badgeprint.azure.intra.rivertide.example, and rivdirect.postgres.database.azure.com. DNS, proxy/tunnel background, and class alignment separate corp laptop chatter from hostile cloud probing. The correct BH close code is the goal. Target: under 3 minutes.",
+      "briefing": "Alert A-6644 is open: classroom IP 10.44.33.36 heavily queries RIVERTIDE Azure and intranet-looking names over a 40m window while sitting on a Physical Access Lab VLAN. Names include flexops.azure.intra.rivertide.example, badgeprint.azure.intra.rivertide.example, and rivdirect.postgres.azure.intra.rivertide.example. DNS, proxy/tunnel background, and class alignment separate corp laptop chatter from hostile cloud probing. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -1349,7 +1349,7 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed DNS",
         "tag": "[dns]",
-        "narration": "A-6644 · Medium · Heavy corp cloud DNS · 10.44.33.36 on Physical Access Lab VLAN · names include flexops.azure.intra.rivertide.example, badgeprint.azure.intra.rivertide.example, rivdirect.postgres.database.azure.com · high query volume over 40m. Class topic does not mention RIVERTIDE cloud labs.",
+        "narration": "A-6644 · Medium · Heavy corp cloud DNS · 10.44.33.36 on Physical Access Lab VLAN · names include flexops.azure.intra.rivertide.example, badgeprint.azure.intra.rivertide.example, rivdirect.postgres.azure.intra.rivertide.example · high query volume over 40m. Class topic does not mention RIVERTIDE cloud labs.",
         "evidence": [
           {
             "id": "ev-corp-dns",
@@ -1491,4 +1491,20 @@ window.THREAT_HUNTS = [
       }
     }
   }
+];
+
+/**
+ * External threat-hunt apps (not MUD configs). Rendered in the picker as a
+ * featured Gemini Enterprise rail; the engine never mounts these as rooms.
+ */
+window.THREAT_HUNT_APPS = [
+  {
+    id: 'gemini-threat-intelligence',
+    kind: 'gemini-enterprise',
+    title: 'Threat Intelligence',
+    subtitle: 'VIP targeting · GTI · SecOps SIEM',
+    blurb: 'Gemini Enterprise walk-up: correlate Google Threat Intelligence with SecOps SIEM, chase executive targeting, and drive remediation from a guided chat.',
+    url: 'https://remix-remix-nocgentic-gemini-threat-intelligence-39857249566.us-west2.run.app/',
+    badge: 'Gemini Enterprise',
+  },
 ];

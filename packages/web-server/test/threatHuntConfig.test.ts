@@ -38,21 +38,51 @@ const UI_KEYS = [
   'timelineTitle', 'timelineHint', 'timelineUnobserved', 'timelineClickPrompt', 'timelineEmpty',
 ];
 
+interface HuntApp {
+  id: string;
+  kind: string;
+  title: string;
+  subtitle?: string;
+  blurb?: string;
+  url: string;
+  badge?: string;
+}
+
 function loadRegistry(): HuntConfig[] {
   const file = path.join(__dirname, '../static/threat-hunt-config.js');
   const src = readFileSync(file, 'utf8');
-  const window: { THREAT_HUNTS?: HuntConfig[] } = {};
+  const window: { THREAT_HUNTS?: HuntConfig[]; THREAT_HUNT_APPS?: HuntApp[] } = {};
   new Function('window', src)(window);
   if (!window.THREAT_HUNTS) throw new Error('threat-hunt-config.js did not set window.THREAT_HUNTS');
   return window.THREAT_HUNTS;
 }
 
+function loadApps(): HuntApp[] {
+  const file = path.join(__dirname, '../static/threat-hunt-config.js');
+  const src = readFileSync(file, 'utf8');
+  const window: { THREAT_HUNT_APPS?: HuntApp[] } = {};
+  new Function('window', src)(window);
+  return window.THREAT_HUNT_APPS ?? [];
+}
+
 const hunts = loadRegistry();
+const huntApps = loadApps();
 
 describe('threat hunt registry', () => {
   it('registers at least one hunt with a stable id', () => {
     expect(hunts.length).toBeGreaterThan(0);
     for (const hunt of hunts) expect(hunt.id).toMatch(/^[a-z0-9-]+$/);
+  });
+
+  it('registers the Gemini Enterprise Threat Intelligence app (not a MUD graph)', () => {
+    const app = huntApps.find(a => a.id === 'gemini-threat-intelligence');
+    expect(app).toBeDefined();
+    expect(app!.kind).toBe('gemini-enterprise');
+    expect(app!.badge).toMatch(/Gemini Enterprise/i);
+    expect(app!.url).toMatch(/^https:\/\/remix-remix-nocgentic-gemini-threat-intelligence-/);
+    expect(app!.url).toMatch(/\.run\.app\/?$/);
+    // Must stay out of the MUD registry so contract/playthrough suites stay graph-shaped.
+    expect(hunts.some(h => h.id === app!.id)).toBe(false);
   });
 
   it('ships fakecorp-cleartext-mcp with True Positive as the correct close code', () => {
@@ -183,9 +213,35 @@ describe('threat hunt registry', () => {
       'checkmarx', 'teampcp', 'litellm', 'sfrclak', 'pepsico', 'pwcinternal',
       'httpforever', 'safeactivation', 'worksodsirius', 'phiplips', 'ghabovethec',
       'falconforce', 'informafestivals', 'bytespider', 'mend.io', 'ihs.gov',
+      // Product / path leftovers from live threads (fiction map must win).
+      'recorded-future', 'google-secops', 'silentpush', 'opencti',
+      'httpforever.com', '10.220.107',
     ];
     for (const term of banned) {
       expect(blob.includes(term), term).toBe(false);
+    }
+  });
+
+  it('ships only fiction addressing — no live public cloud IPs or azure.com tenants', () => {
+    const blob = JSON.stringify(hunts);
+    expect(blob.includes('52.14.88')).toBe(false);
+    expect(blob.toLowerCase().includes('azure.com')).toBe(false);
+    expect(blob).not.toMatch(/Bearer\s+mcpk_(?!\[REDACTED\])/);
+    expect(blob).not.toMatch(/password\s*=\s*[^\s"\\,]{3,}/i);
+    // Public IPv4 must be RFC 5737 documentation ranges only (or absent).
+    const ips = blob.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? [];
+    for (const ip of ips) {
+      const [a, b, c] = ip.split('.').map(Number);
+      const conf = a === 10 && b === 44;
+      const testNet =
+        (a === 192 && b === 0 && c === 2) ||
+        (a === 198 && b === 51 && c === 100) ||
+        (a === 203 && b === 0 && c === 113);
+      expect(conf || testNet, `non-fiction IP ${ip}`).toBe(true);
+    }
+    // Emails only on invented .example tenants.
+    for (const email of blob.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? []) {
+      expect(email.endsWith('.example'), email).toBe(true);
     }
   });
 });

@@ -94,8 +94,10 @@ editor, not a linter (tests already cover structure):
 - [x] **Voice**: third person / no player imperatives / no "Three surfaces"
       / no "Evidence is on the table" — applied across all 7 hunts
       (playthrough story tests lock this in)
-- [ ] **OPSEC re-sweep** after all the copy edits: no real orgs/IPs/tokens
-      (rerun the banned-strings test mentally against new strings too)
+- [x] **OPSEC re-sweep** (2026-08-05): remapped MCP dests to TEST-NET-3
+      `203.0.113.x`, Zeek UIDs to `Cfict*`, rivertide host off real
+      `azure.com`; contract test now forbids live public IPs / azure.com /
+      unreacted mcpk_ / password= values / non-.example emails
 - [ ] Fix what you find in config only — engine changes should not be needed;
       run `npm test --workspace=@bhnoc/web-server -- threatHuntConfig` after
 
