@@ -790,7 +790,23 @@
           </div>`;
       }).join('');
     } else {
-      const rawDataHtml = renderData({ ...data, llm_metrics: undefined, query_details: undefined });
+      // Strip every field that can carry internal/SQL/scope-machinery rather
+      // than a result an analyst asked for: errors[] carries raw SQL text
+      // (table/column names, WHERE-clause shapes) AND, for a scope-rejected
+      // query, the literal [OUT-OF-SCOPE-IP] placeholder baked into the WHERE
+      // clause; iocs_searched echoes that same placeholder on its own. None of
+      // this is a "result" — it's why there ISN'T one — so with no sample rows
+      // to show, this fallback used to JSON.stringify the whole remaining
+      // object and put all of it, including the placeholder, verbatim in the
+      // DOM. This panel exists to show query OUTPUT; when a query produced
+      // none, show nothing rather than the internals of why it didn't.
+      const rawDataHtml = renderData({
+        ...data,
+        llm_metrics: undefined,
+        query_details: undefined,
+        errors: undefined,
+        iocs_searched: undefined,
+      });
       if (!rawDataHtml) return '';
       bodyHtml = rawDataHtml;
     }

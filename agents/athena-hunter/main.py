@@ -598,7 +598,13 @@ SQL_GEN_PROMPT = (
     "- For lateral movement / zone correlation, use suricata_corelight (has both-side zones). "
     "alerts only has orig_network_name.\n"
     "- For 'connections to Zoho/Google/AWS' style org queries, filter conn.remote_organization "
-    "LIKE '%<org>%' (GeoIP enrichment).\n\n"
+    "LIKE '%<org>%' (GeoIP enrichment).\n"
+    "- For 'traffic to/from Russia/China/Germany' style COUNTRY-NAME queries, filter "
+    "conn.remote_country = '<ISO-3166 2-letter code>' (e.g. Russia -> 'RU', China -> "
+    "'CN', Germany -> 'DE'), NOT a LIKE pattern on id_orig_h/id_resp_h — the column "
+    "holds a 2-letter GeoIP code, not a name, and an IP address never contains a "
+    "country's name or code as a literal substring. `id_resp_h LIKE '%ru%'` matches "
+    "nothing meaningful and silently returns zero rows.\n\n"
     "RULES:\n"
     # dt is the UTC calendar day of ts, but the analyst is standing in the NOC and
     # the venue is UTC-7. From 17:00 local onward the UTC date has already rolled,
@@ -1306,6 +1312,14 @@ SYSTEM_PROMPT = (
     "- alerts unifies Suricata + Zeek notices\n\n"
     "IMPORTANT — multiple query results may be supplied:\n"
     "- You may receive 1-3 SQL query results. READ ALL OF THEM before answering.\n"
+    "- A keyword-filtered SQL query (LOWER(alert_name) LIKE '%<word>%') can return a "
+    "LEXICAL match that is not a SEMANTIC one: 'crypto' in 'Viz::CustomCrypto' is a TLS "
+    "cipher-negotiation notice, not cryptocurrency; 'mining' in an 'ET GAMES MINECRAFT' "
+    "alert is a video game, not resource mining. Before citing a matched row as evidence "
+    "for the analyst's actual question, check that the alert NAME's real meaning "
+    "supports the claim, not just that a substring matched. Drop a row that only "
+    "lexically matched, and if that leaves nothing, say the search found no rows "
+    "genuinely about the topic rather than reaching for the closest-sounding name.\n"
     "- If the targeted query returns 0 rows but a supporting/context query has data, "
     "your answer must reflect that nuance. Example:\n"
     "    'No file transfers to Zoho. 1,298 files went elsewhere — top destinations: "
@@ -1542,7 +1556,14 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 }
                 for qr in context.get("query_results", [])
             ],
-            "errors": context.get("errors", []),
+            # Never ship the raw SQL of a FAILED query to the browser: it isn't
+            # capped like query_details[].sql is, and for a scope-rejected query
+            # it carries ipscope.OUT_OF_SCOPE_PLACEHOLDER baked into the WHERE
+            # clause, e.g. "id_resp_h = '[OUT-OF-SCOPE-IP]'". The web-server's
+            # own "Raw" panel is meant to show query_details, not this — see
+            # renderDataTabs() in app.js, which now also strips this client-side
+            # as a second layer, but the client shouldn't receive it at all.
+            "errors": [{"error": e.get("error")} for e in context.get("errors", [])],
             "llm_metrics": llm_metrics,
         }
 
