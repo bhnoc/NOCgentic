@@ -654,6 +654,42 @@ def correlate_alerts_with_flows(
     return enriched
 
 
+# The "## Key Entities" bullet is src (zone) -> dst:port, signature, count. It
+# never includes uid or timestamp, so this is the exact identity that must be
+# unique for two rows to render as two DIFFERENT bullets.
+_ENTITY_DISPLAY_KEYS = ("id_orig_h", "orig_h", "id_resp_h", "resp_h",
+                        "id_resp_p", "resp_p", "alert_signature", "alert_name")
+
+
+def _entity_display_key(alert: dict[str, Any]) -> tuple:
+    return (
+        alert.get("id_orig_h") or alert.get("orig_h") or "",
+        alert.get("id_resp_h") or alert.get("resp_h") or "",
+        alert.get("id_resp_p") or alert.get("resp_p") or "",
+        alert.get("alert_signature") or alert.get("alert_name") or "",
+    )
+
+
+def _collapse_duplicate_entities(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge rows that would render as an identical Key Entities bullet.
+
+    Keeps the highest-scoring row per (src, dst, port, signature) as the
+    representative and stamps it with a real occurrence count for that group,
+    so "one bullet per entry" in the prompt yields bullets an analyst can tell
+    apart instead of the same line repeated N times.
+    """
+    groups: dict[tuple, dict[str, Any]] = {}
+    order: list[tuple] = []
+    for alert in alerts:
+        key = _entity_display_key(alert)
+        if key not in groups:
+            groups[key] = {**alert, "entity_occurrence_count": 1}
+            order.append(key)
+        else:
+            groups[key]["entity_occurrence_count"] += 1
+    return [groups[key] for key in order]
+
+
 # ---------------------------------------------------------------------------
 # Query understanding — extract filters from natural language
 # ---------------------------------------------------------------------------
@@ -808,7 +844,10 @@ SYSTEM_PROMPT = (
     "the same severity.\n"
     "When triage_data is empty, say so in one line and set confidence < 0.3.\n\n"
     "## Key Entities\n"
-    "Bullets: src IP (zone) → dst IP:port, signature, count. One line each.\n"
+    "Bullets: src IP (zone) → dst IP:port, signature, count. One line each. Use "
+    "each entry's entity_occurrence_count as the count, not any other field — it "
+    "is the real number of times this exact (src, dst, port, signature) combination "
+    "occurred, already merged so you never see the same combination twice.\n"
     # The citation rule above induced this failure on the 2026-08-04 bench: told to
     # cite a total of 5, the model wrote five entity bullets, inventing three
     # hosts to fill rows the payload never had. A scope total and a row count are
@@ -1268,6 +1307,15 @@ async def triage(req: TriageRequest) -> TriageResponse:
             ]
 
         enriched_alerts = correlate_alerts_with_flows(all_alerts, conn_flows)
+        # Collapse rows that render as the SAME bullet before handing them to the
+        # "one bullet per entry" prompt rule. Fixing the cross-table uid dedup above
+        # was not enough: two genuinely distinct events (different uid, different
+        # timestamp) with the same src/dst/port/signature are legitimate separate
+        # rows in the data but produce visually IDENTICAL bullets ("X -> Y:Z, SIG,
+        # 29" repeated N times), because the bullet format never includes uid or
+        # timestamp. Merge those into one representative row with a real
+        # occurrence count, so "one bullet per entry" yields distinct bullets.
+        enriched_alerts = _collapse_duplicate_entities(enriched_alerts)
 
         # Session enrichment via uid_lookup (fast Athena query)
         uids = list({a.get("uid", "") for a in enriched_alerts[:15] if a.get("uid")})
