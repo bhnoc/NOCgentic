@@ -70,7 +70,11 @@ const ALERTS = `[
     description:'Port scan -- 1,247 SYN packets in 10s',
     srcIp:'10.220.152.9', timestamp:'2026-08-04T18:20:00.000Z' }
 ]`;
-await evaluate(`renderAlerts(JSON.parse(${JSON.stringify(ALERTS)}))`);
+// Evaluated as a JS literal, NOT JSON.parse'd: the fixture above uses unquoted keys
+// and single quotes, so JSON.parse threw SyntaxError on line 2 and the whole popup
+// gate died before its first check. It failed loudly rather than silently, but a gate
+// that always errors is a gate nobody reads.
+await evaluate(`renderAlerts(${ALERTS})`);
 
 const feed = await evaluate(`(() => ({
   cards: document.querySelectorAll('.alert-card').length,
@@ -114,6 +118,11 @@ check('hunt chips are anchored on this alert',
   JSON.stringify(opened.chips));
 
 // ---- drag by the header ----
+// Let the 0.16s modalIn animation finish first. It ends on translateY(-6px) -> 0, so
+// a getBoundingClientRect taken while it is still running is 6px above where left/top
+// actually put the panel, and every drag and clamp assertion below is then off by
+// that much for reasons that have nothing to do with the drag code.
+await sleep(400);
 const dragged = await evaluate(`(() => {
   const modal = document.getElementById('alert-modal');
   const head = document.getElementById('alert-modal-head');

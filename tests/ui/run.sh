@@ -44,7 +44,13 @@ wait_for "http://127.0.0.1:${STUB_PORT}/" "stub server"
 "${CHROME}" --headless=new \
     --remote-debugging-port="${CDP_PORT}" \
     --user-data-dir="${WORK_DIR}/chrome-profile" \
-    --no-first-run --disable-gpu about:blank \
+    --no-first-run --disable-gpu \
+    `# Pin the viewport. Headless defaults to 756x469, and the alert popup is 429`\
+    `# tall, so the on-screen clamp leaves only 40px of vertical travel and any`\
+    `# drag assertion larger than that measures the clamp instead of the drag.`\
+    `# An operator's browser is not 469px tall, so the default made the gate`\
+    `# test a geometry nobody has.`\
+    --window-size=1280,900 about:blank \
     > "${WORK_DIR}/chrome.log" 2>&1 &
 chrome_pid=$!
 wait_for "http://127.0.0.1:${CDP_PORT}/json/version" "headless chrome"

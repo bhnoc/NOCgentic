@@ -751,6 +751,27 @@
       margin-top: 3px;
     }
 
+    .alert-triage-btn {
+      display: inline-block;
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ice-400);
+      background: rgba(30,144,255,0.12);
+      border: 1px solid rgba(30,144,255,0.35);
+      border-radius: 1px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .alert-triage-btn:hover {
+      background: rgba(30,144,255,0.22);
+      border-color: var(--ice-400);
+      color: var(--frost);
+    }
+
     /* Stats row at sidebar bottom */
     .sidebar-stats {
       border-top: 1px solid var(--border);
@@ -883,6 +904,7 @@
       }
       .alert-desc { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
       .alert-src, .alert-time { font-size: 9px; overflow-wrap: anywhere; }
+      .alert-triage-btn { font-size: 10px; padding: 5px 12px; }
 
       /* Data tables / code — keep inside bubble, horizontal scroll locally */
       .data-table { font-size: 10px; }
@@ -1076,7 +1098,13 @@
     }
 
     .alert-modal[hidden], .alert-modal-backdrop[hidden] { display: none; }
-    .alert-modal.dragging { animation: none; box-shadow: 0 0 0 1px rgba(30,144,255,0.18), 0 22px 60px rgba(0,0,0,0.75); }
+    /* No `animation: none` here. Cancelling the entry animation for the duration of
+       the drag means the browser replays it from the start the moment the class comes
+       off on pointerup, so the panel snaps 6px upward and fades the instant the
+       operator lets go of it. The animation has long since finished by the time
+       anyone drags, so suppressing it buys nothing and costs a visible jump. Keep
+       only the lifted shadow. */
+    .alert-modal.dragging { box-shadow: 0 0 0 1px rgba(30,144,255,0.18), 0 22px 60px rgba(0,0,0,0.75); }
 
     @keyframes modalIn {
       from { opacity: 0; transform: translateY(-6px); }
