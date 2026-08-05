@@ -310,6 +310,8 @@ Agent `main.py` files import shared code via Docker layout (`/app/shared`). For 
 
 ### Git Workflow
 
+> **CRITICAL RULE:** Always create a feature branch (`git checkout -b <branch-name>`) for any development work. **Never** work out of `main` directly or commit directly to `main`.
+
 ```bash
 git checkout -b feature/athena-hunter-sql-timeout
 git checkout -b fix/chat-poll-race
