@@ -100,22 +100,78 @@ as a scoped result instead of a clean bill of health.
 ## Verification
 
 All fixes are prompt-text or client-JS logic changes; no schema/API
-contract changes. Ran the canonical suite after applying every fix:
+contract changes. Ran the canonical suite after every commit:
 
 ```
 bash ops/run-tests.sh
 ```
 
-Result: 1444 Python tests passed, 170 TypeScript tests passed, no failures,
-no regressions introduced.
+Result: 1444 Python tests passed, 170 TypeScript tests passed at every
+step, no regressions introduced across three commits.
 
-Not re-verified live against production: fixes are on a branch and were not
-deployed per instructions. Before merging, recommend re-running the same live
-driver batches (`qa/drive_chat.py`, `qa/drive_concurrent.py`) against a
-deployed copy of this branch to confirm each finding no longer reproduces,
-especially the two alert-triage fixes (both are LLM-prompt-guided, so a fix's
-effect on live behavior should be reconfirmed against a real model call, not
-just static reasoning about the prompt).
+### Live re-verification (post-merge, same day)
+
+This branch was merged to main and deployed. Re-running the exact same
+live queries that produced the original findings caught two problems the
+static prompt read couldn't have:
+
+1. **The Key Entities dedup fix (first commit) was necessary but not
+   sufficient.** Live re-test after the first deploy still showed the
+   duplicate bullet. Root cause was different from what the validator
+   confirmed: two genuinely distinct rows (different uid, different
+   timestamp) sharing the same src/dst/port/signature render as
+   textually IDENTICAL bullets, because the bullet format never
+   includes uid or timestamp. The uid-based cross-table dedup doesn't
+   touch this, because the rows aren't duplicates by uid. Fixed with a
+   second commit: collapse `enriched_alerts` by the exact
+   (src, dst, port, signature) tuple the bullet displays, before the
+   15-row slice, merging into a real `entity_occurrence_count`.
+
+2. **The two athena-hunter fixes (LIVE-001 confident-negative,
+   LIVE-002 stale-window naming) combined badly on a real failure.**
+   Live re-test produced: "No listening services found on the attendee
+   network in the last hour (16:00-17:00). Lookup failed due to
+   COLUMN_NOT_FOUND error." That's a negative finding AND a stated
+   failure in one sentence, plus a raw catalog error string leaking
+   into the answer (violating an existing STYLE rule the prompt already
+   had). Each rule was correct in isolation; neither told the model they
+   were mutually exclusive. Fixed with a third commit: the window-naming
+   rule now applies only to a query that succeeded with 0 rows; the
+   failure rule explicitly bans naming a window and bans repeating raw
+   error text, "regardless of which section it lands in."
+
+Both corrections were re-verified live after their own deploys (with the
+Redis response cache purged via `DELETE /admin/cache` before each
+re-test, since the cache is keyed on query text alone and was serving
+pre-fix answers for repeated identical queries). Final state, confirmed
+against a fresh, uncached run of each: the known-services query now
+answers "The lookup for listening services on the attendee network could
+not be completed" with no leaked error and no false negative; the
+132.35 alert-triage query gives a clean single-bullet FALSE POSITIVE
+verdict with a "close as benign" Next Step; the throughput query
+correctly routes to athena_hunter with a real 3.38 TB byte-sum answer.
+
+### Two things found during re-verification, out of scope for this sweep
+
+Re-running the live queries surfaced two pre-existing issues unrelated
+to what this sweep set out to fix. Neither was touched, both are logged
+in `qa/findings/live_chat.json` (LIVE-007, LIVE-008) for a future sweep:
+
+- **LIVE-007 (low):** Key Entities bullets for `*StorageExfil::` alert
+  types render with blank src/dst/port (`-> :, SIGNATURE, count N`)
+  because those rows apparently don't carry `orig_h`/`resp_h`/`resp_p`
+  the way Suricata-sourced rows do.
+- **LIVE-008 (medium):** the LOCAL (AQLight) lane for alert-triage can
+  skip the required Answer/Key-Entities/Risk/Next-Steps format entirely
+  and produce a short, format-skipping answer that overstates severity
+  relative to what the SAME data gets from the cloud/Gemini lane.
+  Observed live: the local lane said the 132.35 host's 29 informational
+  TLS-handshake-failure alerts were "corroborating a real attacker,"
+  while a fresh cloud-lane run on the identical data correctly verdicts
+  FALSE POSITIVE with no malicious impact. This is a real, higher-stakes
+  gap (a false positive read as a real attacker) but it predates this
+  sweep and needs its own investigation into the local lane's prompt
+  adherence at whatever token budget it ran at.
 
 ## Not covered this sweep
 
@@ -139,9 +195,12 @@ just static reasoning about the prompt).
 
 ## Recommendation
 
-One more sweep is worth running after this branch is reviewed/merged: deploy
-to a non-prod copy (or merge to main and let CI deploy per the project's
-auto-deploy convention), then re-run the live driver batches to confirm each
-of the 6 findings no longer reproduces, and specifically attempt a real
-browser-based rapid-multi-click repro of the concurrency finding before
-closing it out.
+This branch was merged to main and deployed same-day; all 6 original
+findings are confirmed fixed live as of the final re-verification pass
+above. Two new items surfaced during that re-verification (LIVE-007,
+LIVE-008) and are deferred to a future sweep rather than fixed under time
+pressure. A follow-up sweep should prioritize LIVE-008 (local-lane
+severity overstatement on a false positive) given the stakes, and should
+still attempt a real browser-based rapid-multi-click repro of the
+concurrency finding, which was fixed based on code reading but never
+re-confirmed with an actual browser driving multiple simultaneous clicks.
