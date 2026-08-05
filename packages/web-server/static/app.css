@@ -844,6 +844,11 @@
           "main"
           "sidebar";
       }
+      /* Grid items default to min-width: auto, sizing to content rather than
+         the track. header/main/.sidebar are all grid items in this collapsed
+         single-column layout, so any of them can push .app (and the whole
+         page) into horizontal scroll if their own content doesn't shrink. */
+      header, main, .sidebar { min-width: 0; }
       .sidebar { border-top: 1px solid var(--border); border-left: none; }
       .header-subtitle { display: none; }
     }
@@ -855,17 +860,35 @@
         grid-template-rows: 50px 1fr 120px;
         height: 100dvh;
       }
+      /* Grid items default to min-width: auto, which sizes them to their
+         content's max intrinsic width rather than the track width. At the
+         768px breakpoint .app collapses to a single 1fr column, but without
+         this override main/.sidebar still grew to whatever their widest
+         unbreakable content needed (measured 482px on a 390px viewport),
+         pushing the whole page into horizontal scroll on every mobile visit. */
+      main, .sidebar { min-width: 0; }
       /* On mobile: sidebar is just the rotating alert — no stats row */
       .sidebar-stats { display: none; }
       .sidebar-section { flex: 1; min-height: 0; }
 
       /* Header tightens up */
       header { padding: 0 10px; }
-      .header-brand { gap: 8px; }
+      .header-brand { gap: 8px; min-width: 0; }
       .header-logo-img { height: 26px; }
       .header-title { font-size: 11px; letter-spacing: 0.08em; }
-      .header-status { gap: 8px; font-size: 10px; }
+      .header-status { gap: 8px; font-size: 10px; min-width: 0; }
       .status-indicator { font-size: 9px; }
+      /* Brand + tabs + two status pills no longer fit on one 390px row even
+         at the 768px breakpoint's tab sizing above. Measured live: the
+         header alone pushed the whole page to 482px of horizontal scroll on
+         an iPhone-width viewport. Drop each status pill's label text (the
+         color-coded dot alone still carries connected/degraded/down) and
+         tighten the tab/pill chrome further, matching this block's existing
+         pattern of progressive size reduction rather than restructuring. */
+      .status-pill { padding: 3px 6px; gap: 4px; }
+      .status-pill span { display: none; }
+      .header-tabs { gap: 4px; }
+      .header-tab { padding: 4px 8px; font-size: 9px; }
 
       /* Main chat column fills width */
       main { border-right: none; }
