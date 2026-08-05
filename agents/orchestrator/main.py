@@ -53,6 +53,7 @@ from llm_client import (  # noqa: E402
 import local_models  # noqa: E402
 import pacing  # noqa: E402
 import response_cache  # noqa: E402
+from issue_report_uploader import upload_issue_report  # noqa: E402
 from telemetry import (  # noqa: E402
     init_telemetry, get_tracer, get_meter, inject_trace_headers, instrument_fastapi_app,
     set_agent_span, set_chain_span,
@@ -2368,6 +2369,34 @@ async def get_lanes(job_id: str) -> dict[str, Any]:
         "status": entry.get("status", "done"),
         "lanes": [l.model_dump() for l in entry.get("lanes", [])],
     }
+
+
+class ReportIssueRequest(BaseModel):
+    note: str = Field(default="", max_length=1000)
+    image: str | None = Field(default=None, max_length=8_000_000)
+    view: str = Field(default="chat")
+    path: str | None = Field(default=None, max_length=200)
+    client: ClientInfo | None = None
+
+
+@app.post("/report-issue")
+async def report_issue(body: ReportIssueRequest) -> dict[str, str]:
+    """Uploads a screenshot + note from the web UI's Report Issue widget to S3,
+    under its own prefix (issue_report_uploader.py) — never the trace archive
+    prefix that audit-monitor polls."""
+    note = credscrub.scrub_secrets(body.note)
+    try:
+        key = upload_issue_report(
+            note=note,
+            image_data_url=body.image,
+            view=body.view,
+            path=body.path,
+            client_info=body.client.model_dump() if body.client else None,
+        )
+    except Exception as exc:
+        logger.warning("issue report upload failed: %s", exc)
+        raise HTTPException(status_code=502, detail="upload failed") from exc
+    return {"status": "received", "key": key}
 
 
 @app.get("/health")
