@@ -44,7 +44,7 @@ Under `docs/threat-hunt-mud/logs/` — see `README.md`.
 ## Suggested commands
 
 ```bash
-cd /mnt/c/Users/johnr/orca/workspaces/NOCgentic/pufferfish
+cd /path/to/NOCgentic
 PORT=3010 npm run dev
 # http://$(hostname -I | awk '{print $1}'):3010/#threat-hunt
 npm test --workspace=@bhnoc/web-server -- threatHunt

@@ -3,7 +3,7 @@
     "dataset": "corelight_http_raw (dns + http)",
     "fiction_src_ip": "10.44.33.36",
     "pulled": "2026-08-05 via cortex xql from conference Corelight",
-    "rule": "Org/host/proxy names fiction per RIVERTIDE/EdgeTunnel map. Real floor IPs, pepsico hostnames, and azure.com tenants never stored in this file. Event ts from _raw_log."
+    "rule": "Org/host/proxy names fiction per RIVERTIDE/EdgeTunnel map. Real floor IPs, real-org hostnames, and azure.com tenants never stored in this file. Event ts from _raw_log."
   },
   "nodes": {
     "observed-logs": {

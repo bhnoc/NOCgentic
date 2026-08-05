@@ -11,7 +11,7 @@ This checklist is for **eye / motion** QA that the suite cannot judge. Run it in
 ## Setup (WSL)
 
 ```bash
-cd /mnt/c/Users/johnr/orca/workspaces/NOCgentic/pufferfish
+cd /path/to/NOCgentic
 PORT=3010 npm run dev
 # Open (Windows localhost is unreliable):
 # http://$(hostname -I | awk '{print $1}'):3010/#threat-hunt
