@@ -105,11 +105,16 @@ const afterSecondLane = await evaluate(`(() => {
 check('swap button appears once the second lane lands', afterSecondLane.swapButtons === 1,
   'buttons=' + afterSecondLane.swapButtons + ' bar=' + JSON.stringify(afterSecondLane.barText));
 check('pending state cleared', afterSecondLane.stillPending === false);
-check('FASTEST badge on the winner', afterSecondLane.fastestBadges === 1,
+// No FASTEST badge anymore — the winner is simply whichever lane is showing
+// first, which already communicates "fastest" without a redundant label.
+check('no FASTEST badge (removed by design)', afterSecondLane.fastestBadges === 0,
   'badges=' + afterSecondLane.fastestBadges);
 check('swap button carries its lane key', !!afterSecondLane.swapKey, JSON.stringify(afterSecondLane.swapKey));
-check('bar names the other lane as the swap target', /Local \(AQLight/.test(afterSecondLane.barText || ''),
-  JSON.stringify(afterSecondLane.barText));
+// The swap button is icon-only now (no visible model name in the bar text)
+// — the target lane is named in its title/aria-label instead.
+const swapTitle = await evaluate(`document.querySelector('.lane-swap')?.getAttribute('title') || null`);
+check('swap button title names the other lane as the swap target', /AQLight/.test(swapTitle || ''),
+  JSON.stringify(swapTitle));
 
 // Simulate the async follow-up-question chips having already landed for this
 // job (normally via pollForHints), by writing them into laneState directly —
@@ -132,6 +137,7 @@ await sleep(200);
 const afterSwap = await evaluate(`(() => {
   const bar = document.querySelector('.lane-bar');
   const body = document.querySelector('.lane-body');
+  const modelMeta = document.querySelector('.model-meta');
   return {
     barText: bar ? bar.textContent.replace(/\\s+/g, ' ').trim() : null,
     bodyText: body ? body.textContent.replace(/\\s+/g, ' ').trim() : null,
@@ -139,16 +145,18 @@ const afterSwap = await evaluate(`(() => {
     fastestBadges: document.querySelectorAll('.lane-badge-fastest').length,
     deltas: [...document.querySelectorAll('.lane-delta')].map(e => e.textContent.trim()),
     hintsText: document.querySelector('.hints-row')?.textContent.trim() || null,
-    modelMetric: [...document.querySelectorAll('.metric-item')].map(e => e.textContent.replace(/\\s+/g, ' ').trim()),
+    modelMetaText: modelMeta ? modelMeta.textContent.trim() : null,
   };
 })()`);
 check('clicking swap shows the other lane answer', /LOCAL LANE/.test(afterSwap.bodyText || ''),
   JSON.stringify(afterSwap.bodyText));
 check('swapped-in answer replaced the winner (not appended)', !/CLOUD LANE/.test(afterSwap.bodyText || ''),
   JSON.stringify(afterSwap.bodyText));
-check('per-lane model metric swapped too', afterSwap.modelMetric.some(t => /AQLight/.test(t)),
-  JSON.stringify(afterSwap.modelMetric));
-check('no FASTEST badge on the slower lane', afterSwap.fastestBadges === 0,
+// The model name lives on the message-meta line now (moved up from the
+// metrics row), so a swap must update it there instead.
+check('per-lane model name (message-meta line) swapped too', /AQLight/.test(afterSwap.modelMetaText || ''),
+  JSON.stringify(afterSwap.modelMetaText));
+check('still no FASTEST badge after swapping to the slower lane', afterSwap.fastestBadges === 0,
   'badges=' + afterSwap.fastestBadges);
 check('slower lane shows a +delta', afterSwap.deltas.length === 1 && /^\+2\.2s$/.test(afterSwap.deltas[0]),
   JSON.stringify(afterSwap.deltas));
@@ -162,10 +170,13 @@ const afterSwapBack = await evaluate(`(() => ({
   bodyText: document.querySelector('.lane-body').textContent.replace(/\\s+/g, ' ').trim(),
   fastestBadges: document.querySelectorAll('.lane-badge-fastest').length,
   hintsText: document.querySelector('.hints-row')?.textContent.trim() || null,
+  modelMetaText: document.querySelector('.model-meta')?.textContent.trim() || null,
 }))()`);
 check('swapping back returns to the fastest lane', /CLOUD LANE/.test(afterSwapBack.bodyText),
   JSON.stringify(afterSwapBack.bodyText));
-check('FASTEST badge back on the winner', afterSwapBack.fastestBadges === 1);
+check('still no FASTEST badge back on the winner', afterSwapBack.fastestBadges === 0);
+check('model name back to the winner after swapping back', /gemini/i.test(afterSwapBack.modelMetaText || ''),
+  JSON.stringify(afterSwapBack.modelMetaText));
 check('hints row still intact after two swaps', afterSwapBack.hintsText === 'Next StepsHINTS-MARKER',
   JSON.stringify(afterSwapBack.hintsText));
 
@@ -221,14 +232,20 @@ await sleep(2800);
 const rawSection = await evaluate(`(() => {
   const bubbles = [...document.querySelectorAll('.message.agent')];
   const last = bubbles[bubbles.length - 1];
-  const raw = last.querySelector('details.raw-collapse');
+  // Raw is nested INSIDE Evidence, not its own top-level toggle — find the
+  // answer-section whose summary reads "Evidence".
+  const evidence = [...last.querySelectorAll('details.answer-section')]
+    .find(d => d.querySelector('summary')?.textContent.trim().toLowerCase() === 'evidence');
+  const evidenceInitiallyOpen = evidence ? evidence.hasAttribute('open') : null;
+  const raw = evidence ? evidence.querySelector('details.raw-collapse') : null;
   // The 'open' attribute IS the collapse state the browser renders from —
   // verified visually via a real screenshot (headless Chrome's layout APIs
   // for closed <details> content are unreliable in this environment:
   // getBoundingClientRect/getClientRects report the content as painted even
   // though a screenshot shows only the "▶ Raw" summary line).
-  const initiallyOpen = raw ? raw.hasAttribute('open') : null;
+  const rawInitiallyOpen = raw ? raw.hasAttribute('open') : null;
   const summaryText = raw ? raw.querySelector('summary').textContent.trim() : null;
+  evidence && evidence.setAttribute('open', '');
   raw && raw.setAttribute('open', '');
   const table = last.querySelector('details.raw-collapse table.data-table');
   const tableText = table ? table.textContent : '';
@@ -238,8 +255,11 @@ const rawSection = await evaluate(`(() => {
   sql && sql.setAttribute('open', '');
   const pre = sql ? sql.querySelector('pre.code-block') : null;
   return {
+    hasEvidenceSection: !!evidence,
+    evidenceInitiallyOpen,
     hasRawSection: !!raw,
-    initiallyOpen,
+    rawIsNestedInsideEvidence: !!(evidence && raw && evidence.contains(raw)),
+    rawInitiallyOpen,
     summaryText,
     tableHasSampleRow: tableText.includes('10.220.40.7') && tableText.includes('Port scan'),
     hasSqlToggle: !!sql,
@@ -250,8 +270,10 @@ const rawSection = await evaluate(`(() => {
     preHasSql: pre ? pre.textContent.includes('SELECT') : false,
   };
 })()`);
-check('Raw section is present', rawSection.hasRawSection === true);
-check('Raw section is collapsed by default', rawSection.initiallyOpen === false);
+check('Evidence section is present', rawSection.hasEvidenceSection === true);
+check('Evidence is collapsed by default', rawSection.evidenceInitiallyOpen === false);
+check('Raw section exists nested inside Evidence', rawSection.hasRawSection === true && rawSection.rawIsNestedInsideEvidence === true, JSON.stringify(rawSection));
+check('Raw is collapsed by default (independent of Evidence)', rawSection.rawInitiallyOpen === false);
 check('Raw section is labeled "Raw"', rawSection.summaryText === 'Raw', rawSection.summaryText);
 check('expanding Raw shows the actual rows, not the summary JSON', rawSection.tableHasSampleRow === true, JSON.stringify(rawSection));
 check('a nested View SQL toggle exists inside Raw', rawSection.hasSqlToggle === true);
@@ -260,11 +282,20 @@ check('the SQL toggle is labeled "View SQL"', rawSection.sqlSummaryText === 'Vie
 check('expanding View SQL shows the actual statement', rawSection.preHasSql === true);
 check('the SQL block wraps instead of scrolling sideways', rawSection.preOverflowX === 'hidden' && rawSection.preWhiteSpace === 'pre-wrap', JSON.stringify(rawSection));
 
-// Confidence pill: floats to the FAR RIGHT via its own margin — everything
-// else in the bar (model label, FASTEST badge, timing, swap button) stays
-// exactly where it always sat, on the left. The pill is the absolute
-// right-most element, after the swap button, not squeezed between it and
-// the label.
+// And the inverse: Raw must NOT appear at all when the answer has no
+// Evidence section (RAW_PLACEHOLDER never gets substituted in). The earlier
+// "confidence pill check" message has plain text with no '## Evidence'.
+const noEvidenceCase = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('.message.agent')];
+  const target = bubbles.find(b => b.textContent.includes('SINGLE LANE: confidence pill check answer.'));
+  return { found: !!target, hasRawAnywhere: target ? !!target.querySelector('details.raw-collapse') : null };
+})()`);
+check('a message with no Evidence section has no Raw toggle at all',
+  noEvidenceCase.found && noEvidenceCase.hasRawAnywhere === false, JSON.stringify(noEvidenceCase));
+
+// Right-hand cluster order: model/timing stay on the left (unmoved); the
+// right side is data-source // confidence % // icon-only swap button, in
+// that order, with the swap button as the absolute right-most element.
 const pillAlignment = await evaluate(`(() => {
   const bars = [...document.querySelectorAll('.lane-bar')];
   const bareBar = bars.find(b => b.querySelector('.confidence-pill') && !b.querySelector('.lane-current') && !b.querySelector('.lane-swap'));
@@ -276,25 +307,28 @@ const pillAlignment = await evaluate(`(() => {
   const racedLabel = racedBar.querySelector('.lane-current');
   const racedPill = racedBar.querySelector('.confidence-pill');
   const racedSwap = racedBar.querySelector('.lane-swap');
+  const racedSource = racedBar.querySelector('.data-source-label');
   const racedLabelRect = racedLabel.getBoundingClientRect();
   const racedPillRect = racedPill.getBoundingClientRect();
   const racedSwapRect = racedSwap.getBoundingClientRect();
+  const racedSourceRect = racedSource ? racedSource.getBoundingClientRect() : null;
   return {
     ok: true,
-    // A left-stranded pill (the earlier regression) would put this near 0.
+    // A left-stranded pill (an earlier regression) would put this near 0.
     pillNearRightEdge: (bareBarRect.right - barePillRect.right) < 40,
     // Model label untouched: still the left-most element in the bar.
     labelStillOnTheLeft: racedLabelRect.left <= racedPillRect.left,
-    // Swap button stays put too — the pill goes AFTER it, not between it
-    // and the label.
-    swapStaysLeftOfPill: racedSwapRect.right <= racedPillRect.left + 2,
-    swapStillLeftOfLabelEnd: racedLabelRect.right <= racedSwapRect.left,
+    // Order on the right: source, then confidence, then swap (right-most).
+    sourceBeforePill: !racedSourceRect || racedSourceRect.right <= racedPillRect.left + 2,
+    pillBeforeSwap: racedPillRect.right <= racedSwapRect.left + 2,
+    swapIsRightMost: racedSwapRect.right >= racedPillRect.right,
   };
 })()`);
 check('confidence pill anchors to the right edge of the lane bar', pillAlignment.ok && pillAlignment.pillNearRightEdge, JSON.stringify(pillAlignment));
 check('model label stays on the left, unmoved by the pill', pillAlignment.ok && pillAlignment.labelStillOnTheLeft, JSON.stringify(pillAlignment));
-check('swap button stays in its original spot, left of the pill', pillAlignment.ok && pillAlignment.swapStaysLeftOfPill, JSON.stringify(pillAlignment));
-check('confidence pill is the absolute right-most element, after the swap button', pillAlignment.ok && pillAlignment.swapStillLeftOfLabelEnd, JSON.stringify(pillAlignment));
+check('data source sits before the confidence pill', pillAlignment.ok && pillAlignment.sourceBeforePill, JSON.stringify(pillAlignment));
+check('confidence pill sits before the swap button', pillAlignment.ok && pillAlignment.pillBeforeSwap, JSON.stringify(pillAlignment));
+check('the icon-only swap button is the absolute right-most element', pillAlignment.ok && pillAlignment.swapIsRightMost, JSON.stringify(pillAlignment));
 
 // Logo click: ends the investigation, not just a view switch. Several jobs
 // have been sent by this point in the run, so there IS a transcript and
@@ -381,29 +415,36 @@ check('hint chips landed', afterChips.chipCount === 2, JSON.stringify(afterChips
 check('bullets and chips share the same Next Steps section', afterChips.actionsAndChipsInSameSection === true, JSON.stringify(afterChips));
 
 // Data-source label: names the underlying vendor data (Corelight), distinct
-// from the agent badge (Alert Triage), far right on the message-meta line.
+// from the agent badge (Alert Triage). Lives in the lane-bar's right-hand
+// cluster (.lane-bar-right) — this job also has a confidence pill after it,
+// so check the CLUSTER sits at the bar's right edge and the label is the
+// first item within it, not that the label itself touches the edge.
 const dataSource = await evaluate(`(() => {
   const bubbles = [...document.querySelectorAll('.message.agent')];
   const last = bubbles[bubbles.length - 1];
   const meta = last.querySelector('.message-meta');
-  const label = meta ? meta.querySelector('.data-source-label') : null;
+  const bar = last.querySelector('.lane-bar');
+  const right = bar ? bar.querySelector('.lane-bar-right') : null;
+  const label = right ? right.querySelector('.data-source-label') : null;
+  const pill = right ? right.querySelector('.confidence-pill') : null;
   const badge = meta ? meta.querySelector('.agent-badge') : null;
-  if (!meta || !label || !badge) return { ok: false };
-  const metaRect = meta.getBoundingClientRect();
+  if (!bar || !right || !label || !badge) return { ok: false };
+  const barRect = bar.getBoundingClientRect();
+  const rightRect = right.getBoundingClientRect();
   const labelRect = label.getBoundingClientRect();
-  const badgeRect = badge.getBoundingClientRect();
+  const pillRect = pill ? pill.getBoundingClientRect() : null;
   return {
     ok: true,
     text: label.textContent.trim(),
     badgeText: badge.textContent.trim(),
-    isFarRight: (metaRect.right - labelRect.right) < 20,
-    afterBadge: badgeRect.right <= labelRect.left,
+    clusterIsFarRight: (barRect.right - rightRect.right) < 20,
+    labelBeforePill: !pillRect || labelRect.right <= pillRect.left + 2,
   };
 })()`);
 check('data-source label shows the vendor (Corelight), not the agent name', dataSource.ok && dataSource.text === 'Corelight', JSON.stringify(dataSource));
 check('data-source label is distinct from the agent badge', dataSource.ok && dataSource.badgeText !== dataSource.text, JSON.stringify(dataSource));
-check('data-source label sits far right on the meta line', dataSource.ok && dataSource.isFarRight, JSON.stringify(dataSource));
-check('data-source label sits after the agent badge', dataSource.ok && dataSource.afterBadge, JSON.stringify(dataSource));
+check('the right-hand cluster sits far right on the lane-bar line', dataSource.ok && dataSource.clusterIsFarRight, JSON.stringify(dataSource));
+check('data-source label sits before the confidence pill within the cluster', dataSource.ok && dataSource.labelBeforePill, JSON.stringify(dataSource));
 
 check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
 

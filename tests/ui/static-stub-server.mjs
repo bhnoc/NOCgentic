@@ -67,7 +67,10 @@ const server = createServer(async (req, res) => {
         " FROM alerts WHERE dt = '2026-08-05' AND alert_name IS NOT NULL GROUP BY alert_name ORDER BY ts DESC LIMIT 100";
       jobs.set(jobId, {
         jobId, status: 'done', agentUsed: 'athena-hunter', hints: [],
-        answer: 'QUERY TABS: answer text.',
+        // Raw is nested inside Evidence now (never a top-level toggle) — the
+        // answer needs a real '## Evidence' section for Raw to have
+        // somewhere to attach to.
+        answer: '## Answer\nQUERY TABS: answer text.\n\n## Evidence\n- 2 hosts scanning 45.83.193.150\n',
         confidence: 0.8,
         data: {
           query_details: [{

@@ -11,7 +11,7 @@
   // which is a table name ("suricata", "ml"), not a vendor/tool label.
   const SOURCE_LABELS = {
     suricata: 'Corelight Suricata',
-    notice:   'Zeek Notice',
+    notice:   'Corelight Zeek Notice',
     ml:       'Corelight ML',
     yara:     'Corelight YARA',
     anomaly:  'Corelight Anomaly',
@@ -685,8 +685,10 @@
     let metricsHtml = '';
     const m = src.data?.llm_metrics;
     if (m) {
+      // MODEL is not here — it moved up to the message-meta line (next to the
+      // timestamp/duration), alongside the data-source label that's now on
+      // the lane-bar line. See appendAgentMessage / swapLane.
       const items = [
-        m.model ? `<span class="metric-item">MODEL <strong>${escHtml(m.model)}</strong></span>` : '',
         m.latency_ms ? `<span class="metric-item">LATENCY <strong>${(m.latency_ms/1000).toFixed(1)}s</strong></span>` : '',
         m.tok_per_sec ? `<span class="metric-item">SPEED <strong>${m.tok_per_sec} tok/s</strong></span>` : '',
         m.completion_tokens ? `<span class="metric-item">OUTPUT <strong>${m.completion_tokens} tok</strong></span>` : '',
@@ -696,12 +698,24 @@
       metricsHtml = `<div class="metrics-row">${items}</div>`;
     }
     let dataHtml = '';
+    let rawHtml = '';
     if (src.data && agentKey === 'thousandeyes-analyst') {
+      // ThousandEyes' summary tiles are the answer's own visualization, not
+      // raw query output — shown directly, never gated behind Evidence.
       dataHtml = renderThousandEyesData(src.data);
     } else if (src.data) {
-      dataHtml = renderDataTabs(src.data);
+      rawHtml = renderDataTabs(src.data);
     }
-    return { html: `${answer.html}${metricsHtml}${dataHtml}`, nextStepItems: answer.nextStepItems };
+    // Raw (query rows / SQL) is not a top-level toggle: it only exists once
+    // the analyst has expanded Evidence, since Raw IS the evidence, one level
+    // deeper. If the answer has no Evidence section (RAW_PLACEHOLDER never
+    // appears — error/fallback answers, or an agent whose prompt has no
+    // Evidence header), Raw does not render at all rather than floating
+    // loose at the bottom.
+    const html = answer.html.includes(RAW_PLACEHOLDER)
+      ? answer.html.replace(RAW_PLACEHOLDER, rawHtml)
+      : answer.html;
+    return { html: `${html}${metricsHtml}${dataHtml}`, nextStepItems: answer.nextStepItems };
   }
 
   /** The one Next Steps section for a message: recommended-action bullets
@@ -786,40 +800,56 @@
    * from a swap, which has no job. Taking `lanesRacing` as an argument meant the
    * pending state silently depended on the caller having one.
    */
+  /** "Cloud (Gemini)" / "Local (AQLight)" / "Local (AQLight + Foundation-Sec)"
+   *  → just the model name(s) — "Gemini" / "AQLight" / "AQLight + Foundation-Sec".
+   *  Strips the Cloud/Local wrapper client-side rather than hardcoding the
+   *  short names, since the local label is config-derived (lane_label() in
+   *  the orchestrator) and can legitimately vary. */
+  function shortModelName(label) {
+    const m = /^(?:Cloud|Local)\s*\((.+)\)$/.exec(label || '');
+    return m ? m[1] : (label || '');
+  }
+
   function renderLaneBar(laneKey) {
     const st = laneState.get(laneKey);
     if (!st) return '';
-    // The pill carries its own right-push (see .confidence-pill in app.css) so
-    // it — and only it — moves to the right; everything before it (model
-    // label, FASTEST badge, timing) stays exactly where it always sat.
     const confHtml = renderConfidencePill(st.confidence);
+    const sourceHtml = st.dataSourceLabel
+      ? `<span class="data-source-label">${escHtml(st.dataSourceLabel)}</span>` : '';
+    // Right-hand cluster: data source, confidence, then (if there's a real
+    // swap target) the icon-only button as the absolute right-most element.
+    // Wrapped once so margin-left:auto lives here, not on individual pieces.
+    const rightCluster = (swapHtml) => {
+      const inner = sourceHtml + confHtml + swapHtml;
+      return inner ? `<span class="lane-bar-right">${inner}</span>` : '';
+    };
     if (st.lanes.length < 2) {
-      if (!st.racing) return confHtml;
+      if (!st.racing) return rightCluster('');
       // One lane in, the other still running: show the pending state so the user
       // knows a second opinion is coming rather than wondering if it broke.
       const only = st.lanes.length === 1 ? st.lanes[0] : null;
-      return `<span class="lane-current">${escHtml(only ? only.label : 'Fastest model')}</span>` +
+      return `<span class="lane-current">${escHtml(only ? shortModelName(only.label) : 'Fastest model')}</span>` +
              `<span class="lane-pending">second model still working…</span>` +
-             confHtml;
+             rightCluster('');
     }
     const active = st.lanes.find(l => l.lane === st.active) || st.lanes[0];
     const other = st.lanes.find(l => l.lane !== active.lane);
     const winner = st.lanes.find(l => l.winner);
-    const isWinner = active.winner === true;
     const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+    const isWinner = active.winner === true;
+    const swapHtml =
+      `<button class="lane-swap" type="button" data-lane-key="${escHtml(laneKey)}" ` +
+      `title="Show the answer from ${escHtml(shortModelName(other.label))}" ` +
+      `aria-label="Show the answer from ${escHtml(shortModelName(other.label))}">` +
+      `<span class="lane-swap-icon" aria-hidden="true">⇄</span></button>`;
     return (
-      `<span class="lane-current">${escHtml(active.label)}` +
-      (isWinner ? '<span class="lane-badge-fastest">FASTEST</span>' : '') +
-      `</span>` +
+      // Left: model + timing only. No FASTEST badge — the winner is simply
+      // whichever lane is showing first, which already says "fastest".
+      `<span class="lane-current">${escHtml(shortModelName(active.label))}</span>` +
       `<span class="lane-timing">${secs(active.elapsedMs)}` +
       (winner && !isWinner ? ` <span class="lane-delta">+${secs(active.elapsedMs - winner.elapsedMs)}</span>` : '') +
       `</span>` +
-      `<button class="lane-swap" type="button" data-lane-key="${escHtml(laneKey)}" ` +
-      `title="Show the answer from ${escHtml(other.label)}" ` +
-      `aria-label="Show the answer from ${escHtml(other.label)}">` +
-      `<span class="lane-swap-icon" aria-hidden="true">⇄</span>` +
-      `<span class="lane-swap-label">${escHtml(other.label)}</span></button>` +
-      confHtml
+      rightCluster(swapHtml)
     );
   }
 
@@ -842,6 +872,12 @@
       );
       body.innerHTML = rendered.html;
       st.actionItems = rendered.nextStepItems;
+    }
+    // The model name on the message-meta line is per-lane too.
+    const modelMeta = document.getElementById(`modelmeta-${laneKey}`);
+    if (modelMeta) {
+      const nextModel = next.data?.llm_metrics?.model;
+      if (nextModel) modelMeta.textContent = `// ${nextModel}`;
     }
     refreshLaneBar(laneKey);
     refreshHints(laneKey);
@@ -923,10 +959,13 @@
     const dataSourceLabel = { 'alert-triage':'Corelight', 'athena-hunter':'Corelight', 'thousandeyes-analyst':'ThousandEyes' }[agentKey] || '';
 
     let bubbleContent = '';
+    let modelMetaId = '';
+    let modelName = job.data?.llm_metrics?.model || '';
     if (job.status === 'error') {
       bubbleContent = `<div class="message-bubble error-bubble"><strong style="color:#ff6080;">ERROR:</strong> ${escHtml(job.error||'Unknown error')}</div>`;
     } else {
       const laneKey = job.jobId || `anon-${Date.now()}`;
+      modelMetaId = laneKey;
       // Track lanes client-side so a swap can re-render from memory with no refetch.
       // Stored even for a single-lane response so the confidence pill (lane bar,
       // top-right) has something to read without a lanes array.
@@ -936,6 +975,7 @@
         agentKey,
         racing: job.lanesRacing === true,
         confidence: job.confidence,
+        dataSourceLabel,
       });
       const st = laneState.get(laneKey);
       const body = renderLaneBody({
@@ -969,7 +1009,7 @@
         <span class="agent-badge ${badgeClass}">${agentLabel}</span>
         ${timeNow()}
         ${job.completedAt ? '// ' + elapsed(job.createdAt, job.completedAt) : ''}
-        ${dataSourceLabel ? `<span class="data-source-label">${escHtml(dataSourceLabel)}</span>` : ''}
+        ${modelName ? `<span class="model-meta" id="modelmeta-${modelMetaId}">// ${escHtml(modelName)}</span>` : ''}
       </div>
       ${bubbleContent}
     `;
@@ -993,6 +1033,12 @@
   // them into the one unified Next Steps section at the bottom of the
   // message (see renderSections / renderNextStepsSection).
   const COLLAPSIBLE_HEADINGS = new Set(['key entities', 'evidence']);
+
+  // Substituted with the Raw section's HTML (query rows / SQL) inside
+  // Evidence — see renderSections and renderLaneBody. If the answer has no
+  // Evidence section, this token never appears and Raw does not render at
+  // all, by design.
+  const RAW_PLACEHOLDER = ' RAW_SECTION ';
 
   function formatInline(s) {
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -1062,7 +1108,14 @@
       const collapsible = COLLAPSIBLE_HEADINGS.has(sec.heading.toLowerCase().trim());
       const safeHeading = escHtml(sec.heading);
       if (collapsible) {
-        out += `<details class="answer-section"><summary class="md-header md-collapsible">${safeHeading}</summary>${body}</details>`;
+        // Evidence gets a placeholder for the Raw section (query rows/SQL),
+        // filled in by renderLaneBody once src.data is in hand. Raw is not
+        // its own top-level toggle: it only exists once the analyst has
+        // already expanded Evidence, since Raw IS the evidence, one level
+        // deeper (the query results the bullets above were built from).
+        const isEvidence = sec.heading.toLowerCase().trim() === 'evidence';
+        out += `<details class="answer-section"><summary class="md-header md-collapsible">${safeHeading}</summary>${body}` +
+          (isEvidence ? RAW_PLACEHOLDER : '') + `</details>`;
       } else {
         out += `<strong class="md-header">${safeHeading}</strong>${body}`;
       }

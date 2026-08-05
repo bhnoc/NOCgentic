@@ -339,14 +339,17 @@
 
     /* Which vendor's data backs this answer (Corelight / ThousandEyes) —
        distinct from the agent-badge, which names the AGENT, not the data.
-       Floats to the far right of the meta line via its own margin; nothing
-       else in the line moves. */
+       Lives in the lane-bar's right-hand cluster (.lane-bar-right), not this
+       line — the right-push there is the wrapper's margin, not this one's. */
     .data-source-label {
-      margin-left: auto;
       text-transform: uppercase;
       color: var(--text-muted);
       opacity: 0.8;
     }
+
+    /* Model name, moved up from the metrics row to sit with the
+       timestamp/duration it belongs next to. */
+    .model-meta { color: var(--text-muted); }
 
     .agent-badge {
       padding: 2px 8px;
@@ -473,11 +476,9 @@
     }
 
     /* Confidence pill — floats to the far right of the lane bar via its own
-       margin, just left of the model/lane label (and the swap button, when
-       there is one). Everything else in the bar stays exactly where it sat
-       before this existed. Color reuses the old bar's semantics. */
+       right-hand cluster (.lane-bar-right below) alongside the data-source
+       label and the swap button. Color reuses the old bar's semantics. */
     .confidence-pill {
-      margin-left: auto;
       font-family: var(--font-mono);
       font-size: 10px;
       font-weight: 700;
@@ -975,10 +976,11 @@
     }
     .metric-item strong { color: var(--frost); margin-left: 3px; }
 
-    /* Lane race bar — confidence, which model answered, and the swap to the
-       other one. Left-to-right in reading order (pill, model, badge, timing);
-       only the swap button is pushed to the far right (margin-left: auto
-       below), same as before the confidence pill was added. */
+    /* Lane race bar — model + timing on the left (reading order, unchanged
+       position); data source, confidence, and the icon-only swap button
+       clustered at the far right via .lane-bar-right's own margin. No
+       FASTEST badge — whichever lane is showing first already IS the
+       fastest one; a second label saying so was redundant. */
     .lane-bar:not(:empty) {
       display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
       margin-bottom: 10px; padding-bottom: 8px;
@@ -987,29 +989,19 @@
       text-transform: uppercase; letter-spacing: 0.05em;
     }
     .lane-current { color: var(--frost); display: inline-flex; align-items: center; gap: 6px; }
-    .lane-badge-fastest {
-      background: rgba(0,255,136,0.12); color: var(--accent-green);
-      border: 1px solid rgba(0,255,136,0.3); border-radius: 2px;
-      padding: 1px 5px; font-size: 9px; letter-spacing: 0.1em;
-    }
     .lane-timing { color: var(--dim); }
     .lane-delta  { color: var(--accent-yellow); }
     .lane-pending { color: var(--dim); opacity: 0.75; text-transform: none; letter-spacing: 0; }
+    .lane-bar-right { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
     .lane-swap {
-      display: inline-flex; align-items: center; gap: 6px;
+      display: inline-flex; align-items: center; justify-content: center;
       background: rgba(30,144,255,0.08); border: 1px solid rgba(30,144,255,0.3);
-      color: var(--frost); padding: 4px 10px; border-radius: 2px;
-      font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-      letter-spacing: 0.05em; cursor: pointer; transition: all 0.15s ease;
+      color: var(--frost); width: 22px; height: 22px; padding: 0; border-radius: 2px;
+      cursor: pointer; transition: all 0.15s ease;
     }
     .lane-swap:hover { background: rgba(30,144,255,0.18); border-color: var(--ice-500); color: var(--ice-200); }
     .lane-swap:focus-visible { outline: 2px solid var(--ice-400); outline-offset: 2px; }
     .lane-swap-icon { font-size: 13px; line-height: 1; }
-
-    @media (max-width: 640px) {
-      /* The full model name blows out the bar on a phone; the ⇄ icon carries it. */
-      .lane-swap-label { display: none; }
-    }
 
     /* Follow-up hint chips */
     .hints-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
