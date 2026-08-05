@@ -891,11 +891,22 @@ async def llm_triage(
         answer = await llm_complete(
             system_prompt=SYSTEM_PROMPT,
             user_content=user_content,
-            max_tokens=4096,
+            max_tokens=8192,
             temperature=0.1,
             # Pinned model only on the legacy path — see parse_query_filters.
             model=None if lane else "gemini-3.5-flash-lite",
-            thinking_budget=0,
+            # Bound the thinking, don't leave it unbounded. thinking_budget=0 is
+            # clamped to -1 (UNBOUNDED dynamic) on flash-lite, and thinking tokens
+            # share max_output_tokens: a live 2026-08-05 counting query burned 3932
+            # reasoning tokens of a 4096 budget, leaving ~160 for prose. The answer
+            # truncated mid-bullet, the ```json{"confidence"} trailer never arrived,
+            # and the whole thing was replaced with the "issue calling the model"
+            # retry message — a hard failure on the exact question the count fix
+            # targets. Same remedy already applied to athena-hunter's SQL gen and
+            # the orchestrator's classify: a FIXED thinking budget so reasoning
+            # can't starve output, plus real room for the prose (this call emits a
+            # 4-section answer with a Key Entities list, so 8192 not 4096).
+            thinking_budget=1024,
             lane=lane,
             role="prose",
         )
