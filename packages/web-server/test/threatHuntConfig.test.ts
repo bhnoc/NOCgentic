@@ -7,7 +7,7 @@ import path from 'node:path';
 // a malformed hunt config is the only way the game can break. Validate every
 // registered hunt against the contract.
 
-interface HuntEvidence { id: string; label: string; detail: string }
+interface HuntEvidence { id: string; label: string; detail: string; hint?: string[] }
 interface HuntLogBlock { id?: string; title: string; lines: string[] }
 interface HuntExit { to: string; label: string; requiresEvidence?: number }
 interface HuntAction { id: string; label: string; correct?: boolean; resultNote: string }
@@ -16,14 +16,27 @@ interface HuntNode {
   evidence?: HuntEvidence[]; logs?: HuntLogBlock[]; exits?: HuntExit[];
   isDecision?: boolean; actions?: HuntAction[];
 }
+interface HuntTimelineEvent {
+  id: string; t: string; label: string;
+  nodes?: string[]; hint?: string[]; tone?: string;
+}
 interface HuntConfig {
   id: string;
   meta: { title: string; briefing: string; targetSeconds: number };
   glossary?: Record<string, string>;
+  timeline?: HuntTimelineEvent[];
+  ui?: Record<string, string>;
   startNode: string;
   nodes: Record<string, HuntNode>;
   endings: Record<string, { title: string; narration: string } | undefined>;
 }
+
+// Chrome-copy keys the engine accepts in config.ui (threat-hunt.js DEFAULT_UI).
+const UI_KEYS = [
+  'openingTag', 'openingLine', 'briefingHint', 'noEvidence',
+  'logsButton', 'logsTitle', 'logsQuerying', 'logsLoadingTitle', 'logsLoadingMeta',
+  'timelineTitle', 'timelineHint', 'timelineUnobserved', 'timelineClickPrompt', 'timelineEmpty',
+];
 
 function loadRegistry(): HuntConfig[] {
   const file = path.join(__dirname, '../static/threat-hunt-config.js');
@@ -55,6 +68,48 @@ describe('threat hunt registry', () => {
     expect(correct).toHaveLength(1);
     expect(correct[0].id).toBe('true-positive');
     expect(correct[0].label).toBe('True Positive');
+  });
+
+  it('grounds every timeline event in real nodes and log lines', () => {
+    for (const hunt of hunts) {
+      for (const e of hunt.timeline ?? []) {
+        const ctx = `${hunt.id}/${e.id}`;
+        expect(e.t, ctx).toMatch(/^\d{1,2}:\d{2}(:\d{2})?$/);
+        expect(e.label.length, ctx).toBeGreaterThan(0);
+        // No tip-off copy on the strip either.
+        expect(e.label.toLowerCase(), ctx).not.toContain('smoking gun');
+        const nodes = e.nodes ?? [];
+        expect(nodes.length, ctx).toBeGreaterThan(0);
+        for (const n of nodes) expect(hunt.nodes[n], `${ctx}: node ${n}`).toBeDefined();
+        const blob = nodes
+          .flatMap(n => (hunt.nodes[n].logs ?? []).flatMap(l => l.lines))
+          .join('\n');
+        for (const h of e.hint ?? []) {
+          expect(blob.includes(h), `${ctx}: "${h}"`).toBe(true);
+        }
+      }
+    }
+    // The MCP hunt ships an incident timeline.
+    const mcp = hunts.find(h => h.id === 'fakecorp-cleartext-mcp');
+    expect((mcp!.timeline ?? []).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('grounds every evidence hint verbatim in its node log lines', () => {
+    let hinted = 0;
+    for (const hunt of hunts) {
+      for (const [key, node] of Object.entries(hunt.nodes)) {
+        const blob = (node.logs ?? []).flatMap(l => l.lines).join('\n');
+        for (const ev of node.evidence ?? []) {
+          for (const h of ev.hint ?? []) {
+            hinted++;
+            expect(h.length, `${hunt.id}/${key}/${ev.id}`).toBeGreaterThan(0);
+            expect(blob.includes(h), `${hunt.id}/${key}/${ev.id}: "${h}"`).toBe(true);
+          }
+        }
+      }
+    }
+    // The MCP hunt ships hints on all five evidence-bearing rooms.
+    expect(hinted).toBeGreaterThanOrEqual(5);
   });
 
   it('ships obfuscated Corelight log captures on fakecorp-cleartext-mcp rooms', () => {
@@ -201,6 +256,13 @@ describe.each(hunts.map(h => [h.id, h] as const))('hunt contract: %s', (_id, hun
       expect(ending, `${key} ending`).toBeDefined();
       expect(ending!.title.length).toBeGreaterThan(0);
       expect(ending!.narration.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('ui overrides only use keys the engine renders', () => {
+    for (const [key, value] of Object.entries(hunt.ui ?? {})) {
+      expect(UI_KEYS, `unknown ui key "${key}"`).toContain(key);
+      expect(value.trim().length, `ui.${key}`).toBeGreaterThan(0);
     }
   });
 

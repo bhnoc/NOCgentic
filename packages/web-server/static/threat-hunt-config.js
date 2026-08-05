@@ -18,7 +18,7 @@ window.THREAT_HUNTS = [
     "id": "fakecorp-cleartext-mcp",
     "meta": {
       "title": "Cleartext MCP, FAKE CORP asset",
-      "briefing": "Alert A-4418 is open: cleartext HTTP from 10.44.18.72 to cloud vendor ranges, 7 distinct /…/mcp paths in the window, including a full security-tooling stack. Pivot through the evidence, separate corp-normal from incident-worthy, and post the correct BH close code. Target: under 3 minutes.",
+      "briefing": "Alert A-4418 is open: cleartext HTTP from 10.44.18.72 to cloud vendor ranges, 289 requests across 7 distinct /…/mcp paths in a 90m window (16:42–18:12), including a full security-tooling stack. Corp-looking DNS and MDM can explain the asset without clearing the exposure. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -28,13 +28,12 @@ window.THREAT_HUNTS = [
       "TLS": "The lock on a web connection (the S in HTTPS). \"No TLS\" means the traffic is not locked.",
       "DNS": "The phone book of the internet: turns names like fakecorp.example into addresses computers dial.",
       "MDM": "Company device management — software that enrolls and controls a laptop or phone for IT.",
-      "SSID": "The Wi-Fi network name you pick in the list (for example the training lab network).",
+      "SSID": "The Wi-Fi network name shown in the client list (for example the training lab network).",
       "VLAN": "A sliced-off piece of the network, like a separate hallway in the same building.",
       "EDR": "Endpoint security software that watches a computer for suspicious behavior.",
       "JSON-RPC": "A simple ask-and-answer message format apps use to call functions over the network.",
       "endpoint": "A device or service on the network that can send or receive traffic — here, the source host.",
-      "Pivot": "Jump to another log source using what you already found — follow the breadcrumb.",
-      "write access": "Permission to change or delete things, not just look. More dangerous if exposed.",
+      "Pivot": "Jump to another log source using what is already found — follow the breadcrumb.",
       "tool listings": "The menu of actions an MCP server says it can do — including whether those actions can change data.",
       "cloud vendor ranges": "Blocks of internet addresses that belong to big cloud providers (not the conference Wi-Fi itself).",
       "security-orchestration": "Wiring many security tools together so one client can drive several of them.",
@@ -53,12 +52,16 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed traffic",
         "tag": "[zeek]",
-        "narration": "A-4418 · High · Cleartext MCP · 10.44.18.72 → cloud vendor ranges · HTTP (no TLS) · 214 requests, 7 MCP paths over 18m. Paths include /vaultwatch/mcp, /talon/mcp, /redline-intel/mcp, /graph-ti/mcp, /pulsefeed/mcp, /badgeauth/mcp, /notekeep/mcp. Three surfaces are available for pivot.",
+        "narration": "A-4418 · High · Cleartext MCP · 10.44.18.72 → cloud vendor ranges · HTTP (no TLS) · 289 requests, 7 MCP paths across a 90m window (first sample 16:42:46, last sample 18:12:13). Paths include /vaultwatch/mcp, /talon/mcp, /redline-intel/mcp, /graph-ti/mcp, /pulsefeed/mcp, /badgeauth/mcp, /notekeep/mcp.",
         "evidence": [
           {
             "id": "ev-cleartext-stack",
             "label": "cleartext · 7 MCP paths",
-            "detail": "Unencrypted HTTP carries a complete security-orchestration client surface, not a single health check."
+            "detail": "Unencrypted HTTP carries a complete security-orchestration client surface, not a single health check.",
+            "hint": [
+              "dst port 80",
+              "paths=7"
+            ]
           }
         ],
         "exits": [
@@ -97,12 +100,16 @@ window.THREAT_HUNTS = [
       "http-conn": {
         "name": "HTTP sessions",
         "tag": "[http]",
-        "narration": "Session bodies stay in the clear: JSON-RPC style MCP calls, tool listings, and auth material in headers. Destinations resolve into cloud vendor ranges. One client process enumerates vault, EDR, threat-intel, graph TI, pulse feed, badge auth, and note-keep MCP servers in sequence. Open the log capture and read the wire fields before choosing a close code.",
+        "narration": "Session bodies stay in the clear: JSON-RPC style MCP calls, tool listings, and auth material in headers. Destinations resolve into cloud vendor ranges. One client reaches vault, EDR, threat-intel, graph TI, pulse feed, badge auth, and note-keep MCP servers across the 90m window. Timed samples start with a three-path burst at 16:42:46, an initialize to graph-ti at 17:15:48, and a talon session still active at 18:12:13.",
         "evidence": [
           {
             "id": "ev-live-stack",
             "label": "live stack · auth material on wire",
-            "detail": "Cleartext MCP sessions carry a live security-orchestration client surface with auth material in headers. Read the capture before closing."
+            "detail": "Cleartext MCP sessions carry a live security-orchestration client surface with auth material in headers on port 80.",
+            "hint": [
+              "Authorization=Bearer mcpk_[REDACTED]",
+              "id.resp_p=80"
+            ]
           }
         ],
         "exits": [
@@ -125,7 +132,7 @@ window.THREAT_HUNTS = [
             "title": "HINT · corelight_http_raw · cleartext auth on :80",
             "lines": [
               "# Hint from the wire (obfuscated from live Corelight http rows)",
-              "# Same shape the hunt thread called out: MCP in the clear to AWS + full security stack",
+              "# Same shape the hunt thread called out: MCP in the clear to cloud vendor ranges + full security stack",
               "id.orig_h=10.44.18.72",
               "id.resp_p=80",
               "version=HTTP/1.1",
@@ -155,35 +162,32 @@ window.THREAT_HUNTS = [
               "uri_set=/vaultwatch/mcp,/talon/mcp,/redline-intel/mcp,/graph-ti/mcp,/pulsefeed/mcp,/badgeauth/mcp,/notekeep/mcp",
               "user_agent=agent-cli/2.1.220 (cli)",
               "",
-              "# Example row (fields compacted)",
-              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.12\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/talon/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\",\"client_headers\":{\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Accept\":\"text/event-stream\",\"mcp-protocol-version\":\"2025-11-25\"}}",
-              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.14\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/graph-ti/mcp\",\"status_code\":200,\"client_headers\":{\"Authorization\":\"Bearer mcpk_[REDACTED]\"}}",
-              "{\"_path\":\"http\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.11\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/redline-intel/mcp\",\"status_code\":200,\"client_headers\":{\"Authorization\":\"Bearer mcpk_[REDACTED]\"}}",
+              "# Timed session samples (chronological · secrets redacted, identities fiction)",
               "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.501729Z\",\"uid\":\"C9310847385\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.11\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/redline-intel/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.417367Z\",\"uid\":\"C3355045073\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.15\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/pulsefeed/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "post_body={\"method\":\"resources/list\",\"jsonrpc\":\"2.0\",\"id\":3}",
               "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"resources\":[]}}\r\n\r\n",
-              "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T18:12:13.361926Z\",\"uid\":\"C8373631799\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.12\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/talon/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
-              "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "---",
               "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.497267Z\",\"uid\":\"C3323906924\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.13\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/notekeep/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "post_body={\"method\":\"prompts/list\",\"jsonrpc\":\"2.0\",\"id\":2}",
               "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"prompts\":[]}}\r\n\r\n",
               "---",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.501729Z\",\"uid\":\"C9310847385\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.11\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/redline-intel/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
+              "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
+              "post_body={\"method\":\"resources/list\",\"jsonrpc\":\"2.0\",\"id\":3}",
+              "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"resources\":[]}}\r\n\r\n",
+              "---",
               "{\"_path\":\"http\",\"ts\":\"2026-08-01T17:15:48.190159Z\",\"uid\":\"C2640323717\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.14\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/graph-ti/mcp\",\"status_code\":200,\"user_agent\":\"-\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"-\",\"mcp-protocol-version\":\"2025-11-25\"}",
               "post_body={\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"elicitation\":{\"form\":{},\"url\":{}}},\"clientInfo\":{\"name\":\"lab-mcp-client\",\"title\":\"LabMCP\",\"version\":\"0.146.0-alpha.3.1\"}}}",
               "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":fa",
               "---",
-              "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:42:46.417367Z\",\"uid\":\"C3355045073\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.15\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/pulsefeed/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
+              "{\"_path\":\"http\",\"ts\":\"2026-08-01T18:12:13.361926Z\",\"uid\":\"C8373631799\",\"id.orig_h\":\"10.44.18.72\",\"id.resp_h\":\"52.14.88.12\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"mcp-alb.cloud-vendor.example\",\"uri\":\"/talon/mcp\",\"status_code\":200,\"user_agent\":\"agent-cli/2.1.220 (cli)\"}",
               "client_headers={\"Host\":\"mcp-alb.cloud-vendor.example\",\"Authorization\":\"Bearer mcpk_[REDACTED]\",\"Content-Type\":\"application/json\",\"Accept\":\"application/json, text/event-stream\",\"User-Agent\":\"agent-cli/2.1.220 (cli)\",\"mcp-protocol-version\":\"2025-11-25\"}",
-              "post_body={\"method\":\"resources/list\",\"jsonrpc\":\"2.0\",\"id\":3}",
-              "post_reply=event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"resources\":[]}}\r\n\r\n",
               "",
-              "# tools/list samples · cleartext JSON-RPC (listing bodies truncated in sensor)",
+              "# tools/list samples · cleartext JSON-RPC (listing bodies truncated in sensor · untimed)",
               "---",
               "uri=/vaultwatch/mcp method=POST status=200 dst_port=80",
               "post_body={\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"progressToken\":0}}}",
@@ -203,12 +207,15 @@ window.THREAT_HUNTS = [
       "dns-logs": {
         "name": "Resolver logs",
         "tag": "[dns-01]",
-        "narration": "Resolver window for 10.44.18.72 shows fakecorp-mdm.example, badgeauth.fakecorp.example, collab.fakecorp.example, and several cloud vendor names. Query mix matches a managed FAKE CORP endpoint on conference Wi-Fi. Corp-looking DNS is normal for that asset class; it does not clear the cleartext MCP exposure.",
+        "narration": "Resolver window for 10.44.18.72 shows fakecorp-mdm.example, badgeauth.fakecorp.example, collab.fakecorp.example, and several cloud vendor names (including mcp-alb.cloud-vendor.example). Query mix matches a managed FAKE CORP endpoint on the conference training VLAN. Corp-looking DNS is normal for that asset class; it does not clear the cleartext MCP exposure.",
         "evidence": [
           {
             "id": "ev-dns-corp",
             "label": "DNS · fakecorp.* pattern",
-            "detail": "Name resolution looks like a managed FAKE CORP endpoint. Normal for the asset class; not a close code by itself."
+            "detail": "Name resolution looks like a managed FAKE CORP endpoint. Normal for the asset class; not a close code by itself.",
+            "hint": [
+              "fakecorp"
+            ]
           }
         ],
         "exits": [
@@ -259,7 +266,11 @@ window.THREAT_HUNTS = [
           {
             "id": "ev-managed",
             "label": "managed endpoint · FAKE CORP MDM",
-            "detail": "Source presents as a managed FAKE CORP endpoint. Identity explains the DNS pattern; it does not sanction cleartext security-stack MCP on the floor."
+            "detail": "Source presents as a managed FAKE CORP endpoint. Identity explains the DNS pattern; it does not sanction cleartext security-stack MCP on the floor.",
+            "hint": [
+              "mdm=fakecorp-mdm.example",
+              "org=FAKE CORP"
+            ]
           }
         ],
         "exits": [
@@ -301,12 +312,15 @@ window.THREAT_HUNTS = [
       "class-context": {
         "name": "Class traffic",
         "tag": "[ops]",
-        "narration": "Training VLAN and exploit-lab SSID samples in the same 18m show no peer hosts enumerating the same cleartext MCP security stack. Pattern is unique to 10.44.18.72, not shared class traffic.",
+        "narration": "Training VLAN and exploit-lab SSID samples in the same window show no peer hosts enumerating the same cleartext MCP security stack. Pattern is unique to 10.44.18.72, not shared class traffic.",
         "evidence": [
           {
             "id": "ev-not-class",
             "label": "no class peers · not lab SSID",
-            "detail": "Sanctioned training MCP would show peers on the lab SSID. This host is alone; BH Benign does not fit."
+            "detail": "Sanctioned training MCP would show peers on the lab SSID. This host is alone; BH Benign does not fit.",
+            "hint": [
+              "peers_matching=0"
+            ]
           }
         ],
         "exits": [
@@ -342,7 +356,7 @@ window.THREAT_HUNTS = [
       "decision": {
         "name": "Close codes",
         "tag": "[decision]",
-        "narration": "Evidence is on the table from the pivots and whatever the log captures showed. Corp DNS/MDM can explain identity without clearing exposure; class peers are absent. One BH close code fits.",
+        "narration": "Evidence covers the 289-request cleartext MCP rollup, bearer auth on port 80, corp DNS/MDM identity, and zero class peers on the same path set. Corp signals explain the asset without clearing the exposure. One BH close code fits.",
         "isDecision": true,
         "actions": [
           {
@@ -377,13 +391,77 @@ window.THREAT_HUNTS = [
         "title": "Window closed",
         "narration": "The queue moved on before a close code landed. The evidence trail remains below for review."
       }
-    }
+    },
+    "timeline": [
+      {
+        "id": "tl-dns-hum",
+        "t": "16:41:00",
+        "label": "corp DNS pattern resolving in the background (all-window)",
+        "nodes": [
+          "dns-logs"
+        ],
+        "hint": [
+          "_kerberos._tcp.fakecorp.example",
+          "fakecorp-mdm.example"
+        ],
+        "tone": "info"
+      },
+      {
+        "id": "tl-burst",
+        "t": "16:42:46",
+        "label": "three MCP servers enumerated within one second",
+        "nodes": [
+          "http-conn"
+        ],
+        "hint": [
+          "16:42:46"
+        ],
+        "tone": "warn"
+      },
+      {
+        "id": "tl-initialize",
+        "t": "17:15:48",
+        "label": "client initialize handshake to graph-ti",
+        "nodes": [
+          "http-conn"
+        ],
+        "hint": [
+          "17:15:48"
+        ],
+        "tone": "info"
+      },
+      {
+        "id": "tl-talon",
+        "t": "18:12:13",
+        "label": "talon session still active at end of the 90m sample window",
+        "nodes": [
+          "http-conn"
+        ],
+        "hint": [
+          "18:12:13"
+        ],
+        "tone": "info"
+      },
+      {
+        "id": "tl-alert",
+        "t": "18:14:00",
+        "label": "A-4418 opens on the 289-request cleartext MCP rollup",
+        "nodes": [
+          "observed-logs"
+        ],
+        "hint": [
+          "paths=7",
+          "289"
+        ],
+        "tone": "critical"
+      }
+    ]
   },
   {
     "id": "northlab-cleartext-siem-login",
     "meta": {
       "title": "Cleartext SIEM login, classroom VLAN",
-      "briefing": "Alert A-5521 is open: cleartext HTTP from 10.44.22.11 to a cloud VPS, LogDeck SIEM UI login paths, credentials from 3 attempts visible on the wire. Source sits on a Malware Traffic Lab classroom VLAN. Pivot through the evidence, separate ugly cleartext from unsanctioned incident, and post the correct BH close code. Target: under 3 minutes.",
+      "briefing": "Alert A-5521 is open: cleartext HTTP from 10.44.22.11 to a cloud VPS, LogDeck SIEM UI login paths, credentials from 3 attempts in a 6m window visible on the wire. Source sits on a Malware Traffic Lab classroom VLAN. Cleartext classroom tooling can be ugly without being an intrusion. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -396,7 +474,7 @@ window.THREAT_HUNTS = [
       "cloud VPS": "A rented virtual server on the public internet, not a conference lab appliance.",
       "classroom VLAN": "The network slice assigned to a training room — peers here often share class tooling.",
       "credentials": "Login secrets (username and password). Bad to send in the clear.",
-      "Pivot": "Jump to another log source using what you already found — follow the breadcrumb.",
+      "Pivot": "Jump to another log source using what is already found — follow the breadcrumb.",
       "BH close code": "How Black Hat SOC marks why an alert was closed — the official label for the outcome.",
       "True Positive": "Real bad or real impact that needed incident response. The alert was right and serious.",
       "False Positive": "The alert was wrong — it looked bad but the detection was a mistake.",
@@ -412,7 +490,7 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed traffic",
         "tag": "[zeek]",
-        "narration": "A-5521 · High · Cleartext SIEM login · 10.44.22.11 → cloud VPS · HTTP (no TLS) · port 8001 · 3 login attempts in 6m. URIs include /en-GB/account/login and /en-GB/logdeckd/__raw/services/appsbrowser/account:login. Source VLAN label: Malware Traffic Lab. Three surfaces are available for pivot.",
+        "narration": "A-5521 · High · Cleartext SIEM login · 10.44.22.11 → cloud VPS · HTTP (no TLS) · port 8001 · 3 login attempts in 6m. URIs include /en-GB/account/login and /en-GB/logdeckd/__raw/services/appsbrowser/account:login. Source VLAN label: Malware Traffic Lab.",
         "evidence": [
           {
             "id": "ev-cleartext-login",
@@ -517,7 +595,7 @@ window.THREAT_HUNTS = [
       "decision": {
         "name": "Close codes",
         "tag": "[decision]",
-        "narration": "Evidence is on the table: cleartext LogDeck credentials on the wire, a cloud VPS SIEM with classroom app-pack signals, and multiple Malware Traffic Lab VLAN peers on the same destination. One BH close code fits.",
+        "narration": "Evidence covers 3 cleartext LogDeck login attempts in 6m, a cloud VPS SIEM with classroom app-pack signals, and multiple Malware Traffic Lab VLAN peers on the same destination. One BH close code fits.",
         "isDecision": true,
         "actions": [
           {
@@ -558,7 +636,7 @@ window.THREAT_HUNTS = [
     "id": "fakecorp-supplychain-dns",
     "meta": {
       "title": "Supply-chain DNS, managed laptop",
-      "briefing": "Alert A-6602 is open: ET malware signatures for WirePipe supply-chain domains from 10.44.30.12 on general Wi-Fi. One domain resolves; related lookups NXDOMAIN. Pivot through DNS, detections, and asset context, then post the correct BH close code. Target: under 3 minutes.",
+      "briefing": "Alert A-6602 is open: ET malware signatures for WirePipe supply-chain domains from 10.44.30.12 on general Wi-Fi. In a 12m window, wirepipe.zone resolves (NOERROR); related lookups models.litewire.cloud and sfrlake.example return NXDOMAIN. DNS, detections, and asset context separate ambient noise from a live IOC. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -570,7 +648,7 @@ window.THREAT_HUNTS = [
       "MDM": "Company device management — software that enrolls and controls a laptop or phone for IT.",
       "SaaS": "Software run in a vendor cloud that the laptop talks to for normal work.",
       "Suricata": "An IDS that watches packets and fires named rules when traffic matches known attacks.",
-      "Pivot": "Jump to another log source using what you already found — follow the breadcrumb.",
+      "Pivot": "Jump to another log source using what is already found — follow the breadcrumb.",
       "BH close code": "How Black Hat SOC marks why an alert was closed — the official label for the outcome.",
       "True Positive": "Real bad or real impact that needed incident response. The alert was right and serious.",
       "False Positive": "The alert was wrong — it looked bad but the detection was a mistake.",
@@ -585,7 +663,7 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed DNS",
         "tag": "[dns]",
-        "narration": "A-6602 · High · Supply-chain DNS · 10.44.30.12 on general Wi-Fi · query wirepipe.zone NOERROR · models.litewire.cloud NXDOMAIN · sfrlake.example NXDOMAIN · window 12m. ET malware rules name WirePipe supply-chain and a related RAT domain. Three surfaces are available for pivot.",
+        "narration": "A-6602 · High · Supply-chain DNS · 10.44.30.12 on general Wi-Fi · query wirepipe.zone NOERROR · models.litewire.cloud NXDOMAIN · sfrlake.example NXDOMAIN · window 12m. ET malware rules name WirePipe supply-chain and a related RAT domain.",
         "evidence": [
           {
             "id": "ev-dns-ioc",
@@ -690,7 +768,7 @@ window.THREAT_HUNTS = [
       "decision": {
         "name": "Close codes",
         "tag": "[decision]",
-        "narration": "Evidence is on the table: live resolve of a named WirePipe supply-chain domain, ET malware hits including related RAT DNS, GLASSLINE MDM that explains the laptop but not the IOC, and no classroom peer pattern. One BH close code fits.",
+        "narration": "Evidence covers a live resolve of wirepipe.zone in a 12m window, ET malware hits including related RAT DNS, GLASSLINE MDM that explains the laptop but not the IOC, and no classroom peer pattern. One BH close code fits.",
         "isDecision": true,
         "actions": [
           {
@@ -731,7 +809,7 @@ window.THREAT_HUNTS = [
     "id": "northlab-singleton-c2",
     "meta": {
       "title": "Singleton C2 DNS, class temptation",
-      "briefing": "Alert A-6610 is open: dynamic DNS name starbright.ddns.example from 10.44.31.21 on a Social Engineering Lab VLAN, plus C2-like TLS and a multi-day beacon pattern. First-pass tooling calls class traffic. Pivot, test that claim, and post the correct BH close code. Target: under 3 minutes.",
+      "briefing": "Alert A-6610 is open: dynamic DNS name starbright.ddns.example from 10.44.31.21 on a Social Engineering Lab VLAN, plus C2-like TLS and a multi-day (~3 day) beacon pattern. First-pass tooling calls class traffic; peer search and syllabus coverage still need checking. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -743,7 +821,7 @@ window.THREAT_HUNTS = [
       "classroom VLAN": "The network slice assigned to a training room — peers here often share class tooling.",
       "Suricata": "An IDS that watches packets and fires named rules when traffic matches known attacks.",
       "TLS": "The lock on a web connection (the S in HTTPS).",
-      "Pivot": "Jump to another log source using what you already found — follow the breadcrumb.",
+      "Pivot": "Jump to another log source using what is already found — follow the breadcrumb.",
       "BH close code": "How Black Hat SOC marks why an alert was closed — the official label for the outcome.",
       "True Positive": "Real bad or real impact that needed incident response. The alert was right and serious.",
       "False Positive": "The alert was wrong — it looked bad but the detection was a mistake.",
@@ -758,7 +836,7 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed DNS",
         "tag": "[dns]",
-        "narration": "A-6610 · High · Dynamic DNS C2 · 10.44.31.21 → starbright.ddns.example · Social Engineering Lab VLAN label · first auto-summary says likely coursework. Resolver shows repeated A lookups across ~3 days, not a single lab spike. Three surfaces are available for pivot.",
+        "narration": "A-6610 · High · Dynamic DNS C2 · 10.44.31.21 → starbright.ddns.example · Social Engineering Lab VLAN label · first auto-summary says likely coursework. Resolver shows repeated A lookups across ~3 days, not a single lab spike.",
         "evidence": [
           {
             "id": "ev-ddns-c2",
@@ -863,7 +941,7 @@ window.THREAT_HUNTS = [
       "decision": {
         "name": "Close codes",
         "tag": "[decision]",
-        "narration": "Evidence is on the table: multi-day DDNS and C2-like sessions, an auto-class claim the syllabus does not support, and zero classroom peers on the same destination. One BH close code fits.",
+        "narration": "Evidence covers multi-day (~3 day) DDNS and C2-like sessions to starbright.ddns.example, an auto-class claim the syllabus does not support, and zero classroom peers on the same destination. One BH close code fits.",
         "isDecision": true,
         "actions": [
           {
@@ -904,7 +982,7 @@ window.THREAT_HUNTS = [
     "id": "stagecast-license-pii-http",
     "meta": {
       "title": "Cleartext license PII, vendor app",
-      "briefing": "Alert A-6621 is open: cleartext HTTP license activation from 10.44.32.40 to activate.stagecast.example, POST body carries name, email, and device serial. Pivot through the wire, app identity, and expected-vendor pattern, then post the correct BH close code. Target: under 3 minutes.",
+      "briefing": "Alert A-6621 is open: cleartext HTTP license activation from 10.44.32.40 to activate.stagecast.example on general Wi-Fi. POST body to /activate.php carries name, email, and device serial (SC-77419). Wire fields, app identity, and expected-vendor pattern separate hygiene debt from intrusion. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -915,7 +993,7 @@ window.THREAT_HUNTS = [
       "license activation": "The app phoning home to prove it is allowed to run — often older products still use plain HTTP.",
       "StageCast": "Fictional media/playback vendor used in this drill (stands in for a real licensor).",
       "serial": "A device or product ID string — useful to IT, sensitive if leaked in the clear.",
-      "Pivot": "Jump to another log source using what you already found — follow the breadcrumb.",
+      "Pivot": "Jump to another log source using what is already found — follow the breadcrumb.",
       "BH close code": "How Black Hat SOC marks why an alert was closed — the official label for the outcome.",
       "True Positive": "Real bad or real impact that needed incident response. The alert was right and serious.",
       "False Positive": "The alert was wrong — it looked bad but the detection was a mistake.",
@@ -929,7 +1007,7 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed traffic",
         "tag": "[http]",
-        "narration": "A-6621 · Medium · Cleartext license POST · 10.44.32.40 → activate.stagecast.example · HTTP (no TLS) · URI /activate.php · general Wi-Fi. Alert highlights name, email, and serial fields in the POST body. Three surfaces are available for pivot.",
+        "narration": "A-6621 · Medium · Cleartext license POST · 10.44.32.40 → activate.stagecast.example · HTTP (no TLS) · URI /activate.php · general Wi-Fi. Alert highlights name, email, and serial fields in the POST body (SerialNumber=SC-77419).",
         "evidence": [
           {
             "id": "ev-license-http",
@@ -1034,7 +1112,7 @@ window.THREAT_HUNTS = [
       "decision": {
         "name": "Close codes",
         "tag": "[decision]",
-        "narration": "Evidence is on the table: cleartext license PII, a StageCast client talking to its activation host, and a recurring vendor-normal pattern without follow-on compromise. One BH close code fits.",
+        "narration": "Evidence covers cleartext license PII including serial SC-77419, a StageCast client talking to activate.stagecast.example, and a recurring vendor-normal pattern without follow-on compromise. One BH close code fits.",
         "isDecision": true,
         "actions": [
           {
@@ -1075,7 +1153,7 @@ window.THREAT_HUNTS = [
     "id": "noc-log4j-sensor-test",
     "meta": {
       "title": "Outbound Log4j, NOC sensor test",
-      "briefing": "Alert A-6633 is open: Suricata and NGFW both fire on outbound Log4j-style exploit probes from 10.44.1.14 on NOC wired toward alwayshttp.example. Pivot through destination reputation, source network, and detection overlap, then post the correct BH close code. Target: under 3 minutes.",
+      "briefing": "Alert A-6633 is open: Suricata and NGFW both fire in the same minute on outbound Log4j-style exploit probes from 10.44.1.14 on NOC wired toward alwayshttp.example. Destination reputation, source network, and detection overlap separate sensor validation from guest compromise. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -1085,7 +1163,7 @@ window.THREAT_HUNTS = [
       "NOC wired": "The wired network used by the operations floor — staff and test gear, not guest Wi-Fi.",
       "alwayshttp.example": "Fictional cleartext HTTP test site used in this drill (stands in for a known benign HTTP echo host).",
       "sensor validation": "Intentionally firing known-bad payloads at a safe target to prove detectors still work.",
-      "Pivot": "Jump to another log source using what you already found — follow the breadcrumb.",
+      "Pivot": "Jump to another log source using what is already found — follow the breadcrumb.",
       "BH close code": "How Black Hat SOC marks why an alert was closed — the official label for the outcome.",
       "True Positive": "Real bad or real impact that needed incident response. The alert was right and serious.",
       "False Positive": "The alert was wrong — it looked bad but the detection was a mistake.",
@@ -1100,7 +1178,7 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed traffic",
         "tag": "[alert]",
-        "narration": "A-6633 · High · Outbound Log4j probe · 10.44.1.14 → alwayshttp.example · HTTP cleartext · Suricata and NGFW threat logs both alert in the same minute. Source network label: NOC wired. Three surfaces are available for pivot.",
+        "narration": "A-6633 · High · Outbound Log4j probe · 10.44.1.14 → alwayshttp.example · HTTP cleartext · Suricata and NGFW threat logs both alert in the same minute. Source network label: NOC wired.",
         "evidence": [
           {
             "id": "ev-log4j-alert",
@@ -1205,7 +1283,7 @@ window.THREAT_HUNTS = [
       "decision": {
         "name": "Close codes",
         "tag": "[decision]",
-        "narration": "Evidence is on the table: real Log4j-style outbound probes, a known HTTP test destination, a NOC wired test-pool source, and dual-engine detection that proves the stack is watching cleartext HTTP. One BH close code fits.",
+        "narration": "Evidence covers real Log4j-style outbound probes in the same minute on Suricata and NGFW, a known HTTP test destination alwayshttp.example, a NOC wired test-pool source 10.44.1.14, and dual-engine detection that proves the stack is watching cleartext HTTP. One BH close code fits.",
         "isDecision": true,
         "actions": [
           {
@@ -1246,7 +1324,7 @@ window.THREAT_HUNTS = [
     "id": "rivertide-azure-background",
     "meta": {
       "title": "Corp cloud DNS, mismatched class",
-      "briefing": "Alert A-6644 is open: classroom IP 10.44.33.36 heavily queries RIVERTIDE Azure and intranet-looking names while sitting on a Physical Access Lab VLAN. Pivot through DNS, proxy/tunnel background, and class alignment, then post the correct BH close code. Target: under 3 minutes.",
+      "briefing": "Alert A-6644 is open: classroom IP 10.44.33.36 heavily queries RIVERTIDE Azure and intranet-looking names over a 40m window while sitting on a Physical Access Lab VLAN. Names include flexops.azure.intra.rivertide.example, badgeprint.azure.intra.rivertide.example, and rivdirect.postgres.database.azure.com. DNS, proxy/tunnel background, and class alignment separate corp laptop chatter from hostile cloud probing. The correct BH close code is the goal. Target: under 3 minutes.",
       "targetSeconds": 180
     },
     "glossary": {
@@ -1257,7 +1335,7 @@ window.THREAT_HUNTS = [
       "RIVERTIDE": "Fictional corporation used in this drill for corp-looking background traffic.",
       "VLAN": "A sliced-off piece of the network, like a separate hallway in the same building.",
       "classroom VLAN": "The network slice assigned to a training room — peers here often share class tooling.",
-      "Pivot": "Jump to another log source using what you already found — follow the breadcrumb.",
+      "Pivot": "Jump to another log source using what is already found — follow the breadcrumb.",
       "BH close code": "How Black Hat SOC marks why an alert was closed — the official label for the outcome.",
       "True Positive": "Real bad or real impact that needed incident response. The alert was right and serious.",
       "False Positive": "The alert was wrong — it looked bad but the detection was a mistake.",
@@ -1271,12 +1349,12 @@ window.THREAT_HUNTS = [
       "observed-logs": {
         "name": "Observed DNS",
         "tag": "[dns]",
-        "narration": "A-6644 · Medium · Heavy corp cloud DNS · 10.44.33.36 on Physical Access Lab VLAN · names include flexops.azure.intra.rivertide.example, badgeprint.azure.intra.rivertide.example, rivdirect.postgres.database.azure.com · high query volume over 40m. Class topic does not mention RIVERTIDE cloud labs. Three surfaces are available for pivot.",
+        "narration": "A-6644 · Medium · Heavy corp cloud DNS · 10.44.33.36 on Physical Access Lab VLAN · names include flexops.azure.intra.rivertide.example, badgeprint.azure.intra.rivertide.example, rivdirect.postgres.database.azure.com · high query volume over 40m. Class topic does not mention RIVERTIDE cloud labs.",
         "evidence": [
           {
             "id": "ev-corp-dns",
-            "label": "DNS · rivertide.azure.intra.*",
-            "detail": "Host heavily resolves internal-looking RIVERTIDE Azure and database names from a classroom VLAN."
+            "label": "DNS · *.azure.intra.rivertide.example",
+            "detail": "Host heavily resolves internal-looking RIVERTIDE Azure and database names from a classroom VLAN over a 40m window."
           }
         ],
         "exits": [
@@ -1323,7 +1401,7 @@ window.THREAT_HUNTS = [
       "asset-org": {
         "name": "Org signals",
         "tag": "[asset]",
-        "narration": "Device hostname and tenant crumbs label the endpoint RIVERTIDE with high confidence. SharePoint and SaaS hosts under rivertide.example appear alongside the Azure intranet names. Pattern is a corporate laptop on guest training Wi-Fi, not an anonymous VPS implant.",
+        "narration": "Device hostname and tenant crumbs label the endpoint RIVERTIDE with high confidence. SharePoint and SaaS hosts under rivertide.example appear alongside the Azure intranet names. Pattern is a corporate laptop on a training VLAN, not an anonymous VPS implant.",
         "evidence": [
           {
             "id": "ev-rivertide-asset",
@@ -1376,7 +1454,7 @@ window.THREAT_HUNTS = [
       "decision": {
         "name": "Close codes",
         "tag": "[decision]",
-        "narration": "Evidence is on the table: heavy RIVERTIDE Azure/intranet DNS, EdgeTunnel corporate proxy chatter, managed-endpoint org signals, and a class-topic mismatch without hostile follow-on. One BH close code fits.",
+        "narration": "Evidence covers heavy RIVERTIDE Azure/intranet DNS over 40m, EdgeTunnel corporate proxy chatter, managed-endpoint org signals, and a class-topic mismatch without hostile follow-on. One BH close code fits.",
         "isDecision": true,
         "actions": [
           {

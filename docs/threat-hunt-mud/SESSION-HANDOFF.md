@@ -41,16 +41,72 @@
 - [x] Softened narration / evidence / result notes vs earlier spoilers
 - [x] Logs open via one-click **View logs** modal (Esc / backdrop / Close)
 - [x] Test asserts HINT + wire facts; `smoking gun` string still absent
+- [x] Fluid-feed pass (uncommitted): staggered line streaming, alert-line
+      promotion (amber edge + one-time glow), evidence chips fly from the
+      feed to the rail, feed measure/scanlines/cursor, glossary underlines
+      first-occurrence-per-node only, `:active` press feedback,
+      `prefers-reduced-motion` fallbacks
+- [x] Clickable evidence (uncommitted): chips backed by captures open the
+      logs modal scoped to their source node; **Show hint** highlights the
+      `evidence[].hint` substrings and scrolls to the first match. Contract
+      test asserts every hint string appears verbatim in the node's logs.
+- [x] Incident timeline (uncommitted): optional `timeline` on the config
+      (`ThreatHuntTimelineEvent`), rendered as a strip above the feed.
+      Markers reveal as their correlated nodes are visited, pulse while a
+      correlated node is active, and click through to the captures with the
+      event rows pre-highlighted. MCP hunt ships 5 events from the real
+      `ts` rows; narration reconciled to the true 90m window (289 requests).
+      Contract test grounds every event's nodes + hints in the config.
+- [x] Config renders everything (uncommitted): engine chrome copy moved to
+      `DEFAULT_UI` with per-hunt `config.ui` overrides; `warnConfigGaps()`
+      console-warns at mount on broken refs (exits, timeline nodes, hints
+      not in logs, unknown ui keys). Authoring guide `threat-hunt-mud.md`
+      rewritten for the NOCgentic tree (logs/hint/timeline/ui contract).
+      A new hunt is now purely: append a config object, run the tests.
 - [x] This file: `docs/threat-hunt-mud/SESSION-HANDOFF.md`
 
 ## Next session — start here
 
-### 1. Play-test the cold read
+### 0. Playthrough QA (automated + cold-play)
+- Automated: `npm test --workspace=@bhnoc/web-server -- threatHunt`
+  (`threatHuntPlaythrough` + `threatHuntEngine` + contract tests).
+- Manual eye/motion checklist: [`QA-PLAYTHROUGH.md`](QA-PLAYTHROUGH.md)
+  (WSL IP `:3010/#threat-hunt`). Start with `fakecorp-cleartext-mcp`.
+
+### 1. QA the config — everything must align and make sense
+The engine renders 100% from `window.THREAT_HUNTS`; a config inconsistency
+is now a player-visible bug. Read `threat-hunt-config.js` hunt by hunt as an
+editor, not a linter (tests already cover structure):
+
+- [x] **Numbers agree everywhere** (editorial pass 2026-08-05). MCP: 289 /
+      90m / 16:42–18:12. Other six: briefing ↔ start narration anchors
+      aligned (6m/3 attempts, 12m WirePipe, ~3 day beacon, SC-77419,
+      same-minute dual Log4j, 40m RIVERTIDE). Log packs still only on MCP.
+- [ ] **Narrations match their logs.** Every claim a node's narration makes
+      should be checkable in that node's capture (when it has one); nothing
+      in a capture should contradict the narration
+- [ ] **Timeline reads as one coherent story** in order (16:41 → 18:14 for
+      MCP); labels are facts, no tip-off / close-code leaks
+- [ ] **Evidence labels/details** match what the logs actually show; `hint`
+      substrings point at the *right* rows, not just any match
+- [ ] **Glossary coverage**: terms used in narration/briefing that a walk-up
+      player won't know all have entries; no orphan entries that never match
+- [x] **Voice**: third person / no player imperatives / no "Three surfaces"
+      / no "Evidence is on the table" — applied across all 7 hunts
+      (playthrough story tests lock this in)
+- [ ] **OPSEC re-sweep** after all the copy edits: no real orgs/IPs/tokens
+      (rerun the banned-strings test mentally against new strings too)
+- [ ] Fix what you find in config only — engine changes should not be needed;
+      run `npm test --workspace=@bhnoc/web-server -- threatHuntConfig` after
+
+### 2. Play-test the cold read
 - [ ] Hard-refresh → `fakecorp-cleartext-mcp` → Evidence → View logs
 - [ ] Confirm HINT in modal; close is frictionless (Esc/backdrop)
+- [ ] Timeline assembles as sources are visited; markers click through to
+      highlighted rows
 - [ ] Confirm close still earns True Positive
 
-### 2. Continue log pipeline for other hunts
+### 3. Continue log pipeline for other hunts
 Same pattern as MCP, one hunt at a time:
 
 | Priority | Hunt id | Likely source |
@@ -75,6 +131,9 @@ Rules: facts from Slack/XQL only; fiction for identity; soft **HINT** labels OK
 | `packages/web-server/static/threat-hunt.js` | Engine (glossary, picker hook, logs modal) |
 | `packages/web-server/static/app.css` | `.hunt-logs-*`, `.hunt-log-pre` |
 | `packages/web-server/test/threatHuntConfig.test.ts` | Contract + OPSEC + log shape |
+| `packages/web-server/test/threatHuntPlaythrough.test.ts` | Evidence-aware graph walk (all hunts) |
+| `packages/web-server/test/threatHuntEngine.test.ts` | happy-dom UI click-through |
+| `docs/threat-hunt-mud/QA-PLAYTHROUGH.md` | Manual cold-play checklist |
 | `docs/threat-hunt-mud/FROM-SLACK-TO-MUD.md` | Authoring procedure |
 | `docs/threat-hunt-mud/logs/` | Obfuscated log packs + maps |
 | `~/Documents/learning/palo_alto` | `cortex` XQL / investigations (gitignored artifacts) |
@@ -100,7 +159,9 @@ git checkout feat/threat-hunt-mud-batch-2
 git status
 PORT=3010 npm run dev
 # browser: http://$(hostname -I | awk '{print $1}'):3010/#threat-hunt
-npm test --workspace=@bhnoc/web-server -- threatHuntConfig
+npm test --workspace=@bhnoc/web-server -- threatHunt
 ```
 
-Then: cold-play item **1**, then start item **2** (`northlab-cleartext-siem-login` logs).
+Then: playthrough checklist ([`QA-PLAYTHROUGH.md`](QA-PLAYTHROUGH.md)),
+config QA (item **1**), cold-play (item **2**), then item **3**
+(`northlab-cleartext-siem-login` logs).

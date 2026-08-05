@@ -20,6 +20,13 @@ export interface ThreatHuntEvidence {
   label: string;
   /** One sentence of investigative meaning, shown in the narration feed. */
   detail: string;
+  /**
+   * Optional hint substrings. When the node has `logs`, the evidence chip is
+   * clickable and reopens those captures; "Show hint" highlights log lines
+   * containing any of these substrings and scrolls to the first match.
+   * Each entry must appear verbatim in the source node's log lines.
+   */
+  hint?: string[];
 }
 
 export interface ThreatHuntExit {
@@ -46,6 +53,32 @@ export interface ThreatHuntAction {
    * right first move. Shown on the end screen for the chosen action.
    */
   resultNote: string;
+}
+
+export interface ThreatHuntTimelineEvent {
+  /** Stable id for the event marker. */
+  id: string;
+  /** Incident time within the capture window: "16:42:46" or "16:42". */
+  t: string;
+  /**
+   * What happened at that moment, in the system voice. Same no-tip-off rule
+   * as log captures: state when and what, never label the answer.
+   */
+  label: string;
+  /**
+   * Node ids this event correlates to. The marker stays dim ("unobserved")
+   * until one of these nodes has been visited, and highlights while one of
+   * them is the active node.
+   */
+  nodes?: string[];
+  /**
+   * Substrings into the correlated node's log lines. Clicking a revealed
+   * marker opens that node's captures with these highlighted (same machinery
+   * as evidence hints). Each entry must appear verbatim in the node's logs.
+   */
+  hint?: string[];
+  /** Marker tone: info (default) | warn | critical. */
+  tone?: 'info' | 'warn' | 'critical';
 }
 
 export interface ThreatHuntLogBlock {
@@ -107,6 +140,29 @@ export interface ThreatHuntConfig {
    * plain-language tip.
    */
   glossary?: Record<string, string>;
+  /**
+   * Optional incident timeline rendered as a strip above the narration feed.
+   * Markers reveal as their correlated nodes are visited, so the incident
+   * story assembles as the player pivots. Omit for hunts without
+   * time-grounded captures.
+   */
+  timeline?: ThreatHuntTimelineEvent[];
+  /**
+   * Optional overrides for engine chrome copy, so a config alone controls
+   * every rendered string. Any subset may be set; unset keys use engine
+   * defaults. Keys: openingTag, openingLine, briefingHint, noEvidence,
+   * logsButton, logsTitle, logsQuerying, logsLoadingTitle, logsLoadingMeta,
+   * timelineTitle, timelineHint, timelineUnobserved, timelineClickPrompt,
+   * timelineEmpty.
+   */
+  ui?: Partial<Record<
+    | 'openingTag' | 'openingLine' | 'briefingHint' | 'noEvidence'
+    | 'logsButton' | 'logsTitle' | 'logsQuerying'
+    | 'logsLoadingTitle' | 'logsLoadingMeta'
+    | 'timelineTitle' | 'timelineHint' | 'timelineUnobserved'
+    | 'timelineClickPrompt' | 'timelineEmpty',
+    string
+  >>;
   /** Id of the first node the player enters on start. */
   startNode: string;
   /** The investigation graph. Every exit `to` must name a key in this map,

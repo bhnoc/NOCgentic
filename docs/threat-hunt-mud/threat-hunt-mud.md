@@ -8,12 +8,13 @@ Exits are pivots. The inventory is evidence. The encounter is a containment
 decision.
 
 The defining property is that **the game is data**. The engine
-(`ui_kits/noc-console/ThreatHunt.jsx`) contains no scenario content; it reads
-one config object and renders it. Any threat hunt — real or authored — becomes
-playable by writing a config that matches the contract in
-`ui_kits/noc-console/ThreatHunt.d.ts`. The reference instance is
-`ui_kits/noc-console/threat-hunt-config.js`, which replays alert `A-2291`
-(credential stuffing, `41.2.19.7 → guest-portal`) from the console's mock data.
+(`packages/web-server/static/threat-hunt.js`) contains no scenario content; it
+reads one config object and renders everything — briefing, rooms, evidence,
+log captures, hints, the incident timeline, and even the chrome copy. Any
+threat hunt — real or authored — becomes playable by appending a config that
+matches the contract in `docs/threat-hunt-mud/ThreatHunt.d.ts` to the registry
+in `packages/web-server/static/threat-hunt-config.js` (`window.THREAT_HUNTS`).
+The reference instance is `fakecorp-cleartext-mcp`, built from a real hunt.
 
 ## How a hunt plays
 
@@ -35,7 +36,7 @@ playable by writing a config that matches the contract in
 
 ## The config contract
 
-Full types live in `ui_kits/noc-console/ThreatHunt.d.ts`. Summary:
+Full types live in `docs/threat-hunt-mud/ThreatHunt.d.ts`. Summary:
 
 | Field | Meaning |
 | --- | --- |
@@ -43,16 +44,28 @@ Full types live in `ui_kits/noc-console/ThreatHunt.d.ts`. Summary:
 | `meta.title` | Scenario title, sentence case. |
 | `meta.briefing` | The walk-up paragraph: the alert, the goal, the target time. |
 | `meta.targetSeconds` | Soft time target. Over it, the timer badge turns amber. Never a hard fail. |
+| `glossary` | Optional ELI5 map. First occurrence per node underlines with a hover tip. |
+| `timeline` | Optional incident-timeline events `{ id, t, label, nodes?, hint?, tone? }`. Markers reveal as their correlated nodes are visited; clicking one opens the node's captures with the `hint` substrings highlighted. Strip hides when absent. |
+| `ui` | Optional chrome-copy overrides (opening line, logs modal copy, timeline labels, …). Engine defaults cover every key. |
 | `startNode` | Id of the first node entered on start. |
 | `nodes` | Map of node id → node. Every `exits[].to` must name a key here. |
 | `nodes[].name` | Panel-header name of the surface ("Proxy logs"). |
 | `nodes[].tag` | Bracketed mono source tag for the feed ("[proxy]"). |
 | `nodes[].narration` | Appended to the log feed on entry. |
-| `nodes[].evidence` | `{ id, label, detail }[]`, collected once each, shown as chips. |
+| `nodes[].evidence` | `{ id, label, detail, hint? }[]`, collected once each, shown as chips. When the node has `logs`, the chip is clickable and reopens those captures; `hint` substrings drive the modal's "Show hint" highlight. |
+| `nodes[].logs` | Optional obfuscated capture blocks `{ id?, title, lines }[]`. Renders the "View logs" bar + modal; hides when absent. |
 | `nodes[].exits` | `{ to, label, requiresEvidence? }[]` pivot buttons. |
 | `nodes[].isDecision` | Marks the containment node. Exactly one should be reachable. |
 | `nodes[].actions` | `{ id, label, correct?, resultNote }[]`. Exactly one `correct: true`. |
 | `endings` | `win` / `lose` (`timeout` reserved), each `{ title, narration }`. |
+
+Grounding rules enforced by the contract tests
+(`packages/web-server/test/threatHuntConfig.test.ts`) and re-checked with
+console warnings at mount: every exit resolves to a node, every timeline
+event names real nodes, and every `hint` substring (evidence or timeline)
+appears verbatim in the correlated node's log lines. A hunt that omits
+`logs` / `timeline` / `hint` simply renders without those surfaces — nothing
+else changes.
 
 ## Authoring rules
 
@@ -82,15 +95,17 @@ Design guidance drawn from long-running MUDs, applied here:
 
 ## Adding a new hunt
 
-1. Copy `ui_kits/noc-console/threat-hunt-config.js`, keep the shape, replace
-   the content. Expose it on its own global
-   (`window.THREATHUNT_MY_SCENARIO`).
-2. Load it from `ui_kits/noc-console/index.html` next to the existing config
-   script tag.
-3. Point the view at it: `<ThreatHunt config={window.THREATHUNT_MY_SCENARIO}
-   onAction={push} />`. A scenario picker is a deliberate non-goal of the
-   reference implementation; wiring several configs to a `Select` is a
-   straightforward extension.
+1. Append a config object to `window.THREAT_HUNTS` in
+   `packages/web-server/static/threat-hunt-config.js`, matching the contract
+   above. The picker, briefing, rooms, evidence chips, logs modal, hints,
+   and timeline all render from it — no engine change, ever.
+2. Follow `FROM-SLACK-TO-MUD.md` for sourcing: facts from the Slack thread /
+   XQL rows only, fiction for identity, hard obfuscation before anything
+   lands in git (see `logs/OBFUSCATION-MAP-*.md`).
+3. Run `npm test --workspace=@bhnoc/web-server -- threatHuntConfig`. The
+   contract tests validate the graph, close codes, OPSEC strings, and hint /
+   timeline grounding. The engine also console-warns about broken references
+   at mount as a second net.
 
-No engine change is required, and no change to `_ds_bundle.js` — UI-kit files
-are loaded as source and are not part of the component bundle hash.
+`logs`, `timeline`, `hint`, and `ui` are all optional — start with the graph
+and add capture surfaces as real data is obfuscated.
