@@ -235,7 +235,6 @@ const rawSection = await evaluate(`(() => {
     hasSqlToggle: !!sql,
     sqlInitiallyOpen,
     sqlSummaryText,
-    preWraps: pre ? pre.classList.contains('code-wrap') : false,
     preOverflowX: pre ? getComputedStyle(pre).overflowX : null,
     preWhiteSpace: pre ? getComputedStyle(pre).whiteSpace : null,
     preHasSql: pre ? pre.textContent.includes('SELECT') : false,
@@ -249,18 +248,13 @@ check('a nested View SQL toggle exists inside Raw', rawSection.hasSqlToggle === 
 check('the SQL toggle is collapsed by default', rawSection.sqlInitiallyOpen === false);
 check('the SQL toggle is labeled "View SQL"', rawSection.sqlSummaryText === 'View SQL', rawSection.sqlSummaryText);
 check('expanding View SQL shows the actual statement', rawSection.preHasSql === true);
-check('the SQL block wraps instead of scrolling sideways', rawSection.preWraps === true && rawSection.preOverflowX === 'hidden' && rawSection.preWhiteSpace === 'pre-wrap', JSON.stringify(rawSection));
+check('the SQL block wraps instead of scrolling sideways', rawSection.preOverflowX === 'hidden' && rawSection.preWhiteSpace === 'pre-wrap', JSON.stringify(rawSection));
 
-// Confidence pill sits at the FAR RIGHT of the lane bar, immediately left of
-// the model/lane label — not stranded at the left edge. Regression: the swap
-// button's leftover `margin-left: auto` ate the parent's flex-end alignment,
-// so the pill+label cluster rendered at the left with only the swap button
-// pushed right.
+// Confidence pill: floats to the FAR RIGHT via its own margin — everything
+// else in the bar (model label, FASTEST badge, timing) stays exactly where it
+// sat before the pill existed, on the left. On a raced bar the pill lands
+// immediately left of the swap button, which is the right-most element.
 const pillAlignment = await evaluate(`(() => {
-  // Bare-confidence bubble (no swap button, so the pill+label cluster IS the
-  // right-most content) proves the bar itself right-aligns. The raced bubble
-  // (has a swap button, checked separately below) proves ordering within the
-  // cluster: pill immediately left of the label, wherever the cluster sits.
   const bars = [...document.querySelectorAll('.lane-bar')];
   const bareBar = bars.find(b => b.querySelector('.confidence-pill') && !b.querySelector('.lane-current') && !b.querySelector('.lane-swap'));
   const racedBar = bars.find(b => b.querySelector('.confidence-pill') && b.querySelector('.lane-current'));
@@ -268,20 +262,26 @@ const pillAlignment = await evaluate(`(() => {
   const barePill = bareBar.querySelector('.confidence-pill');
   const bareBarRect = bareBar.getBoundingClientRect();
   const barePillRect = barePill.getBoundingClientRect();
-  const racedPill = racedBar.querySelector('.confidence-pill');
   const racedLabel = racedBar.querySelector('.lane-current');
-  const racedPillRect = racedPill.getBoundingClientRect();
+  const racedPill = racedBar.querySelector('.confidence-pill');
+  const racedSwap = racedBar.querySelector('.lane-swap');
   const racedLabelRect = racedLabel.getBoundingClientRect();
+  const racedPillRect = racedPill.getBoundingClientRect();
+  const racedSwapRect = racedSwap.getBoundingClientRect();
   return {
     ok: true,
-    // A left-stranded pill (the regression) would put this near 0, not near
-    // the bar's width.
+    // A left-stranded pill (the earlier regression) would put this near 0.
     pillNearRightEdge: (bareBarRect.right - barePillRect.right) < 40,
-    pillLeftOfLabel: racedPillRect.right <= racedLabelRect.left + 2,
+    // Model label untouched: still the left-most element in the bar.
+    labelStillOnTheLeft: racedLabelRect.left <= racedPillRect.left,
+    // Pill sits between the label and the swap button, immediately left of
+    // the swap button — not swapped with the label, not stranded elsewhere.
+    pillBetweenLabelAndSwap: racedLabelRect.right <= racedPillRect.left && racedPillRect.right <= racedSwapRect.left + 2,
   };
 })()`);
 check('confidence pill anchors to the right edge of the lane bar', pillAlignment.ok && pillAlignment.pillNearRightEdge, JSON.stringify(pillAlignment));
-check('confidence pill sits immediately left of the model label', pillAlignment.ok && pillAlignment.pillLeftOfLabel, JSON.stringify(pillAlignment));
+check('model label stays on the left, unmoved by the pill', pillAlignment.ok && pillAlignment.labelStillOnTheLeft, JSON.stringify(pillAlignment));
+check('confidence pill sits between the model label and the swap button', pillAlignment.ok && pillAlignment.pillBetweenLabelAndSwap, JSON.stringify(pillAlignment));
 
 // Logo click: ends the investigation, not just a view switch. Several jobs
 // have been sent by this point in the run, so there IS a transcript and

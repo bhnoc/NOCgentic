@@ -586,9 +586,11 @@ async def llm_analyze(
         )
     except Exception as exc:
         logger.warning("thousandeyes LLM call failed (%s): %s", type(exc).__name__, exc)
+        # User-facing text stays plain and short — a raw JSON dump of
+        # monitoring context reads as a broken product, not a real answer,
+        # and it is internal detail the operator can't act on anyway.
         return (
-            f"Network analysis is temporarily unavailable. Monitoring context: "
-            f"{json.dumps(compact, default=str)[:500]}",
+            "There was an issue calling the model. Please try again.",
             0.3,
         )
 

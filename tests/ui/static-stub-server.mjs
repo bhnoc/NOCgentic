@@ -143,6 +143,7 @@ const server = createServer(async (req, res) => {
     '/app.js': 'text/javascript',
     '/app.css': 'text/css',
     '/alertHints.js': 'text/javascript',
+    '/assets/bhnoc-logo.png': 'image/png',
   }[url.pathname];
   if (asset) {
     res.writeHead(200, { 'content-type': asset });

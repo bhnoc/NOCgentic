@@ -143,6 +143,28 @@
   }
 
   /**
+   * A time-window phrase wide enough to actually CONTAIN this alert.
+   *
+   * A hardcoded "in the last hour" is wrong the moment the alert itself is
+   * older than an hour — the chip then asks a question whose own window
+   * excludes the thing it's about, and the agent correctly reports nothing
+   * found. Anchor the phrase to how old the alert actually is, with generous
+   * headroom (the feed can lag, and an analyst reads it minutes to hours
+   * after it fired), and let it grow to "today"/"in the last 24 hours" rather
+   * than silently understating an old alert's age.
+   */
+  function huntableWindowPhrase(timestamp) {
+    var d = new Date(timestamp);
+    if (isNaN(d.getTime())) return 'in the last hour';
+    var ageMs = Date.now() - d.getTime();
+    var ageHours = ageMs / 3600000;
+    if (ageHours <= 1) return 'in the last hour';
+    if (ageHours <= 6) return 'in the last 6 hours';
+    if (ageHours <= 24) return 'in the last 24 hours';
+    return 'today';
+  }
+
+  /**
    * Build up to `max` follow-up questions for one alert, most specific first.
    * Every candidate is filtered through alertHintIsSafe, so a field that would
    * produce a cover-answering chip simply yields fewer chips.
@@ -158,16 +180,21 @@
     var sev = severityWord(a.severity);
     var topic = alertTopic(a.description);
     var when = huntableTime(a.timestamp);
+    // Anchored to the alert's OWN age (observedAt is the real event time;
+    // timestamp is re-stamped to "now" on feed arrival — see app.js
+    // renderAlertDetail). An alert from 3 hours ago asked about "in the last
+    // hour" excludes its own activity and the agent correctly finds nothing.
+    var window = huntableWindowPhrase(a.observedAt || a.timestamp);
 
     var candidates = [];
-    if (src) candidates.push('Show all network activity from ' + src + ' in the last hour');
+    if (src) candidates.push('Show all network activity from ' + src + ' ' + window);
     if (src && dst) candidates.push('Show every session between ' + src + ' and ' + dst);
     if (dst) candidates.push('What other hosts connected to ' + dst + ' in the last 24 hours?');
     if (src) candidates.push('Has ' + src + ' triggered any other alerts today?');
     if (port) candidates.push('Which hosts are sending traffic on port ' + port + ' right now?');
     if (topic) candidates.push('Are there other ' + topic + ' alerts in the last 24 hours?');
     if (src) candidates.push('Is ' + src + ' talking to any known bad infrastructure?');
-    if (sev) candidates.push('Show me every ' + sev + ' severity alert from the last hour');
+    if (sev) candidates.push('Show me every ' + sev + ' severity alert ' + window);
     if (when) candidates.push('What else was happening on the network around ' + when + '?');
     candidates.push('How serious is this alert and what should we check next?');
     candidates.push('Is this a one-off or part of a larger pattern?');

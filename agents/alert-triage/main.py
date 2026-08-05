@@ -830,19 +830,15 @@ async def llm_triage(
             role="prose",
         )
     except RuntimeError as exc:
-        return (
-            f"LLM not configured. Triage data (truncated): {json.dumps(triage_data, default=str)[:500]}",
-            0.3,
-        )
+        # User-facing text stays plain and short — a raw JSON dump of triage
+        # data reads as a broken product, not a real answer, and it is
+        # internal detail the operator can't act on anyway.
+        return ("There was an issue calling the model. Please try again.", 0.3)
     except Exception as exc:
         # Provider 429/5xx/timeout (httpx errors, etc.) land here. Degrade
         # gracefully instead of returning a 500, but log it server-side.
         logger.warning("llm_triage failed (%s): %s", type(exc).__name__, exc)
-        return (
-            f"LLM unavailable ({type(exc).__name__}). Triage data (truncated): "
-            f"{json.dumps(triage_data, default=str)[:500]}",
-            0.3,
-        )
+        return ("There was an issue calling the model. Please try again.", 0.3)
 
     # ql-1: default to a LOW/neutral sentinel. A truncated or malformed answer
     # that never emits the ```json{"confidence":..}``` trailer means we cannot
@@ -861,19 +857,16 @@ async def llm_triage(
         answer = answer[:m.start()].rstrip() + answer[m.end():]
     else:
         logger.warning("llm_triage: no confidence trailer in answer (truncated/malformed?), using low default 0.3")
-        # The low confidence alone is not enough. A truncated answer still LOOKS
-        # complete: the 2026-08-04 bench caught a run that burned 4092 of its 4096
-        # output tokens and stopped mid-bullet, so the analyst saw a Key Entities
-        # list that simply ended, with no way to know entities were missing. Same
-        # generation at the same settings came back in 762 chars, so this is a
-        # stochastic runaway rather than an answer that needs a bigger cap, which
-        # is exactly why it cannot be fixed by raising max_tokens. Say so inline,
-        # because a confidence number in a side panel is not where anyone looks.
-        answer = (
-            answer.rstrip()
-            + "\n\n_Note: this response was cut off before it finished, so the "
-            "lists above may be incomplete. Re-run the question._"
-        )
+        # A missing fence means the model ran out of tokens or went off-script
+        # mid-answer — the 2026-08-04 bench caught a run that burned 4092 of its
+        # 4096 output tokens and stopped mid-bullet, and another run left stray
+        # prose like "Let's check confidence: 0.95 (data is" where the fence
+        # should have been. Either way what's left in `answer` is not trustworthy
+        # enough to show verbatim (a garbled fragment reads worse than no answer),
+        # so replace it outright with the same plain retry message the hard-failure
+        # paths above use, rather than appending a caveat to text the operator
+        # shouldn't be reading either way.
+        answer = "There was an issue calling the model. Please try again."
 
     return answer, confidence
 

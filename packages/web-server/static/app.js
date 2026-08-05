@@ -6,6 +6,21 @@
   let criticalAlerts = 0;
   const pollIntervals = new Map();
 
+  // Internal source-table names → what an analyst actually recognizes. `source`
+  // is athena-hunter's alert_type (lambda/derived_views.py ALERT_SOURCES),
+  // which is a table name ("suricata", "ml"), not a vendor/tool label.
+  const SOURCE_LABELS = {
+    suricata: 'Corelight Suricata',
+    notice:   'Zeek Notice',
+    ml:       'Corelight ML',
+    yara:     'Corelight YARA',
+    anomaly:  'Corelight Anomaly',
+    corelight: 'Corelight',
+  };
+  function sourceLabel(source) {
+    return SOURCE_LABELS[String(source || '').toLowerCase()] || source || '';
+  }
+
   // ========== WebSocket ==========
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -73,7 +88,7 @@
           <span class="alert-time">${timeStr}</span>
         </div>
         <div class="alert-desc">${escHtml(a.description)}</div>
-        <div class="alert-src">${escHtml(a.source||'')}${a.srcIp?' // '+escHtml(a.srcIp):''}</div>
+        <div class="alert-src">${escHtml(sourceLabel(a.source))}${a.srcIp?' // '+escHtml(a.srcIp):''}</div>
       `;
 
       // The card is the only place the full alert object exists client-side —
@@ -180,20 +195,19 @@
   function renderAlertDetail(a) {
     const sev = String(a.severity || 'low').toLowerCase();
     const sevClass = { critical:'sev-critical', high:'sev-high', medium:'sev-medium', low:'sev-low', informational:'sev-info' }[sev] || 'sev-low';
-    const ts = new Date(a.timestamp);
+    // Detected: the actual event time. `timestamp` is re-stamped to "now" when
+    // the alert enters the feed (drives the sidebar's live-arrival ordering);
+    // `observedAt` is when Athena says it happened. Showing both as "Detected"
+    // + "Observed" reads as two different events for the same alert — use
+    // whichever is the real one and show only that.
+    const detectedRaw = a.observedAt || a.timestamp;
+    const ts = new Date(detectedRaw);
     const when = isNaN(ts.getTime())
-      ? String(a.timestamp || 'unknown')
+      ? String(detectedRaw || 'unknown')
       : ts.toLocaleString('en-US', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
-    let observedStr = '';
-    if (a.observedAt) {
-      const obs = new Date(a.observedAt);
-      observedStr = Number.isNaN(obs.getTime())
-        ? String(a.observedAt)
-        : obs.toLocaleString('en-US', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
-    }
 
     const rows = [
-      ['Source',      a.source],
+      ['Source',      sourceLabel(a.source)],
       ['Src IP',      a.srcIp],
       ['Src Port',    a.srcPort === 0 || a.srcPort ? String(a.srcPort) : ''],
       ['Dst IP',      a.dstIp],
@@ -201,7 +215,6 @@
       ['Network',     a.network],
       ['Action',      a.action],
       ['Detected',    when],
-      ['Observed',    observedStr],
       ['Occurrences', a.occurrences != null && a.occurrences > 0 ? String(a.occurrences) : ''],
       ['UID',         a.uid],
       ['Alert ID',    a.id],
@@ -602,7 +615,11 @@
           clearInterval(hintTimer);
           const container = document.getElementById(`hints-${jobId}`);
           if (container) {
-            container.innerHTML = `<span class="hints-label">Next Steps</span>${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
+            // No "Next Steps" label: the answer above already has its own
+            // '## Next Steps' section for agents that emit one, so a second
+            // "Next Steps" heading right below it read as duplicated. The
+            // buttons alone are self-explanatory as follow-up questions.
+            container.innerHTML = `${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
             container.querySelectorAll('.hint-chip').forEach(chip => {
               chip.addEventListener('click', () => {
                 const q = chip.getAttribute('data-hint');
@@ -694,7 +711,7 @@
             </div>
             <details class="sql-collapse" id="${sqlId}">
               <summary>View SQL</summary>
-              <pre class="code-block code-wrap">${escHtml(q.sql || '')}</pre>
+              <pre class="code-block">${escHtml(q.sql || '')}</pre>
             </details>
           </div>`;
       }).join('');
@@ -718,19 +735,18 @@
   function renderLaneBar(laneKey) {
     const st = laneState.get(laneKey);
     if (!st) return '';
+    // The pill carries its own right-push (see .confidence-pill in app.css) so
+    // it — and only it — moves to the right; everything before it (model
+    // label, FASTEST badge, timing) stays exactly where it always sat.
     const confHtml = renderConfidencePill(st.confidence);
-    // Nothing to swap between (single-lane box) — render just the confidence
-    // pill (or nothing at all if there's no confidence either), not a
-    // disabled swap control, so the single-lane UI is unchanged apart from
-    // gaining the pill.
     if (st.lanes.length < 2) {
       if (!st.racing) return confHtml;
       // One lane in, the other still running: show the pending state so the user
       // knows a second opinion is coming rather than wondering if it broke.
       const only = st.lanes.length === 1 ? st.lanes[0] : null;
-      return confHtml +
-             `<span class="lane-current">${escHtml(only ? only.label : 'Fastest model')}</span>` +
-             `<span class="lane-pending">second model still working…</span>`;
+      return `<span class="lane-current">${escHtml(only ? only.label : 'Fastest model')}</span>` +
+             `<span class="lane-pending">second model still working…</span>` +
+             confHtml;
     }
     const active = st.lanes.find(l => l.lane === st.active) || st.lanes[0];
     const other = st.lanes.find(l => l.lane !== active.lane);
@@ -738,13 +754,13 @@
     const isWinner = active.winner === true;
     const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
     return (
-      confHtml +
       `<span class="lane-current">${escHtml(active.label)}` +
       (isWinner ? '<span class="lane-badge-fastest">FASTEST</span>' : '') +
       `</span>` +
       `<span class="lane-timing">${secs(active.elapsedMs)}` +
       (winner && !isWinner ? ` <span class="lane-delta">+${secs(active.elapsedMs - winner.elapsedMs)}</span>` : '') +
       `</span>` +
+      confHtml +
       `<button class="lane-swap" type="button" data-lane-key="${escHtml(laneKey)}" ` +
       `title="Show the answer from ${escHtml(other.label)}" ` +
       `aria-label="Show the answer from ${escHtml(other.label)}">` +
@@ -845,8 +861,11 @@
       }, agentKey);
       const hintsId = `hints-${laneKey}`;
       let hintsInner = '';
+      // No "Next Steps" label — same reasoning as pollForHints below: the
+      // answer already carries its own '## Next Steps' section where the
+      // agent has one, so a second heading here just repeated it.
       if (job.hints && job.hints.length > 0) {
-        hintsInner = `<span class="hints-label">Next Steps</span>${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
+        hintsInner = `${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
       }
       // The hints row sits OUTSIDE the swappable body on purpose: hints arrive
       // asynchronously and are written into #hints-<id> by pollForHints. If they
@@ -1169,7 +1188,7 @@
     if (msgs) {
       msgs.innerHTML = `
         <div class="welcome" id="welcome-banner">
-          <img src="https://blackhat.com/images/logo.png" alt="Black Hat" style="height:48px; margin-bottom:8px; filter: brightness(1.2);" />
+          <img src="/assets/bhnoc-logo.png" alt="Black Hat" style="height:48px; margin-bottom:8px; filter: brightness(1.2);" />
           <h2>BlackHat NOCGentic Operations</h2>
           <div class="tagline">AI-Powered Network Operations Center // <span id="event-label">Black Hat</span></div>
           <p>

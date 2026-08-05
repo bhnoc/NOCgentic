@@ -1369,10 +1369,10 @@ async def llm_analyze(
             span.set_attribute("llm.answer_length", len(answer))
         except RuntimeError as exc:
             span.set_attribute("error", str(exc))
-            return (
-                f"LLM not configured. Athena results: {json.dumps(context, default=str)[:500]}",
-                0.3,
-            )
+            # User-facing text stays plain and short — a raw JSON dump of query
+            # results reads as a broken product, not a real answer, and it is
+            # internal detail the operator can't act on anyway.
+            return ("There was an issue calling the model. Please try again.", 0.3)
 
         # Extract confidence. Default to a LOW sentinel on a miss: a truncated or
         # malformed answer that never emitted the ```json{"confidence":..} block

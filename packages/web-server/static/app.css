@@ -461,9 +461,12 @@
       40%            { transform: translateY(-6px); opacity: 1; }
     }
 
-    /* Confidence pill — sits in the lane bar, top-right of the bubble, just
-       left of the model/lane label. Color reuses the old bar's semantics. */
+    /* Confidence pill — floats to the far right of the lane bar via its own
+       margin, just left of the model/lane label (and the swap button, when
+       there is one). Everything else in the bar stays exactly where it sat
+       before this existed. Color reuses the old bar's semantics. */
     .confidence-pill {
+      margin-left: auto;
       font-family: var(--font-mono);
       font-size: 10px;
       font-weight: 700;
@@ -941,11 +944,11 @@
     .metric-item strong { color: var(--frost); margin-left: 3px; }
 
     /* Lane race bar — confidence, which model answered, and the swap to the
-       other one. Right-aligned as one cluster: the analyst reads the answer
-       first, so this metadata belongs out of the way at the top-right, not
-       competing for the left edge. */
+       other one. Left-to-right in reading order (pill, model, badge, timing);
+       only the swap button is pushed to the far right (margin-left: auto
+       below), same as before the confidence pill was added. */
     .lane-bar:not(:empty) {
-      display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px;
+      display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
       margin-bottom: 10px; padding-bottom: 8px;
       border-bottom: 1px solid var(--border);
       font-family: var(--font-mono); font-size: 10px;
@@ -993,25 +996,21 @@
     .highlight-port   { color: var(--accent-orange); font-family: var(--font-mono); font-size: 0.9em; }
     .highlight-hash   { color: var(--neon-purple); font-family: var(--font-mono); font-size: 0.85em; word-break: break-all; }
 
+    /* Always word-wrapped — read DOWN, never scroll sideways through one long
+       SQL string, JSON line, or stray-fence LLM fragment. */
     pre.code-block {
       background: var(--bg-void);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 10px 14px;
       font-size: 11px;
-      overflow-x: auto;
+      overflow-x: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
       margin-top: 8px;
       font-family: var(--font-mono);
       color: var(--ice-300);
       scrollbar-width: thin;
-    }
-
-    /* Word-wrap variant: the Query/Raw Data panels need the analyst to read
-       DOWN, not scroll sideways through one long SQL string or JSON line. */
-    pre.code-block.code-wrap {
-      overflow-x: hidden;
-      white-space: pre-wrap;
-      word-break: break-word;
     }
 
     /* Raw — default-collapsed. Expanding shows the actual rows the SQL

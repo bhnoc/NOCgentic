@@ -109,3 +109,48 @@ def test_confidence_fence_is_stripped_from_the_answer(label, module, caller, mon
     assert "confidence" not in answer, f"{label}: fence text leaked into the answer: {answer!r}"
     assert "```" not in answer, f"{label}: fence markers leaked into the answer: {answer!r}"
     assert "Clear finding." in answer, f"{label}: stripping the fence must not eat real content"
+
+
+def _make_raising_llm(exc: Exception):
+    async def _fake(*args, **kwargs):
+        raise exc
+    return _fake
+
+
+@pytest.mark.parametrize("label,module,attr", [
+    ("alert-triage.llm_triage", _at, "llm_triage"),
+    ("athena-hunter.llm_analyze", _ah, "llm_analyze"),
+    ("thousandeyes.llm_analyze", _te, "llm_analyze"),
+])
+def test_llm_call_failure_does_not_leak_raw_data_json(label, module, attr, monkeypatch):
+    """When the LLM call itself fails (provider down, RuntimeError from a
+    missing key, etc.), the old fallback text embedded a raw json.dumps() of
+    the query/triage/monitoring payload straight into the operator-facing
+    answer — internal detail nobody asked for, and it read as a broken
+    product rather than a real (if degraded) response. Must be a plain retry
+    message with no JSON structure in it."""
+    monkeypatch.setattr(module, "llm_complete", _make_raising_llm(RuntimeError("no API key")))
+    if attr == "llm_triage":
+        answer, confidence = asyncio.run(module.llm_triage("test query", {"alerts": []}))
+    else:
+        ctx = {"query_results": [], "errors": [], "total_rows": 0, "total_query_time_ms": 0} \
+            if module is _ah else {"total_tests": 0, "degraded_tests": []}
+        answer, confidence = asyncio.run(module.llm_analyze("test query", ctx))
+    assert confidence == pytest.approx(LOW), label
+    assert answer == "There was an issue calling the model. Please try again.", \
+        f"{label}: expected the plain retry message, got {answer!r}"
+    assert "{" not in answer and "}" not in answer, f"{label}: raw JSON leaked: {answer!r}"
+
+
+def test_llm_triage_no_fence_replaces_the_garbled_answer_outright(monkeypatch):
+    """alert-triage specifically: a missing fence means the model went off-script
+    (ran out of tokens mid-bullet, or wandered into free text like "Let's check
+    confidence: 0.95 (data is..." instead of the required fence). What's left in
+    `answer` is not trustworthy enough to show, garbled fragment and all — the fix
+    replaces it outright with a plain retry message rather than appending a caveat
+    onto text the operator shouldn't be reading either way."""
+    answer, confidence = _call_triage(
+        _at, "Let's check confidence: 0.95 (data is incomplete", monkeypatch
+    )
+    assert confidence == pytest.approx(LOW)
+    assert answer == "There was an issue calling the model. Please try again."

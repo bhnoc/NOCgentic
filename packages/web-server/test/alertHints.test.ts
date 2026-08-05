@@ -13,6 +13,7 @@ const source = readFileSync(path.join(here, '../static/alertHints.js'), 'utf8');
 type Alert = {
   id?: string;
   timestamp?: string;
+  observedAt?: string;
   severity?: string;
   source?: string;
   description?: string;
@@ -127,6 +128,61 @@ describe('buildAlertHuntHints', () => {
     for (const [description, label] of cases) {
       expect(buildAlertHuntHints(alert({ description }), 8).join(' ')).toContain(label);
     }
+  });
+
+  // A hardcoded "in the last hour" is wrong the moment the alert is older
+  // than an hour: the chip then asks a question whose own window excludes
+  // the very activity it's about, and the agent correctly reports nothing
+  // found — reading to the analyst as a broken feature, not an old alert.
+  describe('time-window phrase widens with the alert\'s own age', () => {
+    it('stays "in the last hour" for a fresh alert', () => {
+      const fresh = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5 min ago
+      const hints = buildAlertHuntHints(alert({ timestamp: fresh }), 8).join(' ');
+      expect(hints).toContain('Show all network activity from 45.83.193.150 in the last hour');
+    });
+
+    it('widens to "in the last 6 hours" for a 3-hour-old alert', () => {
+      const threeHoursAgo = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+      const hints = buildAlertHuntHints(alert({ timestamp: threeHoursAgo }), 8).join(' ');
+      expect(hints).toContain('Show all network activity from 45.83.193.150 in the last 6 hours');
+      expect(hints).not.toContain('in the last hour ');
+    });
+
+    it('widens to "in the last 24 hours" for a 10-hour-old alert', () => {
+      const tenHoursAgo = new Date(Date.now() - 10 * 3600 * 1000).toISOString();
+      const hints = buildAlertHuntHints(alert({ timestamp: tenHoursAgo }), 8).join(' ');
+      expect(hints).toContain('Show all network activity from 45.83.193.150 in the last 24 hours');
+    });
+
+    it('widens to "today" for an alert older than 24 hours', () => {
+      const twoDaysAgo = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+      const hints = buildAlertHuntHints(alert({ timestamp: twoDaysAgo }), 8).join(' ');
+      expect(hints).toContain('Show all network activity from 45.83.193.150 today');
+    });
+
+    it('prefers observedAt over timestamp for the age calculation', () => {
+      // timestamp is re-stamped to "now" on feed arrival (app.js renderAlerts);
+      // observedAt is the real event time. An old event with a fresh
+      // timestamp must still widen the window, or every alert in the live
+      // feed would look "fresh" regardless of how long ago it actually fired.
+      const now = new Date().toISOString();
+      const oldEvent = new Date(Date.now() - 10 * 3600 * 1000).toISOString();
+      const hints = buildAlertHuntHints(
+        alert({ timestamp: now, observedAt: oldEvent }), 8,
+      ).join(' ');
+      expect(hints).toContain('Show all network activity from 45.83.193.150 in the last 24 hours');
+    });
+
+    it('falls back to "in the last hour" for an unparseable timestamp', () => {
+      const hints = buildAlertHuntHints(alert({ timestamp: 'not-a-date' }), 8).join(' ');
+      expect(hints).toContain('Show all network activity from 45.83.193.150 in the last hour');
+    });
+
+    it('widens the severity-window hint the same way', () => {
+      const tenHoursAgo = new Date(Date.now() - 10 * 3600 * 1000).toISOString();
+      const hints = buildAlertHuntHints(alert({ timestamp: tenHoursAgo, severity: 'high' }), 8).join(' ');
+      expect(hints).toContain('Show me every high severity alert in the last 24 hours');
+    });
   });
 
   // Every hint is a query the user will actually send. This is the same rule
