@@ -1,0 +1,60 @@
+# Shadow the Hunter — MUD infrastructure only
+#
+#   docker compose -f docs/mocks/docker-compose.mud.yml up -d
+#
+# Hub:            http://localhost:3100
+# FP MUD (V1):    http://localhost:3106
+# ELI5 (optional):http://localhost:3107/health
+# TP MUD (V2):    http://localhost:3108
+#
+# ELI5 needs GEMINI_API_KEY (from repo-root .env.s3 if present).
+
+name: nocgentic-mud
+
+services:
+  mud-hub:
+    image: nginx:alpine
+    container_name: nocgentic-mud-hub
+    ports:
+      - "3100:80"
+    volumes:
+      - ./hub:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+  mud-06-fp:
+    image: nginx:alpine
+    container_name: nocgentic-mud-06
+    ports:
+      - "3106:80"
+    volumes:
+      - ./06-shadow-hunter:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+  mud-06-eli5:
+    image: python:3.12-slim
+    container_name: nocgentic-mud-06-eli5
+    ports:
+      - "3107:3107"
+    env_file:
+      - path: ../../.env.s3
+        required: false
+    environment:
+      - ELI5_PORT=3107
+      - PACKAGE_DIR=/app/package
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash}
+    volumes:
+      - ./06-shadow-hunter:/app:ro
+    working_dir: /app
+    command: ["python", "eli5_server.py"]
+    restart: unless-stopped
+    profiles:
+      - eli5
+
+  mud-07-tp:
+    image: nginx:alpine
+    container_name: nocgentic-mud-07
+    ports:
+      - "3108:80"
+    volumes:
+      - ./07-spike-dns-tp:/usr/share/nginx/html:ro
+    restart: unless-stopped

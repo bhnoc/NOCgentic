@@ -1,0 +1,52 @@
+{
+  "incident_name": "'SCAN: Host Sweep' along with 1 other issue",
+  "triage_score": 33,
+  "verdict_hint": "review",
+  "severity": "medium",
+  "status": "new",
+  "categories": [
+    "Scan Detected via Zone Protection Profile"
+  ],
+  "alert_count": 2,
+  "iocs": {
+    "domains": null,
+    "external_remote_ips": [
+      "{{DNS_QUAD9}}",
+      "{{DNS_GOOGLE}}"
+    ],
+    "from_free_text": true,
+    "hosts": null,
+    "internal_or_dns_ips": null,
+    "local_ips": [
+      "{{HOST_A}}"
+    ],
+    "macs": null,
+    "remote_ips": [
+      "{{DNS_QUAD9}}",
+      "{{DNS_GOOGLE}}"
+    ],
+    "remote_ports": null
+  },
+  "alerts_brief": [
+    {
+      "name": "SCAN: Host Sweep",
+      "action_local_ip": "{{HOST_A}}",
+      "action_remote_ip": "{{DNS_QUAD9}}",
+      "action_remote_port": 53,
+      "category": "Scan Detected via Zone Protection Profile",
+      "source": "PAN NGFW",
+      "fw_interface_from": "{{ZONE_FROM}}",
+      "fw_interface_to": "{{ZONE_TO}}"
+    },
+    {
+      "name": "SCAN: Host Sweep",
+      "action_local_ip": "{{HOST_A}}",
+      "action_remote_ip": "{{DNS_GOOGLE}}",
+      "action_remote_port": 53,
+      "category": "Scan Detected via Zone Protection Profile",
+      "source": "PAN NGFW",
+      "fw_interface_from": "{{ZONE_FROM}}",
+      "fw_interface_to": "{{ZONE_TO}}"
+    }
+  ]
+}

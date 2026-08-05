@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0.0",
+  "primary_question": "What is the most credible true-positive (or high-priority unknown) threat visible right now, and what multi-source evidence supports that conclusion?",
+  "steps": [
+    {
+      "id": "step-01-triage",
+      "order": 1,
+      "title": "Triage open cases under noise",
+      "learner_objective": "Rank open incidents and justify why {{CASE_PRIMARY}} is worth opening even when the queue is full of Large Upload noise.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex cases browse --limit 12 --fetch 100",
+          "template": "Scored table of recent new cases"
+        },
+        {
+          "type": "cli",
+          "command": "cortex triage --top 10 --fetch 100",
+          "template": "Rank open incidents; choose primary case"
+        }
+      ],
+      "evidence_types": ["incident", "alert"],
+      "soft_success": { "min_pins": 1 },
+      "hints_learner_safe": [
+        "Highest score is not always a true positive — note the name and category.",
+        "Large Upload and ZGrab rows are common venue noise; still pick a case you can multi-source."
+      ],
+      "source_artifacts": [
+        "raw/triage_ranked.json",
+        "raw/cases_browse.json",
+        "shadow_export/evidence/triage_top.json"
+      ]
+    },
+    {
+      "id": "step-02-open-case",
+      "order": 2,
+      "title": "Open the Host Sweep case",
+      "learner_objective": "Extract local host, remote endpoints, category, and interface path from the case — before deciding malice.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex investigate incident {{CASE_PRIMARY}} --hours 48 --with-host-identify",
+          "template": "Pull incident + extra + findings + first host identify"
+        },
+        {
+          "type": "cli",
+          "command": "cortex case summarize {{CASE_PRIMARY}}",
+          "template": "Compact score/hint from findings.json"
+        }
+      ],
+      "evidence_types": ["incident", "alert", "findings"],
+      "soft_success": { "min_pins": 2 },
+      "hints_learner_safe": [
+        "Write down action_local_ip and action_remote_ip:port for each alert.",
+        "Zone Protection 'Host Sweep' toward public DNS is a known false-positive shape."
+      ],
+      "source_artifacts": [
+        "cases/{{CASE_PRIMARY}}/findings.json",
+        "cases/{{CASE_PRIMARY}}/incident.json",
+        "shadow_export/evidence/findings_brief.json"
+      ]
+    },
+    {
+      "id": "step-03-host-identity",
+      "order": 3,
+      "title": "Identify the host (and accept agentless limits)",
+      "learner_objective": "Build a network-only identity for {{HOST_A}}: type, MAC/user, hostname, BH map miss, confidence.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex host identify {{HOST_A}} --deep --with-related --hours 72",
+          "template": "Deep host identify + related incidents/alerts"
+        },
+        {
+          "type": "cli",
+          "command": "cortex bh ip {{HOST_A}} --json",
+          "template": "Venue map lookup (expect empty off training ranges)"
+        },
+        {
+          "type": "cli",
+          "command": "cortex host identify {{MAC_A}}",
+          "template": "Pivot on MAC-as-user identity"
+        }
+      ],
+      "evidence_types": ["endpoint", "host_identity", "bh_map"],
+      "soft_success": { "min_pins": 2 },
+      "hints_learner_safe": [
+        "No Cortex agent does not mean 'unknown evil' — it means network telemetry only.",
+        "Hostname only {{HOSTNAME_A}} and privacy MAC are normal for Apple private Wi-Fi."
+      ],
+      "source_artifacts": [
+        "issues/host-{{HOST_A}}/identity.json",
+        "issues/host-{{HOST_A}}/related.json",
+        "shadow_export/evidence/identity_brief.json",
+        "shadow_export/evidence/related_brief.json"
+      ]
+    },
+    {
+      "id": "step-04-dns-and-traffic",
+      "order": 4,
+      "title": "Corroborate with DNS, outbound, and threats",
+      "learner_objective": "Use XQL recipes to show SaaS/MDM profile and informational-only threats — not C2.",
+      "suggested_actions": [
+        {
+          "type": "cli",
+          "command": "cortex xql recipe host-dns-top --ip {{HOST_A}} --hours 48",
+          "template": "Top DNS names from host"
+        },
+        {
+          "type": "cli",
+          "command": "cortex xql recipe host-outbound-ports --ip {{HOST_A}} --hours 48",
+          "template": "Outbound remote IP/port histogram"
+        },
+        {
+          "type": "cli",
+          "command": "cortex xql recipe host-threats --ip {{HOST_A}} --hours 48",
+          "template": "NGFW threat hits for host"
+        },
+        {
+          "type": "cli",
+          "command": "cortex enrich ip {{DNS_GOOGLE}} --hours 24",
+          "template": "Show public resolver is widely used (not unique IoC)"
+        }
+      ],
+      "evidence_types": ["xql", "dns", "ngfw"],
+      "soft_success": { "min_pins": 2 },
+      "hints_learner_safe": [
+        "Look for MDM (Kandji), Slack workspaces, Apple services — staff/attendee shape.",
+        "Informational TLS ECH / post-quantum cipher alerts are not malware."
+      ],
+      "source_artifacts": [
+        "xql/",
+        "issues/ioc-ip-{{DNS_GOOGLE}}/enrichment.json"
+      ]
+    },
+    {
+      "id": "step-05-disposition",
+      "order": 5,
+      "title": "Disposition: false positive with disproof",
+      "learner_objective": "Write a defensible FP disposition: what was ruled out, confidence, and what a human should do next (no auto-isolate).",
+      "suggested_actions": [
+        {
+          "type": "write",
+          "command": "notes.md disposition",
+          "template": "Narrative + severity + confidence + ruled-out list"
+        },
+        {
+          "type": "cli",
+          "command": "cortex case resolve {{CASE_PRIMARY}} --as false_positive --comment \"…\"",
+          "template": "MUTATION — only with human confirmation (optional in live ops)"
+        }
+      ],
+      "evidence_types": ["findings", "notes"],
+      "soft_success": { "min_pins": 1 },
+      "hints_learner_safe": [
+        "A good FP close cites at least two independent evidence classes.",
+        "Recommend resolve; do not isolate an agentless host on this evidence."
+      ],
+      "source_artifacts": [
+        "notes.md",
+        "shadow_export/HUNTER_NARRATIVE.md"
+      ]
+    }
+  ]
+}

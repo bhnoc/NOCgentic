@@ -1,0 +1,24 @@
+{
+  "case_id": "{{CASE_PRIMARY}}",
+  "status": "under_investigation",
+  "severity": "medium",
+  "category": "Exfiltration",
+  "name": "Spike DNS Malware Traffic",
+  "starred": true,
+  "summary": "Internal host {{HOST_A}} on {{VLAN}} issued hundreds of outbound DNS queries for malicious domain {{DOMAIN_IOC}} toward venue DNS VA {{DNS_VA}}:53.",
+  "key_indicators": [
+    { "type": "host", "value": "{{HOST_A}}" },
+    { "type": "domain", "value": "{{DOMAIN_IOC}}", "ti": "malicious (multi-vendor)" },
+    { "type": "dns_va", "value": "{{DNS_VA}}", "port": 53 },
+    { "type": "mac_user", "value": "{{MAC_A}}" }
+  ],
+  "alert_shape": {
+    "action": "DETECTED",
+    "local_ip": "{{HOST_A}}",
+    "remote_ip": "{{DNS_VA}}",
+    "remote_port": 53,
+    "external_hostname": "{{DOMAIN_IOC}}"
+  },
+  "ti_note": "Domain flagged malicious by Unit 42 / VirusTotal / Google TI class sources in case summary.",
+  "analyst_prompt_sanitized": "Determine whether malware DNS activity from {{HOST_A}} warrants containment and domain controls. Review logs for classroom-zone crossings. Prefer human ownership of agentless host."
+}

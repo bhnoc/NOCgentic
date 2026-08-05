@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "sth-20260801-spike-dns-tp",
+  "title": "Spike DNS that was real — sole-source malware domain on NOC Wi‑Fi",
+  "subtitle": "Case under_investigation drowned by upload/ZGrab noise; multi-source path to true positive",
+  "event": {
+    "name": "Black Hat / NOC training",
+    "edition": "live-xsiam"
+  },
+  "time_scope": {
+    "timezone": "UTC",
+    "window_start": "2026-07-30T00:00:00Z",
+    "window_end": "2026-08-01T15:20:00Z"
+  },
+  "data_scope": {
+    "mode": "xsiam_workspace",
+    "investigation_id": "{{INV_ID}}",
+    "primary_case_id": "{{CASE_PRIMARY}}",
+    "note": "Source inv_20260801_151132_6816b3 via cortex CLI. Operator map resolves tokens."
+  },
+  "difficulty": "intermediate",
+  "estimated_minutes": 20,
+  "tags": [
+    "true-positive",
+    "dns-malware",
+    "spike-dns",
+    "exfiltration",
+    "domain-enrich",
+    "host-identify",
+    "agentless",
+    "noc-wifi",
+    "triage",
+    "shadow-the-hunter",
+    "under-investigation"
+  ],
+  "authors": [
+    {
+      "role": "original_hunter",
+      "display_name": "CLI Hunter",
+      "identity_ref": "ai-session-shadow-20260801-tp"
+    }
+  ],
+  "privacy": {
+    "classification": "training-safe",
+    "contains_pii": false,
+    "sanitizer_version": "curator-pass/1.0.0",
+    "sanitized_at": "2026-08-01T16:00:00Z",
+    "reviewer": "nocgentic-curator",
+    "review_status": "approved",
+    "attestation": "Learner-facing files use tokens for hosts, hostnames, and people. Public malware IoC domain may appear. Operator map is not served to learners.",
+    "redaction_map_policy": "operator-only-do-not-serve"
+  },
+  "created_at": "2026-08-01T15:20:00Z",
+  "curated_at": "2026-08-01T16:00:00Z",
+  "contrast_package": "sth-20260801-host-sweep-fp"
+}

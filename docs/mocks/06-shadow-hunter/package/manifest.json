@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "sth-20260801-host-sweep-fp",
+  "title": "Host Sweep that wasn't — disproving zone-protection noise",
+  "subtitle": "Ranked #1 open case; multi-source path to false positive on event Wi-Fi Mac",
+  "event": {
+    "name": "Black Hat / NOC training",
+    "edition": "live-xsiam"
+  },
+  "time_scope": {
+    "timezone": "UTC",
+    "window_start": "2026-07-31T20:00:00Z",
+    "window_end": "2026-08-01T13:35:00Z"
+  },
+  "data_scope": {
+    "mode": "xsiam_workspace",
+    "investigation_id": "{{INV_ID}}",
+    "primary_case_id": "{{CASE_PRIMARY}}",
+    "note": "Source investigation on Cortex XSIAM via cortex CLI (Go 0.5). Operator map resolves tokens."
+  },
+  "difficulty": "intermediate",
+  "estimated_minutes": 25,
+  "tags": [
+    "false-positive",
+    "ngfw",
+    "zone-protection",
+    "host-sweep",
+    "host-identify",
+    "agentless",
+    "black-hat",
+    "dns",
+    "triage",
+    "shadow-the-hunter"
+  ],
+  "authors": [
+    {
+      "role": "original_hunter",
+      "display_name": "CLI Hunter",
+      "identity_ref": "ai-session-shadow-20260801"
+    }
+  ],
+  "privacy": {
+    "classification": "training-safe",
+    "contains_pii": false,
+    "sanitizer_version": "curator-pass/1.0.0",
+    "sanitized_at": "2026-08-01T14:30:00Z",
+    "reviewer": "nocgentic-curator",
+    "review_status": "approved",
+    "attestation": "Learner-facing files use tokens only. Real values confined to redaction-map.json (operator-only). Curator pass completed 2026-08-01.",
+    "redaction_map_policy": "operator-only-do-not-serve"
+  },
+  "created_at": "2026-08-01T13:35:00Z",
+  "curated_at": "2026-08-01T14:30:00Z"
+}

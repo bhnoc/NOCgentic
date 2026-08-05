@@ -1,0 +1,142 @@
+{
+  "target": "{{HOST_A}}",
+  "confidence": "medium",
+  "match_quality": "none",
+  "agent": {
+    "present": false
+  },
+  "users_seen": [
+    "{{MAC_A}}"
+  ],
+  "network_identity": {
+    "hostnames_seen": [
+      "{{HOSTNAME_A}}"
+    ],
+    "ips": [
+      "{{HOST_A}}"
+    ],
+    "likely_type": "apple_or_macos_client",
+    "likely_types": [
+      "apple_or_macos_client",
+      "dev_workstation"
+    ],
+    "macs": null,
+    "signals": [
+      "aaplimg.com",
+      "apple-dns.net",
+      "apple-cloudkit",
+      "apple.com",
+      "vscode",
+      "slack.com"
+    ],
+    "type_scores": {
+      "apple_or_macos_client": 18,
+      "collab_user": 2,
+      "dev_workstation": 4
+    }
+  },
+  "identity_notes": [
+    "No Cortex agent inventory match \u2014 network-only identity from logs",
+    "Type hint(s) from DNS: apple_or_macos_client, dev_workstation"
+  ],
+  "dns_top": [
+    {
+      "hits": 99,
+      "name": "logscale.blackhat.trycorelight.com"
+    },
+    {
+      "hits": 184,
+      "name": "gspe1-ssl.ls.apple.com"
+    },
+    {
+      "hits": 159,
+      "name": "mtalk.google.com"
+    },
+    {
+      "hits": 204,
+      "name": "a663658a.web-api.kandji.io"
+    },
+    {
+      "hits": 60,
+      "name": "gspe19-2-ssl.ls.apple.com"
+    },
+    {
+      "hits": 65,
+      "name": "_dns.resolver.arpa"
+    },
+    {
+      "hits": 84,
+      "name": "23-courier.push.apple.com"
+    },
+    {
+      "hits": 144,
+      "name": "1.courier-push-apple.com.akadns.net"
+    },
+    {
+      "hits": 105,
+      "name": "slackb.com"
+    },
+    {
+      "hits": 120,
+      "name": "imap.gmail.com"
+    },
+    {
+      "hits": 106,
+      "name": "gs-loc.ls-apple.com.akadns.net"
+    },
+    {
+      "hits": 144,
+      "name": "gs-loc-new.ls-apple.com.akadns.net"
+    },
+    {
+      "hits": 150,
+      "name": "us-sandbox-courier-4.push-apple.com.akadns.net"
+    },
+    {
+      "hits": 71,
+      "name": "gsp64-ssl.ls.apple.com"
+    },
+    {
+      "hits": 104,
+      "name": "stocks-data-service.apple.com"
+    }
+  ],
+  "ngfw_apps": [
+    {
+      "app": "ssl",
+      "hits": 6
+    },
+    {
+      "app": "youtube-base",
+      "hits": 2
+    },
+    {
+      "app": "google-play",
+      "hits": 4
+    },
+    {
+      "app": "tailscale",
+      "hits": 6
+    },
+    {
+      "app": "google-base",
+      "hits": 8
+    },
+    {
+      "app": "google-docs-base",
+      "hits": 4
+    },
+    {
+      "app": "spotify",
+      "hits": 2
+    },
+    {
+      "app": "dns-over-https",
+      "hits": 4
+    },
+    {
+      "app": "slack-base",
+      "hits": 4
+    }
+  ]
+}

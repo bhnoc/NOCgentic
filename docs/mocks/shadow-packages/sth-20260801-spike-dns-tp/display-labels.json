@@ -1,0 +1,12 @@
+{
+  "CASE_PRIMARY": "Case 8612",
+  "CASE_GOLD": "Case 8016 (historical gold)",
+  "HOST_A": "NOC-WiFi client A",
+  "DNS_VA": "Venue DNS VA",
+  "DOMAIN_IOC": "epicunitscan.info",
+  "HOSTNAME_A": "operator-macbook.local",
+  "MAC_A": "privacy-mac-a",
+  "OWNER_HINT": "NOC-associated MacBook (confirm owner in private channel)",
+  "VLAN": "NOC WiFi · VLAN 2251",
+  "INV_ID": "inv training workspace"
+}

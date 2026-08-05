@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0.0",
+  "hunter_display_name": "CLI Hunter",
+  "overall_reasoning": "Live triage on the Black Hat XSIAM tenant was dominated by Large Upload and scanner noise. The highest-scoring new case was a zone-protection Host Sweep. Rather than chase volume, I opened it because Host Sweep claims are either real recon or high-value false positives — both teach multi-source IR. Alert remotes were public DNS on port 53 from {{ZONE_FROM}}. Deep host identify showed an agentless Mac with privacy MAC, hostname only {{HOSTNAME_A}}, Kandji MDM, Corelight enterprise + BH NOC Slack, and consumer SaaS. BH map empty (not training 10.220). Related alerts were mostly Monitored Thread noise. XQL threats were informational TLS only. Conclusion: false positive with high confidence; no containment.",
+  "final_findings": [
+    {
+      "severity": "low",
+      "summary": "Primary: {{CASE_PRIMARY}} Host Sweep is a false positive — {{HOST_A}} queried public DNS ({{DNS_GOOGLE}}, {{DNS_QUAD9}}) from {{ZONE_FROM}}; not internal recon.",
+      "entities": ["{{CASE_PRIMARY}}", "{{HOST_A}}", "{{DNS_GOOGLE}}", "{{DNS_QUAD9}}", "{{ZONE_FROM}}"]
+    },
+    {
+      "severity": "info",
+      "summary": "Host {{HOST_A}} / MAC {{MAC_A}} is agentless Apple-class (hostname {{HOSTNAME_A}}); org fingerprints include Corelight + BH NOC Slack and Kandji; no person name in telemetry.",
+      "entities": ["{{HOST_A}}", "{{MAC_A}}", "{{HOSTNAME_A}}"]
+    },
+    {
+      "severity": "info",
+      "summary": "No credible TP in open top-N at hunt time; Large Upload class remains scorer-demoted noise. Disposition: recommend FP resolve, do not isolate.",
+      "entities": ["{{CASE_PRIMARY}}"]
+    }
+  ],
+  "steps": {
+    "step-01-triage": {
+      "reasoning": "cases browse + triage put {{CASE_PRIMARY}} at score 33 atop Large Uploads and ZGrab. I chose it over bulk upload FPs because zone-protection sweeps either matter or teach clean disproof. No dual-RAT or Spike DNS sole-source in current new top-N.",
+      "original_queries": [
+        {
+          "tool": "cortex",
+          "description": "health",
+          "redacted_sql_or_nl": "cortex health"
+        },
+        {
+          "tool": "cortex",
+          "description": "cases browse",
+          "redacted_sql_or_nl": "cortex cases browse --limit 12 --fetch 100"
+        },
+        {
+          "tool": "cortex",
+          "description": "triage",
+          "redacted_sql_or_nl": "cortex triage --top 10 --fetch 100"
+        }
+      ],
+      "findings": [
+        "{{CASE_PRIMARY}} rank #1 score=33 medium SCAN Host Sweep",
+        "Queue dominated by Large Upload low-sev and ZGrab",
+        "No open dual-RAT / epicunitscan-class TP in top-N"
+      ],
+      "entities": ["{{CASE_PRIMARY}}"]
+    },
+    "step-02-open-case": {
+      "reasoning": "investigate incident pulled two Host Sweep alerts: local {{HOST_A}} to {{DNS_QUAD9}}:53 and {{DNS_GOOGLE}}:53 via NGFW zone protection {{ZONE_FROM}}→{{ZONE_TO}}. That shape immediately weakens 'internal host sweep' and forces host identity + DNS context.",
+      "original_queries": [
+        {
+          "tool": "cortex",
+          "description": "investigate incident",
+          "redacted_sql_or_nl": "cortex investigate incident {{CASE_PRIMARY}} --hours 48 --with-host-identify"
+        },
+        {
+          "tool": "cortex",
+          "description": "case summarize",
+          "redacted_sql_or_nl": "cortex case summarize {{CASE_PRIMARY}}"
+        }
+      ],
+      "findings": [
+        "Category: Scan Detected via Zone Protection Profile",
+        "Remotes are public DNS resolvers on port 53 — not venue 10.220 peers",
+        "triage_score=33 verdict_hint=review"
+      ],
+      "entities": ["{{CASE_PRIMARY}}", "{{HOST_A}}", "{{DNS_GOOGLE}}", "{{DNS_QUAD9}}"]
+    },
+    "step-03-host-identity": {
+      "reasoning": "Deep identify: no agent, confidence medium, type apple_or_macos_client, hostname {{HOSTNAME_A}}, users_seen / NGFW user = {{MAC_A}} (privacy MAC). BH map null. Related: 14 incidents / 7 alerts mostly Blackhat Monitored Thread + one auto-resolved Large Upload. MAC pivot same story. Strengthened FP: normal attendee/staff Apple-client profile, not training-room scanner.",
+      "original_queries": [
+        {
+          "tool": "cortex",
+          "description": "host identify deep",
+          "redacted_sql_or_nl": "cortex host identify {{HOST_A}} --deep --with-related --hours 72"
+        },
+        {
+          "tool": "cortex",
+          "description": "bh ip",
+          "redacted_sql_or_nl": "cortex bh ip {{HOST_A}} --json"
+        },
+        {
+          "tool": "cortex",
+          "description": "host identify mac",
+          "redacted_sql_or_nl": "cortex host identify {{MAC_A}}"
+        }
+      ],
+      "findings": [
+        "Agentless network-only identity",
+        "BH map: no session/network match",
+        "Related noise: monitored-thread majority",
+        "No human username — MAC-as-user only"
+      ],
+      "entities": ["{{HOST_A}}", "{{MAC_A}}", "{{HOSTNAME_A}}"]
+    },
+    "step-04-dns-and-traffic": {
+      "reasoning": "host-dns-top showed Apple, Kandji, WhatsApp, Slack (including Corelight enterprise and BH NOC), Telstra+Gmail IMAP, Spotify, VS Code CDN — staff/dev laptop, not malware beaconing. Outbound mostly 443. Threats informational (ECH, hybrid PQ ciphers). enrich on {{DNS_GOOGLE}} showed many source hosts — public resolver, not unique IoC. TP hypothesis collapsed.",
+      "original_queries": [
+        {
+          "tool": "cortex",
+          "description": "xql host-dns-top",
+          "redacted_sql_or_nl": "cortex xql recipe host-dns-top --ip {{HOST_A}}"
+        },
+        {
+          "tool": "cortex",
+          "description": "xql host-outbound-ports",
+          "redacted_sql_or_nl": "cortex xql recipe host-outbound-ports --ip {{HOST_A}}"
+        },
+        {
+          "tool": "cortex",
+          "description": "xql host-threats",
+          "redacted_sql_or_nl": "cortex xql recipe host-threats --ip {{HOST_A}}"
+        },
+        {
+          "tool": "cortex",
+          "description": "enrich ip",
+          "redacted_sql_or_nl": "cortex enrich ip {{DNS_GOOGLE}} --hours 24"
+        }
+      ],
+      "findings": [
+        "DNS profile = MDM + SaaS + org Slack, not suspicious sole-source domain",
+        "No C2-class outbound ports",
+        "Threats informational only",
+        "Public DNS widely used on tenant"
+      ],
+      "entities": ["{{HOST_A}}", "{{DNS_GOOGLE}}"]
+    },
+    "step-05-disposition": {
+      "reasoning": "Multi-source agreement: alert semantics (public DNS), identity (agentless Mac), traffic (SaaS/MDM), related (noise), threats (info). Recommend false_positive resolve with written disproof. Do not isolate. Confidence ~0.85. No mutation executed without human confirm.",
+      "original_queries": [
+        {
+          "tool": "notes",
+          "description": "write disposition",
+          "redacted_sql_or_nl": "notes.md Phase 4 disposition"
+        }
+      ],
+      "findings": [
+        "Disposition: false_positive (recommended)",
+        "Confidence 0.85",
+        "Ruled out: internal recon, C2, training-room compromise, named human ID"
+      ],
+      "entities": ["{{CASE_PRIMARY}}", "{{HOST_A}}"]
+    }
+  }
+}
