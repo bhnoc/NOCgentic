@@ -105,6 +105,11 @@ services:
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
       # Public event-edition label (display only). Nation + year, e.g. "USA 2027".
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
+      # The venue's wall clock. Unlike EVENT_EDITION this is NOT display branding:
+      # the dt partition is a UTC calendar day, so "today" has to be resolved
+      # against the analyst's local day or every same-day count truncates once the
+      # UTC date rolls over (17:00 local in Las Vegas). Asia editions: Asia/Singapore.
+      - EVENT_TZ=${EVENT_TZ:-America/Los_Angeles}
     # Resolve host.docker.internal to the host on Linux, so the default
     # LOCAL_LLM_BASE_URL can reach the host's llama-server (AQLight) when
     # LLM_PROVIDER=local. Harmless when the local provider is not used.
@@ -165,6 +170,11 @@ services:
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-alert-triage
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
+      # The venue's wall clock. Unlike EVENT_EDITION this is NOT display branding:
+      # the dt partition is a UTC calendar day, so "today" has to be resolved
+      # against the analyst's local day or every same-day count truncates once the
+      # UTC date rolls over (17:00 local in Las Vegas). Asia editions: Asia/Singapore.
+      - EVENT_TZ=${EVENT_TZ:-America/Los_Angeles}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -221,6 +231,11 @@ services:
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-athena-hunter
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
+      # The venue's wall clock. Unlike EVENT_EDITION this is NOT display branding:
+      # the dt partition is a UTC calendar day, so "today" has to be resolved
+      # against the analyst's local day or every same-day count truncates once the
+      # UTC date rolls over (17:00 local in Las Vegas). Asia editions: Asia/Singapore.
+      - EVENT_TZ=${EVENT_TZ:-America/Los_Angeles}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -277,6 +292,11 @@ services:
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-deter
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
+      # The venue's wall clock. Unlike EVENT_EDITION this is NOT display branding:
+      # the dt partition is a UTC calendar day, so "today" has to be resolved
+      # against the analyst's local day or every same-day count truncates once the
+      # UTC date rolls over (17:00 local in Las Vegas). Asia editions: Asia/Singapore.
+      - EVENT_TZ=${EVENT_TZ:-America/Los_Angeles}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -326,6 +346,11 @@ services:
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-thousandeyes-analyst
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
+      # The venue's wall clock. Unlike EVENT_EDITION this is NOT display branding:
+      # the dt partition is a UTC calendar day, so "today" has to be resolved
+      # against the analyst's local day or every same-day count truncates once the
+      # UTC date rolls over (17:00 local in Las Vegas). Asia editions: Asia/Singapore.
+      - EVENT_TZ=${EVENT_TZ:-America/Los_Angeles}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -374,6 +399,11 @@ services:
       - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-https://ng.bhnoc.com,https://ngremote.bhnoc.com}
       # Public event-edition label shown in the UI (served via /api/v1/config).
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}
+      # The venue's wall clock. Unlike EVENT_EDITION this is NOT display branding:
+      # the dt partition is a UTC calendar day, so "today" has to be resolved
+      # against the analyst's local day or every same-day count truncates once the
+      # UTC date rolls over (17:00 local in Las Vegas). Asia editions: Asia/Singapore.
+      - EVENT_TZ=${EVENT_TZ:-America/Los_Angeles}
     depends_on:
       - orchestrator
       - athena-hunter

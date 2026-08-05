@@ -123,7 +123,21 @@ Any application querying Athena needs these permissions. The EC2 instance `<INST
 
 ## Available Tables
 
-All tables use date partitioning (`dt` column) in format `YYYY-MM-DD`. **Always include `WHERE dt='YYYY-MM-DD'`** for fast queries.
+All tables use date partitioning (`dt` column) in format `YYYY-MM-DD`. Always include a `dt` predicate, otherwise the query scans every partition in the projected range.
+
+**`dt` is the UTC calendar day of `ts`, and the NOC is not on UTC.** Las Vegas is UTC-7, so the UTC date rolls over at 17:00 local. From then until local midnight, `dt = '<today in UTC>'` covers only the hours since 17:00 and a same-day count silently truncates. Measured on prod at 19:33 local: 778,187 alerts against a true local-day 4,186,931, a 5.4x undercount with no error and no log line.
+
+So a same-day question needs two partitions and explicit `ts` bounds:
+
+```sql
+-- today, in the analyst's local sense
+WHERE dt IN ('2026-08-04', '2026-08-05')
+  AND ts >= 1785826800 AND ts <= 1785897961
+```
+
+The partition list is a coarse prune (whole UTC days, so up to ~48h of rows). The `ts` bounds are the actual window. Drop the bounds and you overcount; drop the second partition and you undercount. Multi-day ranges are fine on partition granularity alone.
+
+The agents get this right for you: `athena_client.local_day_filter()` and `date_filter(0)` both emit the pair plus bounds, keyed off `EVENT_TZ` (default `America/Los_Angeles`).
 
 ### Core Network Logs
 

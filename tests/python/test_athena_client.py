@@ -138,9 +138,18 @@ def test_sanitize_sql_strips_single_trailing_semicolon():
 # date_partitions; no over-generation of a trailing day (sweep-3 sh-106)
 # ---------------------------------------------------------------------------
 
-def test_date_partitions_hours_le_zero_is_today_only():
-    assert len(ac.date_partitions(0)) == 1
-    assert len(ac.date_partitions(-5)) == 1
+def test_date_partitions_hours_le_zero_is_the_local_day():
+    """hours<=0 means the analyst's LOCAL calendar day, which is 1 or 2 partitions.
+
+    It used to be "today in UTC", exactly one partition. That is wrong at a venue
+    offset from UTC: from 17:00 in Las Vegas the UTC date has already rolled, so the
+    single partition holds only the hours since 17:00 local and every count silently
+    truncates. 1 partition is correct only when the local day happens to align.
+    """
+    for hours in (0, -5):
+        parts = ac.date_partitions(hours)
+        assert parts == ac.local_day_partitions()
+        assert 1 <= len(parts) <= 2
 
 
 def test_date_partitions_small_window_matches_actual_day_span():
@@ -203,8 +212,84 @@ def test_date_filter_bounds_both_ends_for_positive_hours():
     assert hi > lo
 
 
-def test_date_filter_no_ts_bound_when_hours_le_zero():
-    # hours<=0 means "today only", no meaningful rolling window to bound.
-    assert "ts >=" not in ac.date_filter(0)
-    assert "ts <=" not in ac.date_filter(0)
-    assert "ts >=" not in ac.date_filter(-3)
+def test_date_filter_bounds_the_local_day_when_hours_le_zero():
+    """hours<=0 now needs ts bounds too, because a local day spans 2 UTC partitions.
+
+    It used to return the partition clause alone, which was defensible while "today"
+    meant one UTC partition. It is not defensible for a local day: the prune pulls in
+    both whole UTC days (~48h) and the wrong end of each, so the bounds are what make
+    it a day.
+    """
+    for hours in (0, -3):
+        frag = ac.date_filter(hours)
+        assert "dt " in frag
+        assert "ts >=" in frag
+        assert "ts <=" in frag
+        lo = int(re.search(r"ts >= (\d+)", frag).group(1))
+        hi = int(re.search(r"ts <= (\d+)", frag).group(1))
+        now = int(datetime.now(timezone.utc).timestamp())
+        assert lo < hi <= now + 60
+        # Never more than one day wide, and the lower bound is local midnight.
+        assert 0 < hi - lo <= 24 * 3600 + 60
+        assert lo == ac.local_day_bounds()[0]
+
+
+# ---------------------------------------------------------------------------
+# Event-local day handling. dt is a UTC calendar day; the analyst is not on UTC.
+# Measured on prod at 19:33 Las Vegas time: `dt = '<utc today>'` returned 778,187
+# alerts where the analyst's actual local day held 4,186,931, a 5.4x undercount
+# that succeeds silently and worsens the earlier in the evening it is asked.
+# ---------------------------------------------------------------------------
+
+def test_event_tz_defaults_to_the_venue():
+    assert ac.EVENT_TZ_NAME == "America/Los_Angeles"
+    assert ac.event_now().tzinfo is not None
+
+
+def test_event_tz_falls_back_to_utc_on_a_bad_name(monkeypatch):
+    """A typo in EVENT_TZ degrades to UTC, it does not take the agents down."""
+    monkeypatch.setattr(ac, "EVENT_TZ_NAME", "Mars/Olympus_Mons")
+    assert ac.event_tz() == timezone.utc
+
+
+def test_local_day_partitions_cover_the_whole_local_day():
+    """Every UTC partition the local day touches must be listed.
+
+    REVERT-CHECK: returning just the UTC date would drop the pre-rollover partition
+    for the entire local afternoon and evening.
+    """
+    start, end = ac.local_day_bounds()
+    parts = ac.local_day_partitions()
+    for epoch in (start, end):
+        day = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d")
+        assert day in parts, f"{day} missing from {parts}"
+    assert parts == sorted(parts)
+
+
+def test_local_day_bounds_is_local_midnight_to_now():
+    start, end = ac.local_day_bounds()
+    local_start = datetime.fromtimestamp(start, timezone.utc).astimezone(ac.event_tz())
+    assert (local_start.hour, local_start.minute, local_start.second) == (0, 0, 0)
+    now = int(datetime.now(timezone.utc).timestamp())
+    # "Today so far" ends at now, not at a future local midnight.
+    assert end <= now + 60
+
+
+def test_local_day_bounds_yesterday_is_a_full_day_before_today():
+    y_start, y_end = ac.local_day_bounds(-1)
+    t_start, _ = ac.local_day_bounds(0)
+    assert y_end == t_start
+    # Exactly 24h wide except across a DST transition (23h or 25h).
+    assert 23 * 3600 <= y_end - y_start <= 25 * 3600
+
+
+def test_local_day_filter_prunes_and_bounds():
+    frag = ac.local_day_filter()
+    assert "dt " in frag and "ts >=" in frag and "ts <=" in frag
+    assert re.search(r"ts >= (\d+)", frag).group(1) == str(ac.local_day_bounds()[0])
+
+
+def test_today_partition_is_local_not_utc():
+    """today_partition names the analyst's day; utc_today_partition names the key."""
+    assert ac.today_partition() == ac.event_now().strftime("%Y-%m-%d")
+    assert ac.utc_today_partition() == datetime.now(timezone.utc).strftime("%Y-%m-%d")

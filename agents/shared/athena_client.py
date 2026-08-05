@@ -22,8 +22,9 @@ import os
 import re
 import time
 from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import boto3
 
@@ -245,9 +246,94 @@ def sanitize_like_value(val: str) -> str:
 # Date helpers
 # ---------------------------------------------------------------------------
 
+# The event's wall-clock timezone. The dt partition is a UTC calendar day, but the
+# analyst asking the question is standing in the NOC, and Las Vegas is UTC-7. From
+# 17:00 local until midnight local, the UTC date has already rolled over, so "today"
+# in UTC terms is only the sliver of the evening that has passed since 17:00.
+#
+# Measured on prod at 19:33 Vegas (02:33 UTC the next day): `dt = '<utc today>'`
+# returned 778,187 alerts where the analyst's actual local day held 4,186,931. That
+# is a 5.4x undercount presented as a confident total, and it gets WORSE earlier in
+# the evening, reaching ~100% missing just after 17:00 local. It is the dangerous
+# kind of wrong: the number looks plausible, the query succeeds, nothing logs an
+# error, and the show floor is busiest exactly during the broken window.
+#
+# EVENT_TZ is config, not branding, so it does not belong in event.py (see the
+# note there). Default to the Black Hat USA venue; Asia editions set it to
+# Asia/Singapore.
+EVENT_TZ_NAME: str = os.getenv("EVENT_TZ", "America/Los_Angeles").strip() or "UTC"
+
+
+def event_tz() -> tzinfo:
+    """The event's local timezone, falling back to UTC on a bad name.
+
+    A typo in EVENT_TZ must not take the agents down: an unknown zone degrades to
+    UTC (today's behaviour) rather than raising at import time on every box.
+    """
+    try:
+        return ZoneInfo(EVENT_TZ_NAME)
+    except Exception:  # noqa: BLE001 - ZoneInfoNotFoundError + bad-type guard
+        logger.warning("EVENT_TZ=%r is not a known timezone; falling back to UTC",
+                       EVENT_TZ_NAME)
+        return timezone.utc
+
+
+def event_now() -> datetime:
+    """Now, in the event's local wall clock."""
+    return datetime.now(timezone.utc).astimezone(event_tz())
+
+
 def today_partition() -> str:
-    """Return today's date as Athena partition string YYYY-MM-DD."""
+    """Return the analyst's local 'today' as an Athena partition string.
+
+    This is the EVENT-LOCAL calendar date, not the UTC one. The partition column
+    itself is UTC-keyed, so a local day spans two dt values in the evening; use
+    local_day_partitions() / local_day_filter() when you need to cover the whole
+    local day rather than name it.
+    """
+    return event_now().strftime("%Y-%m-%d")
+
+
+def utc_today_partition() -> str:
+    """The UTC calendar date, for callers that genuinely mean the partition key."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def local_day_bounds(day_offset: int = 0) -> tuple[int, int]:
+    """Epoch bounds of an event-local calendar day (0 = today, -1 = yesterday).
+
+    Returns (start, end) where end is capped at now for the current day, so
+    "today" is [local midnight, now] rather than a window running into the future.
+    """
+    now_utc = datetime.now(timezone.utc)
+    local = now_utc.astimezone(event_tz()) + timedelta(days=day_offset)
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    end_utc = min(end.astimezone(timezone.utc), now_utc) if day_offset >= 0 \
+        else end.astimezone(timezone.utc)
+    return int(start.astimezone(timezone.utc).timestamp()), int(end_utc.timestamp())
+
+
+def local_day_partitions(day_offset: int = 0) -> list[str]:
+    """The dt partitions an event-local day touches (1 or 2, UTC-keyed)."""
+    start, end = local_day_bounds(day_offset)
+    s = datetime.fromtimestamp(start, timezone.utc)
+    e = datetime.fromtimestamp(end, timezone.utc)
+    days = {s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")}
+    return sorted(days)
+
+
+def local_day_filter(day_offset: int = 0) -> str:
+    """SQL fragment for a whole event-local calendar day.
+
+    Partition prune plus explicit ts bounds, because the prune alone is
+    whole-UTC-day granularity and would pull in the wrong end of both days.
+    """
+    parts = local_day_partitions(day_offset)
+    start, end = local_day_bounds(day_offset)
+    prune = f"dt = '{parts[0]}'" if len(parts) == 1 \
+        else f"dt IN ({', '.join(repr(d) for d in parts)})"
+    return f"{prune} AND ts >= {start} AND ts <= {end}"
 
 
 def date_partitions(hours: int = 24) -> list[str]:
@@ -257,10 +343,14 @@ def date_partitions(hours: int = 24) -> list[str]:
     intermediate day is missed. The start day is derived from the real boundary
     rather than ceil(hours/24) days back, which previously over-generated a
     trailing extra partition (e.g. hours=1 near mid-day still emitted yesterday).
+
+    hours <= 0 means "the current day", which is the analyst's LOCAL day, and that
+    straddles two UTC partitions for most of a Vegas evening. A rolling window
+    (hours > 0) needs no timezone handling: it is anchored to now either way.
     """
     now = datetime.now(timezone.utc)
     if hours <= 0:
-        return [now.strftime("%Y-%m-%d")]
+        return local_day_partitions()
     start = now - timedelta(hours=hours)
     dates: set[str] = {now.strftime("%Y-%m-%d")}
     cur = start
@@ -284,14 +374,17 @@ def date_filter(hours: int = 24) -> str:
     seeds today's 00:00-03:00 block, which is in the future when queried at 01:00, so a
     lower-only bound double-counted it against yesterday's copy). ts is epoch seconds
     (double) in every table.
+
+    hours <= 0 means the analyst's local calendar day, which needs its own ts bounds
+    (local midnight to now) because the partition prune spans two UTC days.
     """
+    if hours <= 0:
+        return f"({local_day_filter()})"
     parts = date_partitions(hours)
     if len(parts) == 1:
         part_clause = f"dt = '{parts[0]}'"
     else:
         part_clause = f"dt IN ({', '.join(repr(d) for d in parts)})"
-    if hours <= 0:
-        return part_clause
     now = datetime.now(timezone.utc)
     epoch_start = (now - timedelta(hours=hours)).timestamp()
     epoch_end = now.timestamp()

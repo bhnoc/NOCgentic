@@ -122,6 +122,25 @@ def test_compose_agents_env_parity():
         assert req in deter_envs, f"deter service in docker-compose.agents.yml missing {req}"
 
 
+def test_every_athena_service_gets_the_event_timezone():
+    """EVENT_TZ must reach every container that resolves "today" against Athena.
+
+    Absent, athena_client falls back to UTC, which is the pre-fix behaviour: the dt
+    partition is a UTC calendar day, so from 17:00 local in Las Vegas a same-day
+    query covers only the hours since the UTC rollover. Measured on prod at 19:33
+    local: 778,187 alerts against a true 4,186,931. Nothing errors, no log line
+    fires, the number just looks plausible and small. A missing env var is the one
+    way to reintroduce that after the code fix, so pin it here.
+
+    The web-server is included because it renders the alert feed's day framing.
+    """
+    envs = _parse_compose_service_envs(ROOT / "docker-compose.agents.yml")
+    for svc in ("orchestrator", "athena-hunter", "alert-triage", "deter",
+                "thousandeyes-analyst", "web-server"):
+        assert "EVENT_TZ" in envs.get(svc, set()), (
+            f"{svc} in docker-compose.agents.yml missing EVENT_TZ")
+
+
 def test_deter_agent_is_not_published_to_the_host():
     """Every agent is expose-only; the deter agent especially so. A published
     port would let anyone reach the containment path directly and read back
