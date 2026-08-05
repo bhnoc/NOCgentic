@@ -39,11 +39,30 @@ The plumbing to REACH AQLight exists and defaults to its name, so it is availabl
 - Defaults are inert: with nothing set, every agent still uses Gemini. Setting the local
   vars is a deliberate opt-in.
 
-## Current default: HYBRID (AQLight SQL + Gemini prose)
+## Current default: the LANE RACE, not SQLGEN_PROVIDER
 
-As of 2026-07-30 the box runs **hybrid** and it is the recommended default:
-`LLM_PROVIDER=gemini` + `SQLGEN_PROVIDER=local`. Only athena-hunter's NL->SQL generation
-goes to AQLight; classify, answer synthesis, and alert-triage stay on Gemini.
+**As of 2026-08-04 the box runs `LANE_MODE=hybrid` + `LANE_SIDE_BY_SIDE=true` with
+`SQLGEN_PROVIDER` unset.** Every query runs two full lanes concurrently, cloud Gemini
+against local AQLight, and the UI shows the winner with a swap to the other. That is a
+strictly better version of what `SQLGEN_PROVIDER=local` bought: AQLight reaches SQL gen
+through `role="sqlgen"` on the local lane, and its answers are visible next to Gemini's
+instead of blended invisibly into one. See [`lane-race.md`](lane-race.md) and
+[`lane-mode.md`](lane-mode.md).
+
+**Do not set `SQLGEN_PROVIDER=local` while the race is on.** It was first disabled on
+2026-08-04 because llama-server ran `-c 8192` and could not hold `SQL_GEN_PROMPT` plus
+4096 output tokens, so every SQL gen 500d. That reason is now stale (the live unit runs
+`-c 32768`), but a second and worse one replaced it. `llm_complete` treats an explicit
+`provider=` as winning over the lane, so `SQLGEN_PROVIDER=local` reaches the **cloud**
+lane too: `provider="local"`, `model=GEMINI_MODEL` from the lane default, and no
+`base_url` override because `resolve_lane_base_url` returns None for the cloud lane. The
+request lands on the local llama-server, which ignores the model field, so both lanes
+would silently generate SQL on AQLight and the race would collapse into a prose-only
+comparison with nothing logged to say so.
+
+The three-way eval below predates lanes. It still describes the SQLGEN_PROVIDER hybrid
+accurately and is why the local lane is worth racing at all, but the "default" column is
+historical.
 
 **Clean three-way eval** (all three modes run back to back on ONE data seed with ONE Gemini
 judge session, so golden-drift + judge variance hit all three equally; trust the RANKING,
@@ -52,7 +71,7 @@ not the absolute levels, which are depressed by stale goldens):
 | mode | accuracy | relevance | speed |
 |------|----------|-----------|-------|
 | Gemini all | 98.8% | 0.693 | 11.7s |
-| **Hybrid (default)** | **98.0%** | **0.586** | 10.9s |
+| Hybrid (SQLGEN_PROVIDER=local) | 98.0% | 0.586 | 10.9s |
 | AQLight all | 94.0% | 0.411 | 9.1s |
 
 Ranking is unambiguous: **Gemini >= Hybrid > AQLight-all** on both accuracy and relevance.
@@ -67,8 +86,9 @@ Ranking is unambiguous: **Gemini >= Hybrid > AQLight-all** on both accuracy and 
   complete data, so even Gemini-the-synthesizer has less to work with. On targeted
   questions (alert-01, triage-01, hunt-04, bymac) hybrid matches or beats Gemini.
 
-Net: hybrid is the right default (near-Gemini accuracy, no hallucination, faster/cheaper
-SQL), with a known ceiling on exploratory hunts. Lifting it means a richer AQLight SQL-gen
+Net: hybrid beat both single-provider modes at the time (near-Gemini accuracy, no
+hallucination, faster/cheaper SQL), with a known ceiling on exploratory hunts. Lifting it
+means a richer AQLight SQL-gen
 prompt or more multi-query-hunt training data, not a provider change. AQLight generates
 correct SQL through the app's real 9KB prompt (the wrong-columns behavior only shows with a
 generic prompt).
@@ -82,14 +102,20 @@ generic prompt).
    sudo systemctl restart aqlight    # if it needs a bounce
    curl -sf http://127.0.0.1:8080/health   # {"status":"ok"}
    ```
-   Manual fallback (no service): `~/llama.cpp/build/bin/llama-server -m
-   ~/slm-athena/training/gguf/athena-v3-q4_k_m.gguf --host 0.0.0.0 --port 8080 -ngl 99
-   -c 8192 --alias AQLight &`. It MUST bind 0.0.0.0, not 127.0.0.1 (see Gotchas).
-2. **Enable hybrid** (the default): in `.env.s3` set `LLM_PROVIDER=gemini` and
-   `SQLGEN_PROVIDER=local`, then `docker compose ... up -d athena-hunter`. To turn hybrid
-   OFF and go pure-Gemini, unset `SQLGEN_PROVIDER` and recreate. Other modes:
-   - **Whole app local**: `LLM_PROVIDER=local` (all agents on AQLight). Air-gap / Gemini-key
-     capped only; synthesis quality drops (relevance 0.464, hallucinations).
+   The live unit as of 2026-08-04, worth matching if you launch by hand:
+   `llama-server -m ~/slm-athena/training/gguf/AQLight-v4-q4_k_m.gguf --host 0.0.0.0
+   --port 8080 -ngl 99 -c 32768 --parallel 2 --alias AQLight`. `--parallel 2` is what lets
+   the two racing lanes hit it without queueing behind each other, and `-c 32768` is the
+   window that holds `SQL_GEN_PROMPT` (about 7k tokens) plus 4096 of output. It MUST bind
+   0.0.0.0, not 127.0.0.1 (see Gotchas).
+2. **Enable the race** (the default): in `.env.s3` set `LLM_PROVIDER=gemini`,
+   `LANE_MODE=hybrid`, `LANE_SIDE_BY_SIDE=true`, leave `SQLGEN_PROVIDER` unset, then
+   `docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d orchestrator`.
+   Other modes:
+   - **Cloud only / local only**: `LANE_MODE=cloud` or `LANE_MODE=local`, or flip it at
+     runtime from the audit-monitor gear (process state, reverts on restart).
+   - **Whole app local**: `LLM_PROVIDER=local` (all agents on AQLight, no race). Air-gap /
+     Gemini-key capped only; synthesis quality drops (relevance 0.464, hallucinations).
    - **A/B a single query**: override provider per call (the `provider=`/`model=` args on
      `llm_complete`), useful for `bench/`.
 3. **Prompt note (matters):** AQLight was trained with a SHORT ~456-char system prompt, not
@@ -106,27 +132,34 @@ generic prompt).
 | `LOCAL_LLM_BASE_URL` | `http://host.docker.internal:8080/v1` | where AQLight's llama-server listens (host, via the bridge gateway) |
 | `LOCAL_LLM_MODEL` | `AQLight` | served model alias (llama-server `--alias AQLight`) |
 | `LOCAL_LLM_API_KEY` | `not-needed` | placeholder; llama.cpp ignores it |
-| `SQLGEN_PROVIDER` | (unset) | route ONLY NL->SQL gen here; `local` = hybrid (the default on the box). Unset = SQL gen uses `LLM_PROVIDER`. |
+| `SQLGEN_PROVIDER` | (unset) | route ONLY NL->SQL gen here. Leave unset: it wins over the lane and would send BOTH lanes' SQL gen local. |
 | `SQLGEN_MODEL` | (unset) | optional model override paired with `SQLGEN_PROVIDER` |
+| `LANE_MODE` | `hybrid` on the box | `hybrid` \| `cloud` \| `local`. This is the live setting; see [`lane-mode.md`](lane-mode.md). |
+| `LANE_SIDE_BY_SIDE` | `true` | show the losing lane and offer a swap. `false` races but reports one answer. |
 
-Related: **[`lane-race.md`](lane-race.md)**, which runs AQLight *against* Gemini
-concurrently and shows whichever finishes first, with a UI swap for the other. Where
-the hybrid above reroutes one step, that is a full second lane: AQLight runs the
-whole pipeline, prose included. Note that it measures slower than Gemini on the
-current T4 box, contrary to the throughput figures earlier in this doc.
+Related: **[`lane-race.md`](lane-race.md)**, which is how AQLight actually runs today: a
+full second lane against Gemini, prose included, whichever finishes first shown with a UI
+swap for the other. The `SQLGEN_PROVIDER` hybrid above rerouted one step instead, and the
+two do not compose. Note the local lane measures slower than Gemini on the current T4 box,
+contrary to the throughput figures earlier in this doc.
 
 Set these in `.env.s3` on the box (authoritative env), then
 `docker compose -f docker-compose.agents.yml --env-file .env.s3 up -d` the affected service.
 
 ## Gotchas
 
-- **Hybrid has NO fallback if AQLight is down.** With `SQLGEN_PROVIDER=local`, the SQL-gen
-  call goes only to AQLight (the local provider does not fall back to cloud, by design). If
-  `aqlight.service` is stopped/crashed, athena-hunter SQL gen ERRORS. That is why AQLight is
-  a systemd service with `Restart=always`. If athena-hunter starts failing on every query,
-  check `systemctl status aqlight` first, or unset `SQLGEN_PROVIDER` to fall back to Gemini
-  SQL gen. (Adding a code-level SQLGEN fallback-to-LLM_PROVIDER on connection error would be
-  a nice hardening; not built yet.)
+- **`SQLGEN_PROVIDER` is not compatible with the lane race.** An explicit `provider=` beats
+  the lane in `llm_complete`, so setting it local sends the cloud lane's SQL gen to the
+  local server as well, with `GEMINI_MODEL` as the model name and no base-URL override.
+  llama.cpp ignores the model field, so nothing errors: both lanes just generate SQL on
+  AQLight and the race quietly becomes a prose-only comparison. Leave it unset while
+  `LANE_MODE=hybrid`. The local lane already reaches AQLight for SQL through `role="sqlgen"`.
+- **Neither hybrid nor the local lane falls back if AQLight is down.** The local provider
+  does not fall back to cloud, by design. With `SQLGEN_PROVIDER=local` that meant every
+  athena-hunter SQL gen ERRORS; with the race it means the local lane loses and the cloud
+  lane answers, which is the better failure. Either way AQLight is a systemd service with
+  `Restart=always`. If the local lane goes permanently silent, check `systemctl status
+  aqlight` first.
 - **llama-server MUST bind 0.0.0.0, not 127.0.0.1.** `slm-athena/serve.sh` launches with
   `--host 127.0.0.1`, which only accepts loopback connections. The app containers reach the
   model via `host.docker.internal` (the docker bridge gateway, a non-loopback address), so a

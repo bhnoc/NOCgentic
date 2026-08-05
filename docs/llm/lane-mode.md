@@ -30,6 +30,17 @@ LANE_MODE unset or a typo      -> LANE_RACE=off  -> cloud
 A typo falls through rather than failing. Bricking the box over a misspelled
 `hybird` in `.env.s3` would be a poor trade.
 
+The show box pins `LANE_MODE=hybrid` in `.env.s3` (2026-08-04) rather than leaning on
+compose's `LANE_RACE=auto`. Both produce a race today, but `auto` races only *if* a local
+endpoint happens to be configured, so losing `LOCAL_SQL_BASE_URL` would drop the box to a
+single cloud answer with nothing in the logs about it. Pinned, the same mistake shows up
+as `local_missing: true` in the gear.
+
+Do not pair this with `SQLGEN_PROVIDER=local`. An explicit `provider=` beats the lane in
+`llm_complete`, so it sends the cloud lane's SQL gen to the local server too and the race
+collapses to a prose-only comparison, silently. See
+[`AQLight-integration.md`](AQLight-integration.md).
+
 ### Derived cloud is not the same as chosen cloud
 
 An *inherited* cloud mode (from `LANE_RACE=off`) does not pin a lane: calls go to the

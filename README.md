@@ -145,7 +145,8 @@ the analyst reads, and the answer bubble grows a `⇄` button for the other one.
 
 `LANE_RACE=auto` (the default) races only when a local endpoint is configured, so
 the same image runs single-lane on a box with no GPU instead of firing off calls it
-knows will fail.
+knows will fail. The show box goes further and pins `LANE_MODE=hybrid`, so a lost
+local endpoint reads as a warning in the gear rather than a quiet drop to one lane.
 
 Both lanes run the full pipeline, which means **a raced query scans Athena twice**.
 Set `LANE_RACE=off` if that costs more than the comparison is worth.
@@ -254,7 +255,7 @@ docker compose -f docker-compose.agents.yml up -d --build
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite-preview` | LLM model (swap via env, no code change) |
 | `LLM_PROVIDER` | `gemini` | or `openrouter` |
 | `LANE_RACE` | `auto` | race cloud vs local: `auto` (only if a local endpoint is set) \| `on` \| `off` |
-| `LANE_MODE` | *(empty)* | `hybrid` \| `cloud` \| `local`; overrides `LANE_RACE`. Empty derives from it. |
+| `LANE_MODE` | *(empty)*, `hybrid` on the box | `hybrid` \| `cloud` \| `local`; overrides `LANE_RACE`. Empty derives from it. |
 | `LANE_SIDE_BY_SIDE` | `true` | show the losing lane and the swap. `false` still races, just hides it. |
 | `MODEL_SUPERVISOR_URL` | *(empty)* | host model supervisor. Empty = model panel is read-only. |
 | `MODEL_SUPERVISOR_TOKEN` | *(empty)* | shared secret with the host supervisor unit |
