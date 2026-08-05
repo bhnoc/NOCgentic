@@ -21,6 +21,50 @@
     return SOURCE_LABELS[String(source || '').toLowerCase()] || source || '';
   }
 
+  // A YARA hit's alert_detail embeds "sha256=<64 hex chars>" straight into the
+  // description (lambda/derived_views.py ALERT_SOURCES). At 64 chars with no
+  // wrap, a card either overflows sideways or forces horizontal scroll on the
+  // whole sidebar. Truncate any long hex run for DISPLAY only, with a copy
+  // button carrying the full value, so the analyst can still get the exact
+  // string without the card layout breaking.
+  const LONG_HASH_RE = /\b([0-9a-fA-F]{20,64})\b/g;
+
+  /** Card description with long hashes replaced by a truncated span + copy
+   *  button. Returns HTML — description text itself is escaped first. */
+  function renderCardDescription(description) {
+    const escaped = escHtml(description || '');
+    return escaped.replace(LONG_HASH_RE, (full) => {
+      const short = full.slice(0, 8) + '…' + full.slice(-6);
+      return `<span class="hash-chip">${short}` +
+        `<button type="button" class="hash-copy-btn" data-copy="${full}" ` +
+        `title="Copy full hash" aria-label="Copy full hash">⧉</button></span>`;
+    });
+  }
+
+  /** Copy-to-clipboard for anything rendered by renderCardDescription /
+   *  renderAlertDetail. Delegated: cards and the popup body are both
+   *  re-rendered via innerHTML, so a bound per-button listener would be
+   *  discarded on every re-render.
+   *
+   *  CAPTURE phase, not bubble: the alert card's own click-to-open listener
+   *  is bound directly on the card (bubble phase). A document-level bubble
+   *  listener fires AFTER the card's, since document is the outermost
+   *  ancestor — by then stopPropagation() is too late and the popup opens
+   *  anyway. Capture runs top-down, so this sees the click before the card
+   *  does. */
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest && ev.target.closest('.hash-copy-btn');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation(); // do not also trigger the card's own click-to-open
+    const value = btn.getAttribute('data-copy') || '';
+    navigator.clipboard?.writeText(value).then(() => {
+      const original = btn.textContent;
+      btn.textContent = '✓';
+      setTimeout(() => { btn.textContent = original; }, 1200);
+    }).catch(() => {});
+  }, true);
+
   // ========== WebSocket ==========
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -87,7 +131,7 @@
           <span class="sev-badge ${sevClass}">${escHtml(sev)}</span>
           <span class="alert-time">${timeStr}</span>
         </div>
-        <div class="alert-desc">${escHtml(a.description)}</div>
+        <div class="alert-desc">${renderCardDescription(a.description)}</div>
         <div class="alert-src">${escHtml(sourceLabel(a.source))}${a.srcIp?' // '+escHtml(a.srcIp):''}</div>
       `;
 
@@ -237,7 +281,7 @@
         <span class="sev-badge ${sevClass}">${escHtml(sev)}</span>
         <span class="alert-detail-time">${escHtml(when)}</span>
       </div>
-      <div class="alert-detail-desc">${escHtml(a.description || '')}</div>
+      <div class="alert-detail-desc">${renderCardDescription(a.description || '')}</div>
       <dl class="alert-detail-grid">${grid}</dl>
       ${hintRow}
       <button type="button" class="alert-triage-btn">Triage</button>
@@ -613,20 +657,12 @@
         const job = await resp.json();
         if (job.hints && job.hints.length > 0) {
           clearInterval(hintTimer);
-          const container = document.getElementById(`hints-${jobId}`);
-          if (container) {
-            // No "Next Steps" label: the answer above already has its own
-            // '## Next Steps' section for agents that emit one, so a second
-            // "Next Steps" heading right below it read as duplicated. The
-            // buttons alone are self-explanatory as follow-up questions.
-            container.innerHTML = `${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
-            container.querySelectorAll('.hint-chip').forEach(chip => {
-              chip.addEventListener('click', () => {
-                const q = chip.getAttribute('data-hint');
-                if (q) { document.getElementById('query-input').value = q; document.getElementById('query-input').focus(); sendQuery(); }
-              });
-            });
-          }
+          const st = laneState.get(jobId);
+          if (st) st.hintChipsHtml = job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('');
+          // Re-render through the shared helper so the chips land alongside
+          // this lane's own recommended-action bullets in the ONE Next Steps
+          // section, rather than a second one appearing here.
+          refreshHints(jobId);
         }
       } catch (_) {}
     }, 2000);
@@ -645,7 +681,7 @@
    *  Confidence moves to the lane bar (top-right, left of the model label) —
    *  see renderLaneBar — so it isn't duplicated here. */
   function renderLaneBody(src, agentKey) {
-    const answerHtml = formatAnswer(src.answer || '');
+    const answer = formatAnswer(src.answer || '');
     let metricsHtml = '';
     const m = src.data?.llm_metrics;
     if (m) {
@@ -665,7 +701,25 @@
     } else if (src.data) {
       dataHtml = renderDataTabs(src.data);
     }
-    return `${answerHtml}${metricsHtml}${dataHtml}`;
+    return { html: `${answer.html}${metricsHtml}${dataHtml}`, nextStepItems: answer.nextStepItems };
+  }
+
+  /** The one Next Steps section for a message: recommended-action bullets
+   *  (pulled out of the answer's own '## Next Steps', read-only — they
+   *  describe things to do in OTHER tools, not queries this chat can run)
+   *  followed by the follow-up-question buttons (clickable, arrive async via
+   *  pollForHints). Two different kinds of item, one section, never two
+   *  separate "Next Steps" headings on the same message. */
+  function renderNextStepsSection(actionItems, hintChipsHtml) {
+    if ((!actionItems || actionItems.length === 0) && !hintChipsHtml) return '';
+    const actionsHtml = actionItems && actionItems.length
+      ? `<ul class="next-step-actions">${actionItems.map(a => `<li>${formatInline(escHtml(a))}</li>`).join('')}</ul>`
+      : '';
+    return (
+      `<div class="hints-label">Next Steps</div>` +
+      actionsHtml +
+      hintChipsHtml
+    );
   }
 
   /** Confidence pill for the lane bar: color-coded, no label — the position
@@ -760,16 +814,19 @@
       `<span class="lane-timing">${secs(active.elapsedMs)}` +
       (winner && !isWinner ? ` <span class="lane-delta">+${secs(active.elapsedMs - winner.elapsedMs)}</span>` : '') +
       `</span>` +
-      confHtml +
       `<button class="lane-swap" type="button" data-lane-key="${escHtml(laneKey)}" ` +
       `title="Show the answer from ${escHtml(other.label)}" ` +
       `aria-label="Show the answer from ${escHtml(other.label)}">` +
       `<span class="lane-swap-icon" aria-hidden="true">⇄</span>` +
-      `<span class="lane-swap-label">${escHtml(other.label)}</span></button>`
+      `<span class="lane-swap-label">${escHtml(other.label)}</span></button>` +
+      confHtml
     );
   }
 
-  /** Swap the displayed lane in place, without refetching or re-rendering hints. */
+  /** Swap the displayed lane in place. The hint-CHIP buttons are shared
+   *  across lanes (one hints-generation call keyed on the job, not the
+   *  lane), but the recommended-action bullets come from THIS lane's own
+   *  answer, so they have to be re-rendered on every swap too. */
   function swapLane(laneKey) {
     const st = laneState.get(laneKey);
     if (!st || st.lanes.length < 2) return;
@@ -779,12 +836,30 @@
     st.confidence = next.confidence;
     const body = document.getElementById(`lanebody-${laneKey}`);
     if (body) {
-      body.innerHTML = renderLaneBody(
+      const rendered = renderLaneBody(
         { answer: next.answer, confidence: next.confidence, data: next.data },
         st.agentKey,
       );
+      body.innerHTML = rendered.html;
+      st.actionItems = rendered.nextStepItems;
     }
     refreshLaneBar(laneKey);
+    refreshHints(laneKey);
+  }
+
+  /** Re-render the Next Steps section from current laneState — used after a
+   *  swap (action items change) and after pollForHints writes new chips in. */
+  function refreshHints(laneKey) {
+    const st = laneState.get(laneKey);
+    const el = document.getElementById(`hints-${laneKey}`);
+    if (!st || !el) return;
+    el.innerHTML = renderNextStepsSection(st.actionItems, st.hintChipsHtml || '');
+    el.querySelectorAll('.hint-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const q = chip.getAttribute('data-hint');
+        if (q) { document.getElementById('query-input').value = q; document.getElementById('query-input').focus(); sendQuery(); }
+      });
+    });
   }
 
   /** Re-render just the lane bar (after a swap, or when the second lane lands). */
@@ -840,6 +915,12 @@
     const agentKey = (job.agentUsed || 'direct').toLowerCase().replace(/\s+/g, '-');
     const agentLabel = { orchestrator:'ORCHESTRATOR', 'alert-triage':'ALERT TRIAGE', 'thousandeyes-analyst':'NET MONITOR', 'athena-hunter':'ATHENA SQL', direct:'DIRECT', 'direct-fallback':'DIRECT', system:'SYSTEM' }[agentKey] || (job.agentUsed||'AGENT').toUpperCase();
     const badgeClass = { orchestrator:'badge-orchestrator', 'alert-triage':'badge-alert-triage', 'thousandeyes-analyst':'badge-thousandeyes-analyst', 'athena-hunter':'badge-athena-hunter', direct:'badge-direct', 'direct-fallback':'badge-direct', system:'badge-error' }[agentKey] || 'badge-direct';
+    // The badge names the AGENT ("Alert Triage"); this names the underlying
+    // DATA the agent queried to answer — alert-triage and athena-hunter both
+    // read Corelight-derived Athena logs, thousandeyes-analyst reads the live
+    // ThousandEyes API directly. Distinct labels because "ALERT TRIAGE" alone
+    // doesn't say whose data backs the answer.
+    const dataSourceLabel = { 'alert-triage':'Corelight', 'athena-hunter':'Corelight', 'thousandeyes-analyst':'ThousandEyes' }[agentKey] || '';
 
     let bubbleContent = '';
     if (job.status === 'error') {
@@ -856,26 +937,30 @@
         racing: job.lanesRacing === true,
         confidence: job.confidence,
       });
-      const bodyHtml = renderLaneBody({
+      const st = laneState.get(laneKey);
+      const body = renderLaneBody({
         answer: job.answer, confidence: job.confidence, data: job.data,
       }, agentKey);
+      st.actionItems = body.nextStepItems;
       const hintsId = `hints-${laneKey}`;
-      let hintsInner = '';
-      // No "Next Steps" label — same reasoning as pollForHints below: the
-      // answer already carries its own '## Next Steps' section where the
-      // agent has one, so a second heading here just repeated it.
-      if (job.hints && job.hints.length > 0) {
-        hintsInner = `${job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')}`;
-      }
-      // The hints row sits OUTSIDE the swappable body on purpose: hints arrive
-      // asynchronously and are written into #hints-<id> by pollForHints. If they
-      // lived inside the lane body, swapping lanes after the hints landed would
-      // wipe them (and a swap before they land would be overwritten by them).
-      const hintsHtml = `<div class="hints-row" id="${hintsId}">${hintsInner}</div>`;
+      // Hint-chip buttons arrive asynchronously (pollForHints); the action
+      // bullets are already in hand from the answer. store the chips HTML on
+      // laneState so a later swap can re-render the FULL Next Steps section
+      // (this lane's actions + the shared chips) rather than losing one half.
+      st.hintChipsHtml = (job.hints && job.hints.length > 0)
+        ? job.hints.map(h => `<span class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</span>`).join('')
+        : '';
+      // The Next Steps section sits OUTSIDE the swappable body on purpose:
+      // hint chips arrive asynchronously and are written into #hints-<id> by
+      // pollForHints. If it lived inside the lane body, swapping lanes after
+      // the chips landed would wipe them (and a swap before they land would
+      // be overwritten by them).
+      const hintsHtml = `<div class="hints-row" id="${hintsId}">` +
+        renderNextStepsSection(st.actionItems, st.hintChipsHtml) + `</div>`;
       bubbleContent =
         `<div class="message-bubble">` +
         `<div class="lane-bar" id="lanebar-${laneKey}">${renderLaneBar(laneKey)}</div>` +
-        `<div class="lane-body" id="lanebody-${laneKey}">${bodyHtml}</div>` +
+        `<div class="lane-body" id="lanebody-${laneKey}">${body.html}</div>` +
         `${hintsHtml}</div>`;
     }
 
@@ -884,6 +969,7 @@
         <span class="agent-badge ${badgeClass}">${agentLabel}</span>
         ${timeNow()}
         ${job.completedAt ? '// ' + elapsed(job.createdAt, job.completedAt) : ''}
+        ${dataSourceLabel ? `<span class="data-source-label">${escHtml(dataSourceLabel)}</span>` : ''}
       </div>
       ${bubbleContent}
     `;
@@ -902,10 +988,11 @@
     scrollToBottom(msgs);
   }
 
-  // Headings that render as collapsible sections
-  const COLLAPSIBLE_HEADINGS = new Set([
-    'key entities', 'next steps', 'recommended next steps', 'recommended actions', 'evidence',
-  ]);
+  // Headings that render as collapsible sections. Next-Steps-shaped headings
+  // are NOT here — NEXT_STEPS_HEADINGS intercepts those earlier and moves
+  // them into the one unified Next Steps section at the bottom of the
+  // message (see renderSections / renderNextStepsSection).
+  const COLLAPSIBLE_HEADINGS = new Set(['key entities', 'evidence']);
 
   function formatInline(s) {
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -924,6 +1011,28 @@
     return s;
   }
 
+  // Headings whose body is a "Next Steps"-shaped list of recommended actions
+  // (see agents/*/main.py prompts: "Numbered imperatives" / "Recommended
+  // Actions"). Pulled OUT of the normal section flow and merged into the one
+  // Next Steps block at the bottom of the message (see appendAgentMessage),
+  // alongside the follow-up-question buttons — the two used to render as two
+  // separate "Next Steps" on the same message: this text (read-only bullets,
+  // things to do in OTHER tools, e.g. "Block 1.2.3.4") and a button row below
+  // (clickable follow-up QUESTIONS for this chatbot). They are not
+  // interchangeable — an action bullet can't be "asked" as a query — so they
+  // sit in the same section as two different kinds of item, not merged into
+  // one list.
+  const NEXT_STEPS_HEADINGS = new Set(['next steps', 'recommended next steps', 'recommended actions']);
+
+  /** Pull list items (markdown `- x` / `1. x` bullets, or bare lines) out of
+   *  a Next-Steps-shaped section body into plain, unformatted strings. */
+  function extractListItems(rawBody) {
+    return rawBody
+      .split('\n')
+      .map(line => line.replace(/^[\s]*(?:[-*]|\d+\.)\s*/, '').trim())
+      .filter(Boolean);
+  }
+
   function renderSections(text) {
     // Split on ## headings so we can wrap select sections in <details>
     const sections = [];
@@ -939,7 +1048,12 @@
     sections.push({ heading: lastHeading, body: text.slice(lastEnd) });
 
     let out = '';
+    const nextStepItems = [];
     for (const sec of sections) {
+      if (sec.heading && NEXT_STEPS_HEADINGS.has(sec.heading.toLowerCase().trim())) {
+        nextStepItems.push(...extractListItems(sec.body));
+        continue;
+      }
       const body = formatInline(escHtml(sec.body.replace(/^\n+|\n+$/g, '')));
       if (!sec.heading) {
         if (body.trim()) out += body;
@@ -953,22 +1067,25 @@
         out += `<strong class="md-header">${safeHeading}</strong>${body}`;
       }
     }
-    return out;
+    return { html: out, nextStepItems };
   }
 
   function formatAnswer(text) {
-    if (!text) return '';
+    if (!text) return { html: '', nextStepItems: [] };
     const parts = text.split(/(```[\s\S]*?```)/g);
-    let out = '';
+    let html = '';
+    const nextStepItems = [];
     for (const part of parts) {
       if (part.startsWith('```')) {
         const inner = part.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
-        out += `<pre class="code-block">${escHtml(inner)}</pre>`;
+        html += `<pre class="code-block">${escHtml(inner)}</pre>`;
       } else {
-        out += renderSections(part);
+        const sec = renderSections(part);
+        html += sec.html;
+        nextStepItems.push(...sec.nextStepItems);
       }
     }
-    return out;
+    return { html, nextStepItems };
   }
 
   function renderThousandEyesData(data) {

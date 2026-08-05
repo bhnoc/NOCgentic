@@ -68,7 +68,10 @@ const ALERTS = `[
     timestamp:'2026-08-04T18:22:10.000Z' },
   { id:'t2', severity:'high', source:'corelight',
     description:'Port scan -- 1,247 SYN packets in 10s',
-    srcIp:'10.220.152.9', timestamp:'2026-08-04T18:20:00.000Z' }
+    srcIp:'10.220.152.9', timestamp:'2026-08-04T18:20:00.000Z' },
+  { id:'t3', severity:'high', source:'yara',
+    description:'YARA match -- file=payload.exe sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    srcIp:'10.220.152.11', timestamp:'2026-08-04T18:21:00.000Z' }
 ]`;
 // Evaluated as a JS literal, NOT JSON.parse'd: the fixture above uses unquoted keys
 // and single quotes, so JSON.parse threw SyntaxError on line 2 and the whole popup
@@ -81,7 +84,49 @@ const feed = await evaluate(`(() => ({
   clickable: document.querySelector('.alert-card[data-id="t1"]')?.getAttribute('role') || null,
   modalHidden: document.getElementById('alert-modal').hidden,
 }))()`);
-check('feed rendered both alerts', feed.cards === 2, 'cards=' + feed.cards);
+check('feed rendered all three alerts', feed.cards === 3, 'cards=' + feed.cards);
+
+// A 64-char sha256 in the description must not blow out the card — truncated
+// display span + copy button, not the raw hash forcing horizontal scroll.
+const hashCard = await evaluate(`(() => {
+  const card = document.querySelector('.alert-card[data-id="t3"]');
+  const chip = card ? card.querySelector('.hash-chip') : null;
+  const btn = card ? card.querySelector('.hash-copy-btn') : null;
+  return {
+    hasChip: !!chip,
+    chipText: chip ? chip.textContent.replace(/[⧉✓]/g, '').trim() : null,
+    fullHashNotInDom: card ? !card.innerHTML.includes('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</span>') : null,
+    hasCopyBtn: !!btn,
+    copyValue: btn ? btn.getAttribute('data-copy') : null,
+    cardScrollWidth: card ? card.scrollWidth : null,
+    cardClientWidth: card ? card.clientWidth : null,
+  };
+})()`);
+check('long hash renders as a truncated chip', hashCard.hasChip === true);
+check('the truncated chip text is shorter than the full hash', hashCard.chipText && hashCard.chipText.length < 30, hashCard.chipText);
+check('a copy button exists for the hash', hashCard.hasCopyBtn === true);
+check('the copy button carries the FULL hash value', hashCard.copyValue === 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', hashCard.copyValue);
+check('the card does not force horizontal scroll', hashCard.cardScrollWidth <= hashCard.cardClientWidth + 2,
+  JSON.stringify(hashCard));
+
+// Clicking the copy button must not also open the popup (event.stopPropagation).
+await evaluate(`document.querySelector('.alert-card[data-id="t3"] .hash-copy-btn').click()`);
+await sleep(100);
+const afterCopyClick = await evaluate(`(() => document.getElementById('alert-modal').hidden)()`);
+check('clicking the copy button does not open the alert popup', afterCopyClick === true);
+
+// The popup's own description must truncate the hash the same way.
+await evaluate(`document.querySelector('.alert-card[data-id="t3"]').click()`);
+await sleep(200);
+const popupHash = await evaluate(`(() => {
+  const body = document.getElementById('alert-modal-body');
+  const chip = body ? body.querySelector('.hash-chip') : null;
+  return { hasChip: !!chip, hasCopyBtn: !!(body && body.querySelector('.hash-copy-btn')) };
+})()`);
+check('the popup description also truncates the hash', popupHash.hasChip === true);
+check('the popup description also has a copy button', popupHash.hasCopyBtn === true);
+await evaluate(`document.getElementById('alert-modal-close').click()`);
+await sleep(200);
 check('cards announce themselves as clickable', feed.clickable === 'button', JSON.stringify(feed.clickable));
 check('popup starts hidden', feed.modalHidden === true);
 

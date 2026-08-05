@@ -337,6 +337,17 @@
       letter-spacing: 0.04em;
     }
 
+    /* Which vendor's data backs this answer (Corelight / ThousandEyes) —
+       distinct from the agent-badge, which names the AGENT, not the data.
+       Floats to the far right of the meta line via its own margin; nothing
+       else in the line moves. */
+    .data-source-label {
+      margin-left: auto;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      opacity: 0.8;
+    }
+
     .agent-badge {
       padding: 2px 8px;
       border-radius: 1px;
@@ -729,7 +740,28 @@
       font-size: 11px;
       color: var(--text-secondary);
       line-height: 1.4;
+      overflow-wrap: anywhere;
     }
+
+    /* Long hex hashes (YARA sha256 embedded in alert_detail) are truncated for
+       display and given a copy button rather than left to overflow the card
+       or force horizontal scroll on the sidebar. */
+    .hash-chip {
+      font-family: var(--font-mono);
+      white-space: nowrap;
+    }
+    .hash-copy-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 10px;
+      padding: 0 2px;
+      line-height: 1;
+      vertical-align: middle;
+    }
+    .hash-copy-btn:hover { color: var(--ice-400); }
+    .hash-copy-btn:focus-visible { outline: 1px solid var(--ice-400); outline-offset: 1px; }
 
     .alert-src {
       font-size: 9px;
@@ -989,6 +1021,33 @@
     }
     .hint-chip:hover { background: rgba(30,144,255,0.18); border-color: var(--ice); color: var(--ice); box-shadow: 0 0 8px rgba(30,144,255,0.2); }
     .hint-chip::before { content: '> '; color: var(--dim); }
+
+    /* Recommended-action bullets — read-only, from the answer's own '## Next
+       Steps'. Sits above the hint-chip buttons in the SAME Next Steps
+       section: these describe things to do in other tools (block an IP),
+       the chips below are clickable follow-up questions for this chat. */
+    .next-step-actions {
+      width: 100%;
+      list-style: none;
+      margin: 0 0 8px;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .next-step-actions li {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-secondary);
+      padding-left: 14px;
+      position: relative;
+    }
+    .next-step-actions li::before {
+      content: '▸';
+      position: absolute;
+      left: 0;
+      color: var(--ice-400);
+    }
 
     /* Syntax highlights in answers */
     .highlight-ip     { color: var(--accent-yellow); font-family: var(--font-mono); font-size: 0.9em; }

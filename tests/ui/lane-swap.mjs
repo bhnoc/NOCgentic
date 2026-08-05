@@ -111,9 +111,19 @@ check('swap button carries its lane key', !!afterSecondLane.swapKey, JSON.string
 check('bar names the other lane as the swap target', /Local \(AQLight/.test(afterSecondLane.barText || ''),
   JSON.stringify(afterSecondLane.barText));
 
-// Write a marker into the hints row to prove a swap does not wipe async content
-// that landed outside the swappable region.
-await evaluate(`document.querySelector('.hints-row').innerHTML = '<span class="hint-chip">HINTS-MARKER</span>'`);
+// Simulate the async follow-up-question chips having already landed for this
+// job (normally via pollForHints), by writing them into laneState directly —
+// a swap now legitimately RE-RENDERS the hints row (the recommended-action
+// bullets are per-lane and must update), so the invariant to prove is "the
+// shared hint-chip buttons survive that re-render", not "the row never
+// changes" (that assumption no longer holds now that it has per-lane content
+// too).
+await evaluate(`(() => {
+  const laneKey = document.querySelector('.lane-swap').getAttribute('data-lane-key');
+  const st = laneState.get(laneKey);
+  st.hintChipsHtml = '<span class="hint-chip" data-hint="HINTS-MARKER">HINTS-MARKER</span>';
+  refreshHints(laneKey);
+})()`);
 
 // Real click through the delegated listener, not a direct swapLane() call.
 await evaluate(`document.querySelector('.lane-swap').click()`);
@@ -142,7 +152,7 @@ check('no FASTEST badge on the slower lane', afterSwap.fastestBadges === 0,
   'badges=' + afterSwap.fastestBadges);
 check('slower lane shows a +delta', afterSwap.deltas.length === 1 && /^\+2\.2s$/.test(afterSwap.deltas[0]),
   JSON.stringify(afterSwap.deltas));
-check('hints row survived the swap', afterSwap.hintsText === 'HINTS-MARKER', JSON.stringify(afterSwap.hintsText));
+check('hints row survived the swap', afterSwap.hintsText === 'Next StepsHINTS-MARKER', JSON.stringify(afterSwap.hintsText));
 check('swap button still present after re-render', afterSwap.swapButtons === 1);
 
 // Swap back: the delegated listener must survive the bar being replaced.
@@ -156,7 +166,7 @@ const afterSwapBack = await evaluate(`(() => ({
 check('swapping back returns to the fastest lane', /CLOUD LANE/.test(afterSwapBack.bodyText),
   JSON.stringify(afterSwapBack.bodyText));
 check('FASTEST badge back on the winner', afterSwapBack.fastestBadges === 1);
-check('hints row still intact after two swaps', afterSwapBack.hintsText === 'HINTS-MARKER',
+check('hints row still intact after two swaps', afterSwapBack.hintsText === 'Next StepsHINTS-MARKER',
   JSON.stringify(afterSwapBack.hintsText));
 
 // A single-lane box must render exactly as it did before this feature: no bar,
@@ -251,9 +261,10 @@ check('expanding View SQL shows the actual statement', rawSection.preHasSql === 
 check('the SQL block wraps instead of scrolling sideways', rawSection.preOverflowX === 'hidden' && rawSection.preWhiteSpace === 'pre-wrap', JSON.stringify(rawSection));
 
 // Confidence pill: floats to the FAR RIGHT via its own margin — everything
-// else in the bar (model label, FASTEST badge, timing) stays exactly where it
-// sat before the pill existed, on the left. On a raced bar the pill lands
-// immediately left of the swap button, which is the right-most element.
+// else in the bar (model label, FASTEST badge, timing, swap button) stays
+// exactly where it always sat, on the left. The pill is the absolute
+// right-most element, after the swap button, not squeezed between it and
+// the label.
 const pillAlignment = await evaluate(`(() => {
   const bars = [...document.querySelectorAll('.lane-bar')];
   const bareBar = bars.find(b => b.querySelector('.confidence-pill') && !b.querySelector('.lane-current') && !b.querySelector('.lane-swap'));
@@ -274,14 +285,16 @@ const pillAlignment = await evaluate(`(() => {
     pillNearRightEdge: (bareBarRect.right - barePillRect.right) < 40,
     // Model label untouched: still the left-most element in the bar.
     labelStillOnTheLeft: racedLabelRect.left <= racedPillRect.left,
-    // Pill sits between the label and the swap button, immediately left of
-    // the swap button — not swapped with the label, not stranded elsewhere.
-    pillBetweenLabelAndSwap: racedLabelRect.right <= racedPillRect.left && racedPillRect.right <= racedSwapRect.left + 2,
+    // Swap button stays put too — the pill goes AFTER it, not between it
+    // and the label.
+    swapStaysLeftOfPill: racedSwapRect.right <= racedPillRect.left + 2,
+    swapStillLeftOfLabelEnd: racedLabelRect.right <= racedSwapRect.left,
   };
 })()`);
 check('confidence pill anchors to the right edge of the lane bar', pillAlignment.ok && pillAlignment.pillNearRightEdge, JSON.stringify(pillAlignment));
 check('model label stays on the left, unmoved by the pill', pillAlignment.ok && pillAlignment.labelStillOnTheLeft, JSON.stringify(pillAlignment));
-check('confidence pill sits between the model label and the swap button', pillAlignment.ok && pillAlignment.pillBetweenLabelAndSwap, JSON.stringify(pillAlignment));
+check('swap button stays in its original spot, left of the pill', pillAlignment.ok && pillAlignment.swapStaysLeftOfPill, JSON.stringify(pillAlignment));
+check('confidence pill is the absolute right-most element, after the swap button', pillAlignment.ok && pillAlignment.swapStillLeftOfLabelEnd, JSON.stringify(pillAlignment));
 
 // Logo click: ends the investigation, not just a view switch. Several jobs
 // have been sent by this point in the run, so there IS a transcript and
@@ -317,6 +330,80 @@ const afterResetQuery = await evaluate(`(() => ({
   text: document.querySelector('.message.agent:last-child')?.textContent.replace(/\\s+/g, ' ').trim() || '',
 }))()`);
 check('sending a query after reset still works', /stub answer for/.test(afterResetQuery.text), afterResetQuery.text);
+
+// One Next Steps section, not two: the answer's own '## Next Steps'
+// (recommended-action bullets) and the async follow-up-question hint chips
+// must merge into a single section — never a heading inside the answer body
+// AND a second "Next Steps" label below it.
+await evaluate(`(() => {
+  document.getElementById('query-input').value = 'next steps merge check';
+  sendQuery();
+})()`);
+await sleep(2200);
+const beforeChips = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('.message.agent')];
+  const last = bubbles[bubbles.length - 1];
+  return {
+    nextStepsHeadingCount: [...last.querySelectorAll('.hints-label, .md-header')]
+      .filter(el => el.textContent.trim().toLowerCase() === 'next steps').length,
+    hasActionBullets: !!last.querySelector('.next-step-actions'),
+    actionText: last.querySelector('.next-step-actions')?.textContent || '',
+    hasChipsYet: last.querySelectorAll('.hint-chip').length > 0,
+    // The inline '## Next Steps' heading must NOT also render as its own
+    // answer-body header/collapsible — it was extracted, not duplicated.
+    answerBodyHasNextStepsHeader: [...last.querySelectorAll('.lane-body .md-header')]
+      .some(el => el.textContent.trim().toLowerCase() === 'next steps'),
+  };
+})()`);
+check('exactly one "Next Steps" heading on the message', beforeChips.nextStepsHeadingCount === 1, JSON.stringify(beforeChips));
+check('recommended-action bullets are rendered', beforeChips.hasActionBullets === true);
+check('action bullets carry the real recommended actions', beforeChips.actionText.includes('Block 45.83.193.150') && beforeChips.actionText.includes('Cdemo001'), beforeChips.actionText);
+check('the inline Next Steps heading does not ALSO render inside the answer body', beforeChips.answerBodyHasNextStepsHeader === false);
+
+// Hint chips land a moment later via polling — must join the SAME section,
+// not spawn a second "Next Steps" heading.
+await sleep(2500);
+const afterChips = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('.message.agent')];
+  const last = bubbles[bubbles.length - 1];
+  return {
+    nextStepsHeadingCount: [...last.querySelectorAll('.hints-label, .md-header')]
+      .filter(el => el.textContent.trim().toLowerCase() === 'next steps').length,
+    hasActionBullets: !!last.querySelector('.next-step-actions'),
+    chipCount: last.querySelectorAll('.hint-chip').length,
+    actionsAndChipsInSameSection: !!last.querySelector('.hints-row .next-step-actions') &&
+      !!last.querySelector('.hints-row .hint-chip'),
+  };
+})()`);
+check('still exactly one "Next Steps" heading after chips land', afterChips.nextStepsHeadingCount === 1, JSON.stringify(afterChips));
+check('action bullets survived the chips landing', afterChips.hasActionBullets === true);
+check('hint chips landed', afterChips.chipCount === 2, JSON.stringify(afterChips));
+check('bullets and chips share the same Next Steps section', afterChips.actionsAndChipsInSameSection === true, JSON.stringify(afterChips));
+
+// Data-source label: names the underlying vendor data (Corelight), distinct
+// from the agent badge (Alert Triage), far right on the message-meta line.
+const dataSource = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('.message.agent')];
+  const last = bubbles[bubbles.length - 1];
+  const meta = last.querySelector('.message-meta');
+  const label = meta ? meta.querySelector('.data-source-label') : null;
+  const badge = meta ? meta.querySelector('.agent-badge') : null;
+  if (!meta || !label || !badge) return { ok: false };
+  const metaRect = meta.getBoundingClientRect();
+  const labelRect = label.getBoundingClientRect();
+  const badgeRect = badge.getBoundingClientRect();
+  return {
+    ok: true,
+    text: label.textContent.trim(),
+    badgeText: badge.textContent.trim(),
+    isFarRight: (metaRect.right - labelRect.right) < 20,
+    afterBadge: badgeRect.right <= labelRect.left,
+  };
+})()`);
+check('data-source label shows the vendor (Corelight), not the agent name', dataSource.ok && dataSource.text === 'Corelight', JSON.stringify(dataSource));
+check('data-source label is distinct from the agent badge', dataSource.ok && dataSource.badgeText !== dataSource.text, JSON.stringify(dataSource));
+check('data-source label sits far right on the meta line', dataSource.ok && dataSource.isFarRight, JSON.stringify(dataSource));
+check('data-source label sits after the agent badge', dataSource.ok && dataSource.afterBadge, JSON.stringify(dataSource));
 
 check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
 

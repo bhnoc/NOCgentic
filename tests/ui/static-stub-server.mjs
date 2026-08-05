@@ -15,6 +15,7 @@ const received = [];
 const LANE_TRIGGER = 'lane race';
 const CONFIDENCE_TRIGGER = 'confidence pill check';
 const QUERY_TABS_TRIGGER = 'query tabs check';
+const NEXT_STEPS_TRIGGER = 'next steps merge check';
 const laneOf = (name, over = {}) => ({
   lane: name,
   label: name === 'cloud' ? 'Cloud (Gemini)' : 'Local (AQLight)',
@@ -29,6 +30,7 @@ const laneOf = (name, over = {}) => ({
   ...over,
 });
 const lanePolls = new Map();
+const hintPolls = new Map();
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -78,6 +80,20 @@ const server = createServer(async (req, res) => {
           total_rows: 2,
         },
       });
+    } else if (String(query || '').toLowerCase().includes(NEXT_STEPS_TRIGGER)) {
+      // The answer carries its OWN '## Next Steps' (recommended-action
+      // bullets, e.g. from alert-triage's prompt) with no hints yet — the
+      // follow-up-question hint chips land later via the hints polling loop.
+      // Both must end up in ONE Next Steps section, not two.
+      jobs.set(jobId, {
+        jobId, status: 'done', agentUsed: 'alert-triage', hints: [],
+        answer: '## Answer\n7 alerts across 1204 flows.\n\n' +
+          '## Next Steps\n' +
+          '1. Block 45.83.193.150 at the perimeter.\n' +
+          '2. Pivot on uid=Cdemo001 across other log sources.\n',
+        confidence: 0.81,
+      });
+      hintPolls.set(jobId, 0);
     } else {
       jobs.set(jobId, { jobId, status: 'done', answer: 'stub answer for: ' + query, agentUsed: 'stub', hints: [] });
     }
@@ -96,6 +112,16 @@ const server = createServer(async (req, res) => {
       if (seen >= 2) {
         job.lanes = [laneOf('cloud'), laneOf('local')];
         job.lanesRacing = false;
+      }
+    }
+    if (job && hintPolls.has(jobId)) {
+      const seen = hintPolls.get(jobId) + 1;
+      hintPolls.set(jobId, seen);
+      if (seen >= 2) {
+        job.hints = [
+          'What other hosts connected to 45.83.193.150 in the last 24 hours?',
+          'Has this host triggered any other alerts today?',
+        ];
       }
     }
     res.writeHead(job ? 200 : 404, { 'content-type': 'application/json' });
