@@ -1650,9 +1650,17 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
         dt = date_filter(hours)
         # Exclude noisy ET INFO signatures — they're informational, not
         # actionable, and flood the feed with duplicates. Same reasoning drops
-        # 'informational' severity outright (Suricata sev 4, 83% of live rows)
-        # and the self-signed-cert notice, which alone was 476 of 500 sampled
-        # notice rows — real signal buried under a re-used demo cert.
+        # 'informational' severity outright (Suricata sev 4, 83% of live rows).
+        #
+        # SSL::Invalid_Server_Cert is excluded by NAME, not by detail-text
+        # pattern-matching. A first pass matched only "self signed", a second
+        # added "self-signed" for the hyphenated live wording, and the very next
+        # live pull was still 8 of 9 alerts under this same note — this time
+        # "unable to get local issuer certificate" (an incomplete cert chain,
+        # common on captive/guest WiFi). Every validation-failure reason under
+        # this one note is the same noise on this network: chasing wording
+        # variants one string at a time is a losing game against Zeek's actual
+        # error-message space. Drop the whole note.
         sql = f"""
         SELECT
             alert_name,
@@ -1673,9 +1681,7 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
           AND UPPER(alert_name) NOT LIKE 'ET INFO%'
           AND UPPER(alert_name) NOT LIKE 'ETPRO INFO%'
           AND severity <> 'informational'
-          AND NOT (alert_name = 'SSL::Invalid_Server_Cert'
-                    AND (LOWER(alert_detail) LIKE '%self signed%'
-                         OR LOWER(alert_detail) LIKE '%self-signed%'))
+          AND alert_name <> 'SSL::Invalid_Server_Cert'
         GROUP BY alert_name, alert_type, severity, orig_h
         ORDER BY MAX(ts) DESC
         LIMIT {limit}

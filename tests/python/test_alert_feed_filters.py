@@ -1,10 +1,16 @@
-"""Gate for the /alerts/recent scope, severity, and self-signed-cert filters.
+"""Gate for the /alerts/recent scope, severity, and SSL::Invalid_Server_Cert
+exclusion filters.
 
 Three requirements the live feed needs beyond the existing ET-INFO exclusion:
   * only alerts touching a conference subnet belong in a Black Hat NOC feed
   * 'informational' severity (83% of live Suricata rows) is noise, not signal
-  * the SSL::Invalid_Server_Cert self-signed-cert notice was 476 of 500 sampled
-    notice rows on this event's own re-used demo cert — pure noise, not a find
+  * SSL::Invalid_Server_Cert is dropped by NAME, not by detail-text pattern.
+    Two prior passes matched specific wordings ("self signed", "self-signed")
+    and both were bypassed by the next live pull under a different
+    validation-failure reason ("unable to get local issuer certificate", 8 of
+    9 live alerts). Every reason under this one note is the same captive-WiFi
+    cert-chain noise; matching by name instead of message text is what
+    actually closes the gap.
 
 This imports the REAL SQL text and the REAL row filter rather than
 reimplementing them, so a regression in either is actually caught.
@@ -69,41 +75,34 @@ class TestFeedSqlExclusions:
     _athena_row_to_alert ever runs), so the gate is on the query string itself."""
 
     def _sql(self, hunter):
+        """The SQL f-string literal only — not the surrounding function source,
+        so a comment mentioning old wording doesn't false-positive a check for
+        what the query text actually excludes."""
         import inspect
 
-        return inspect.getsource(hunter.alerts_recent)
+        src = inspect.getsource(hunter.alerts_recent)
+        start = src.index('sql = f"""')
+        end = src.index('"""', start + len('sql = f"""'))
+        return src[start:end]
 
     def test_informational_severity_excluded(self, hunter):
         sql = self._sql(hunter)
         assert "severity <> 'informational'" in sql
 
-    def test_self_signed_cert_notice_excluded(self, hunter):
-        """The live message reads 'self-signed certificate in certificate
-        chain' (hyphenated) — a first pass only matched 'self signed' (space)
-        and 476-of-500 rows kept showing up. Both spellings must be covered."""
+    def test_invalid_server_cert_notice_excluded_by_name(self, hunter):
+        """Excluded by alert_name, not by matching wording in alert_detail —
+        two wording-based passes ('self signed', then also 'self-signed') were
+        each bypassed by yet another validation-failure reason string on the
+        very next live pull. Matching the note name closes that gap for good,
+        since the message text is Zeek/OpenSSL's, not ours to enumerate."""
         sql = self._sql(hunter)
-        assert "SSL::Invalid_Server_Cert" in sql
-        assert "self signed" in sql.lower()
-        assert "self-signed" in sql.lower()
+        assert "alert_name <> 'SSL::Invalid_Server_Cert'" in sql
+        # Regression: must not have regressed to detail-text matching.
+        assert "self signed" not in sql.lower()
+        assert "self-signed" not in sql.lower()
 
     def test_et_info_exclusion_still_present(self, hunter):
         """Regression: the new exclusions must not have replaced the old one."""
         sql = self._sql(hunter)
         assert "ET INFO%" in sql
         assert "ETPRO INFO%" in sql
-
-    def test_live_self_signed_message_matches_the_like_predicate(self, hunter):
-        """Exact regression: the reported live string still showed up (×70)
-        after the first pass, because it is hyphenated and that pass only
-        checked for a space. Reproduces the SQL LIKE predicate (both arms are
-        plain substring checks, no other wildcards) against that literal
-        string rather than re-deriving the fix's logic."""
-        sql = self._sql(hunter)
-        live_detail = (
-            "SSL certificate validation failed with "
-            "(self-signed certificate in certificate chain)"
-        )
-        assert "AND NOT (alert_name = 'SSL::Invalid_Server_Cert'" in sql
-        assert "self signed" in sql.lower()
-        assert "self-signed" in sql.lower()
-        assert "self-signed" in live_detail.lower()  # sanity: this IS the hyphenated form
