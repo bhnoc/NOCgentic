@@ -1164,6 +1164,30 @@ def _fallback_queries(query: str, iocs: dict[str, list[str]], today: str) -> lis
     return queries
 
 
+# Athena engine failures (COLUMN_NOT_FOUND, TABLE_NOT_FOUND) quote the fully
+# catalog-qualified name back, e.g. "...Table 'awsdatacatalog.blackhatnoc_glue.conn'
+# does not exist" or "Column 'id_orig_h' cannot be resolved". That raw string
+# used to go straight into the LLM's analysis context (see llm_analyze), so a
+# failed query could leak the Glue database/table names into the synthesized
+# answer, and from there into the orchestrator's hint generator, which just
+# echoes the answer text. Strip the catalog qualifier before the error is
+# recorded so nothing downstream ever sees the schema name.
+_RE_ENGINE_ERROR_CATALOG = re.compile(
+    rf"\bawsdatacatalog\.{re.escape(ATHENA_DATABASE)}\.", re.IGNORECASE,
+)
+# Bare database name can also appear without the catalog prefix depending on
+# the engine error shape; scrub it too rather than assuming one format.
+_RE_ENGINE_ERROR_DBNAME = re.compile(
+    rf"\b{re.escape(ATHENA_DATABASE)}\b", re.IGNORECASE,
+)
+
+
+def _scrub_engine_error(error: str) -> str:
+    """Drop the catalog/database qualifier from a raw Athena engine error."""
+    error = _RE_ENGINE_ERROR_CATALOG.sub("", error)
+    return _RE_ENGINE_ERROR_DBNAME.sub("the data lake", error)
+
+
 # ---------------------------------------------------------------------------
 # Athena data gathering
 # ---------------------------------------------------------------------------
@@ -1231,9 +1255,12 @@ async def gather_athena_context(
                     )
                     return {"sql": sql, "rows": rows, "meta": meta}
                 except Exception as exc:
+                    # Full, unscrubbed exception on the span/log for operators —
+                    # only the copy that reaches the LLM (and from there the
+                    # user-facing answer and hints) gets the schema name scrubbed.
                     qspan.set_attribute("error", str(exc))
                     logger.warning("Athena query %d failed: %s", i, exc)
-                    return {"sql": sql, "error": str(exc)}
+                    return {"sql": sql, "error": _scrub_engine_error(str(exc))}
 
         results = await asyncio.gather(*[_run_one(i, sql) for i, sql in enumerate(sql_queries)])
         for res in results:
@@ -1289,6 +1316,10 @@ SYSTEM_PROMPT = (
     "- Skip 'Based on', 'It appears', 'The data shows', 'I analyzed'.\n"
     "- Skip meta-commentary about SQL ('The first query...', 'returned 0 rows'). "
     "Speak about the ACTIVITY, not the queries.\n"
+    "- NEVER mention a database, table, schema, or catalog name (e.g. no "
+    "'blackhatnoc_glue', no 'run SHOW TABLES', no table/column identifiers). If a "
+    "query failed, say the lookup could not be completed — do not describe why in "
+    "database terms.\n"
     "- Cite specifics inline: IP, port, uid, signature, count. Copy exact IP strings "
     "verbatim — never abbreviate or drop digits.\n"
     "- No preamble, no recap of the question.\n\n"

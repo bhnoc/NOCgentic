@@ -782,6 +782,27 @@ def _strip_vendor_names(hints: list[str]) -> list[str]:
     return [h for h in hints if not _VENDOR_RE.search(h)]
 
 
+# Post-filter: drop hints that are schema/SQL introspection rather than a
+# domain follow-up. A failed Athena query's engine error (e.g. COLUMN_NOT_FOUND
+# quoting the catalog-qualified table name) can leak into the answer text this
+# function summarizes, and the hint LLM then paraphrases it into something like
+# "show tables in blackhatnoc_glue" instead of an investigation follow-up.
+_SCHEMA_NOISE_RE = re.compile(
+    r"\b("
+    r"show\s+tables|describe\s+table|information_schema|"
+    r"database\s+schema|glue\s+(?:catalog|database)|"
+    r"blackhatnoc_glue|"
+    r"sql\s+query|column_not_found|table_not_found"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_schema_noise(hints: list[str]) -> list[str]:
+    """Remove hints that talk about the schema/SQL instead of the investigation."""
+    return [h for h in hints if not _SCHEMA_NOISE_RE.search(h)]
+
+
 async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
     """Generate 5 follow-up investigation hints based on the query and answer."""
     try:
@@ -807,7 +828,8 @@ async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
         logger.info("Hints raw LLM response (%d chars): %s", len(raw), raw[:500])
         hints = _parse_hints(raw)
         hints = _strip_vendor_names(hints)
-        logger.info("Parsed %d hints (vendor-filtered): %s", len(hints), hints[:5])
+        hints = _strip_schema_noise(hints)
+        logger.info("Parsed %d hints (vendor/schema-filtered): %s", len(hints), hints[:5])
         if hints:
             return [h[:100] for h in hints[:5]]
         logger.warning("No hints survived after filtering: %s", raw[:300])
