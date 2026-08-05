@@ -71,3 +71,4 @@ qa/
 # disk for reading, never committed.
 guardrails-main/
 g.tgz
+qa/

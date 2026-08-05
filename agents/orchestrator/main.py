@@ -581,6 +581,10 @@ CLASSIFY_SYSTEM_PROMPT = (
     "emphasis is on performance; otherwise alert_triage.\n"
     "* 'Threat hunting', 'investigate IP X', 'top talkers', 'lateral movement', 'who connected "
     "to Y' → athena_hunter.\n"
+    "* 'Throughput', 'bandwidth', 'data volume', 'how much traffic' asking about REAL observed "
+    "conference traffic → athena_hunter (the conn table sums actual bytes per host/network). "
+    "thousandeyes_analyst only covers SYNTHETIC test health (uptime, response time, "
+    "availability of monitored external targets) — it has no aggregate throughput metric.\n"
     "* Ambiguous but security-related → athena_hunter.\n\n"
     "Respond with EXACTLY this JSON shape, no markdown, no prose:\n"
     '{"intent": "<alert_triage|thousandeyes_analyst|athena_hunter|refused>",\n'

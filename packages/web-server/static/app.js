@@ -474,6 +474,12 @@
     if (!query) return;
 
     const sendBtn = document.getElementById('send-btn');
+    // Gate here, not just in callers: sendQuery() previously only SET disabled,
+    // never CHECKED it first, so two calls landing in the same tick (before the
+    // first await yields) both passed through and each fired its own POST. This
+    // is the real backstop; submitQueryText()'s own check is what lets a caller
+    // fail fast without touching the input box first.
+    if (sendBtn.disabled) return;
     sendBtn.disabled = true;
 
     const banner = document.getElementById('welcome-banner');
@@ -893,7 +899,7 @@
     el.querySelectorAll('.hint-chip').forEach(chip => {
       chip.addEventListener('click', () => {
         const q = chip.getAttribute('data-hint');
-        if (q) { document.getElementById('query-input').value = q; document.getElementById('query-input').focus(); sendQuery(); }
+        if (q) submitQueryText(q);
       });
     });
   }
@@ -1014,15 +1020,17 @@
       ${bubbleContent}
     `;
     msgs.appendChild(div);
-    // Wire up hint chip clicks
+    // Wire up hint chip clicks — routed through submitQueryText() so these
+    // respect the same in-flight send lock as the welcome chips and the alert
+    // popup's "Hunt From Here" chips (see submitQueryText's docstring). Calling
+    // sendQuery() directly here let a burst of rapid hint-chip clicks (from this
+    // render AND from refreshHints()) each fire an unthrottled POST before the
+    // first one's disabled state ever reached the chip itself, since only the
+    // send button — not the chips — reflected "in flight".
     div.querySelectorAll('.hint-chip').forEach(chip => {
       chip.addEventListener('click', () => {
         const query = chip.getAttribute('data-hint');
-        if (query) {
-          document.getElementById('query-input').value = query;
-          document.getElementById('query-input').focus();
-          sendQuery();
-        }
+        if (query) submitQueryText(query);
       });
     });
     scrollToBottom(msgs);

@@ -834,7 +834,12 @@ SYSTEM_PROMPT = (
     # athena-hunter. Use <copy the uid from triage_data> so there is no shape to
     # imitate, only an instruction to follow.
     "Numbered imperatives: 'Block <orig_h from triage_data>', "
-    "'Pivot on uid=<copy the uid verbatim from triage_data>'.\n\n"
+    "'Pivot on uid=<copy the uid verbatim from triage_data>'.\n"
+    "If the VERDICT you stated in ## Answer is FALSE POSITIVE, or ## Risk states "
+    "low/no malicious impact, do NOT recommend 'Block' or any containment action — "
+    "the verdict and the recommendation must agree. Recommend monitoring, closing "
+    "the alert as benign, or no action, and say why. Reserve 'Block <orig_h>' for a "
+    "CONFIRMED verdict or a Risk line that states real malicious impact.\n\n"
     "End with: ```json\n{\"confidence\": 0.XX}\n```\n"
     "Only cite data present in triage_data — never invent alerts, IPs, or UIDs. "
     # Identifier fidelity: a uid the analyst cannot paste back into a search is worse
@@ -1228,8 +1233,15 @@ async def triage(req: TriageRequest) -> TriageResponse:
             capped["dns"] = len(dns_logs) >= 50
 
         # === PHASE 3: Score + correlate + session enrichment ===
-        # Merge suricata + unified alerts
-        all_alerts = suricata_alerts + unified_alerts
+        # Merge suricata + unified alerts. The unified `alerts` view is itself
+        # built from suricata_corelight among other sources, so the same event
+        # (same uid) can legitimately come back in both lists; dedup by uid the
+        # same way every other merge site in this function already does, or the
+        # Key Entities section renders 2+ identical bullets for one real alert.
+        _seen_alert_uids = {a.get("uid") for a in suricata_alerts if a.get("uid")}
+        all_alerts = suricata_alerts + [
+            a for a in unified_alerts if a.get("uid") not in _seen_alert_uids
+        ]
         # ct-4: remember the pre-filter fetch sizes. The cap flags describe THESE
         # numbers (the fetch hit its LIMIT), not the post-filter counts below, so
         # the "sampled" label has to be phrased against the fetch it applies to.
