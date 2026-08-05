@@ -87,14 +87,13 @@ services:
       # See docs/security/deter-agent.md before widening or narrowing.
       - DETER_PACE_MIN_SECONDS=${DETER_PACE_MIN_SECONDS:-2.0}
       - DETER_PACE_MAX_SECONDS=${DETER_PACE_MAX_SECONDS:-6.0}
-      # S3_REGION only. The orchestrator does not touch S3 itself; this is the
-      # documented fallback for TRACE_S3_REGION in s3_span_exporter.
+      # S3_REGION only. This is the documented fallback for TRACE_S3_REGION in
+      # s3_span_exporter and for ISSUE_REPORT_S3_REGION in issue_report_uploader.
       #
       # S3_BUCKET and S3_PREFIX used to be here too and were read by nothing:
-      # the span archive takes TRACE_S3_BUCKET/TRACE_S3_PREFIX, and the
-      # orchestrator has no other S3 path. S3_PREFIX also had no default, so an
-      # unset value made compose warn on every up. Do not re-add them without a
-      # reader.
+      # the span archive takes TRACE_S3_BUCKET/TRACE_S3_PREFIX. S3_PREFIX also
+      # had no default, so an unset value made compose warn on every up. Do not
+      # re-add them without a reader.
       - S3_REGION=${S3_REGION:-us-east-2}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_API_KEY=${OTEL_EXPORTER_OTLP_API_KEY}
@@ -102,6 +101,12 @@ services:
       - TRACE_S3_BUCKET=${TRACE_S3_BUCKET:-blackhatnoc}
       - TRACE_S3_PREFIX=${TRACE_S3_PREFIX:-nocgentic/traces}
       - TRACE_S3_REGION=${TRACE_S3_REGION:-us-east-2}
+      # Report Issue widget (chat + threat hunt UI): screenshot + note uploads.
+      # Same bucket as the trace archive, deliberately a different prefix so
+      # audit-monitor (AUDIT_PREFIX=nocgentic/traces) never surfaces these.
+      - ISSUE_REPORT_S3_BUCKET=${ISSUE_REPORT_S3_BUCKET:-blackhatnoc}
+      - ISSUE_REPORT_S3_PREFIX=${ISSUE_REPORT_S3_PREFIX:-nocgentic/issue-reports}
+      - ISSUE_REPORT_S3_REGION=${ISSUE_REPORT_S3_REGION:-us-east-2}
       - OTEL_SERVICE_NAME=bhnocgentic-orchestrator
       # Public event-edition label (display only). Nation + year, e.g. "USA 2027".
       - EVENT_EDITION=${EVENT_EDITION:-USA 2026}

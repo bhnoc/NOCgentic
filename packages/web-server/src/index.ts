@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import { registerChatRoutes } from './api/chat';
 import { registerManifoldRoutes } from './api/manifold';
+import { registerReportIssueRoutes } from './api/report-issue';
 import { alertCache } from './services/alertCache';
 import { pickStarterHints } from './services/starterHints';
 import {
@@ -106,6 +107,10 @@ async function main() {
   // present ORIGIN_SECRET. Left inside the rate limiter on purpose: a 429 is
   // retryable for Manifold, so a burst is held rather than lost.
   registerManifoldRoutes(server);
+
+  // Report-issue: screenshot + note from the chat/hunt UI, proxied to the
+  // orchestrator for an S3 upload under its own prefix (never the trace archive).
+  registerReportIssueRoutes(server);
 
   // WebSocket endpoint for real-time updates (server pushes the shared alert feed).
   // @fastify/websocket v11 (required by fastify 5) passes the WebSocket DIRECTLY
