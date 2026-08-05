@@ -48,6 +48,8 @@ from athena_client import (  # noqa: E402
     ATHENA_DATABASE,
     execute_custom_sql,
     date_filter,
+    local_day_bounds,
+    local_day_partitions,
     sanitize_value,
     today_partition,
     query_by_ip,
@@ -112,6 +114,131 @@ _RE_DB_QUALIFIER = re.compile(
     r"(?i)\b(from|join)(\s+)[a-z_][a-z0-9_]*\.(?=[a-z_][a-z0-9_]*\b)"
 )
 
+# Tables with NO ts column. They are one row PER HOST (or per view build), not per
+# session, so there is no event time to bound. The ts back-fill below must skip them
+# or it turns a working query into COLUMN_NOT_FOUND, which trades an undercount for
+# no answer at all. Confirmed against information_schema on prod 2026-08-04: of 114
+# tables, 87 have ts; the ones the hunter can actually reach and that lack it are
+# these. dt is still present on all of them, so the partition prune stays.
+_TABLES_WITHOUT_TS = frozenset({
+    "entity_context",
+    "asset_classification",
+    "device_links",
+    "dhcp_fp_lite",
+    "corelight_ml_metrics",
+    "corelight_raw",
+    "loaded_scripts_polaris",
+    "smartpcap",
+    "suricata_stats",
+})
+
+_RE_TABLE_REF = re.compile(r"(?i)\b(?:FROM|JOIN)\s+(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)")
+
+
+def _query_supports_ts(sql: str) -> bool:
+    """Can a bare `ts` predicate be added to this query?
+
+    Only if every table it reads has a ts column. Dated view snapshots
+    (entity_context_2026_08_04) share the base table's shape, so match on the
+    stripped stem too rather than listing every dated variant.
+    """
+    for t in _RE_TABLE_REF.findall(sql):
+        t = t.lower()
+        stem = re.sub(r"_\d{4}_\d{2}_\d{2}$", "", t)
+        if t in _TABLES_WITHOUT_TS or stem in _TABLES_WITHOUT_TS:
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# The id_ prefix families, and the repair for getting them backwards.
+#
+# RULE 3 in the prompt says raw Zeek tables use id_orig_h and the derived tables use
+# bare orig_h, with the SELECT-list caveat spelled out. v4 still gets it wrong on
+# roughly 3 of 23 probe queries, usually by filtering correctly and then selecting
+# the other family's name in the same statement. The prompt has been told twice; a
+# third paragraph is not going to land, and the failure mode is COLUMN_NOT_FOUND,
+# so the analyst gets nothing.
+#
+# This is safe to repair in code for one specific reason, verified against
+# information_schema on prod 2026-08-04: NO table in the catalog has columns from
+# both families. 60 tables are id_-prefixed, 5 are bare, 0 are both. So for any
+# single-table query the correct family is decided by the table alone and the
+# rewrite has no judgement to exercise.
+#
+# Deliberately NOT attempted:
+#   * multi-table queries. A join can legitimately mix families
+#     (alerts.orig_h = conn.id_orig_h) and picking one would break the other side.
+#   * qualified references (`a.orig_h`). The alias tells us nothing about which
+#     table it points at without parsing the FROM clause.
+#   * wrong-TABLE errors, which is the rest of what the probe found: `confidence`
+#     lives on asset_classification and device_links, `alert_severity` only on
+#     suricata_corelight. Moving a column to the right table means rewriting the
+#     FROM clause and the join keys, i.e. inventing a different query than the one
+#     the model wrote. Those stay prompt-side problems.
+_PREFIXED_BASE = ("orig_h", "resp_h", "orig_p", "resp_p")
+# Bare-column tables, from the census. Everything else that carries these columns
+# at all is id_-prefixed, but an unknown table is left alone rather than assumed.
+_BARE_COLUMN_TABLES = frozenset({
+    "alerts", "encrypted_dns", "fuid_lookup", "smb_sessions", "uid_lookup",
+})
+_PREFIXED_COLUMN_TABLES = frozenset({
+    "analyzer", "bacnet", "bacnet_property", "bsap_ip_header", "conn", "conn_long",
+    "corelight_ml_results", "dce_rpc", "dce_rpc_activity", "dns", "enip", "files",
+    "files_metadata", "ftp", "geo", "gssapi", "http", "http2", "ipsec", "kerberos",
+    "krb5_auth", "ldap", "ldap_search", "mqtt_connect", "mqtt_publish",
+    "mqtt_subscribe", "mysql", "notice", "ntlm", "ntp", "pe", "perf", "postgresql",
+    "profinet", "profinet_dce_rpc", "quic", "radius", "rdp", "redis", "rfb", "sip",
+    "smtp", "smtp_links", "snmp", "socks", "srv_infer", "ssdp", "ssh", "ssl",
+    "suricata_corelight", "syslog", "telnet", "tunnel", "vpn", "websocket",
+    "websocket_messages", "weird", "wireguard", "yara_corelight",
+    "yara_error_corelight",
+})
+
+# Unqualified only: no leading dot or word char, and not already carrying the id_
+# prefix. The lookbehind on `_` is what keeps `id_orig_h` and `orig_l2_addr` intact.
+_RE_BARE_ENDPOINT = re.compile(
+    r"(?<![.\w])(" + "|".join(_PREFIXED_BASE) + r")\b")
+_RE_PREFIXED_ENDPOINT = re.compile(
+    r"(?<![.\w])id_(" + "|".join(_PREFIXED_BASE) + r")\b")
+
+
+def _fix_endpoint_prefix(sql: str) -> str:
+    """Align bare/id_-prefixed endpoint columns with the single table being read.
+
+    A no-op unless the query reads exactly one known table, because that is the only
+    case where the right answer is unambiguous. An `AS orig_h` alias is left alone:
+    it is a output label, not a column reference, and renaming it would change the
+    result headers the answer text refers to.
+    """
+    tables = {t.lower() for t in _RE_TABLE_REF.findall(sql)}
+    if len(tables) != 1:
+        return sql
+    table = next(iter(tables))
+    stem = re.sub(r"_\d{4}_\d{2}_\d{2}$", "", table)
+
+    def _protect_aliases(s: str) -> tuple[str, list[str]]:
+        held: list[str] = []
+
+        def _hold(m: re.Match) -> str:
+            held.append(m.group(0))
+            return f"\x00{len(held) - 1}\x00"
+
+        return re.sub(r"(?i)\bAS\s+(?:id_)?(?:orig|resp)_[hp]\b", _hold, s), held
+
+    def _restore(s: str, held: list[str]) -> str:
+        for i, txt in enumerate(held):
+            s = s.replace(f"\x00{i}\x00", txt)
+        return s
+
+    if table in _PREFIXED_COLUMN_TABLES or stem in _PREFIXED_COLUMN_TABLES:
+        sql, held = _protect_aliases(sql)
+        return _restore(_RE_BARE_ENDPOINT.sub(r"id_\1", sql), held)
+    if table in _BARE_COLUMN_TABLES or stem in _BARE_COLUMN_TABLES:
+        sql, held = _protect_aliases(sql)
+        return _restore(_RE_PREFIXED_ENDPOINT.sub(r"\1", sql), held)
+    return sql
+
 
 # sanitize() lives in agents/shared/llm_sanitize.py: it was four identical
 # copies, and a policy change had to be made in all four without missing one.
@@ -171,13 +298,25 @@ SQL_GEN_PROMPT = (
     "    known_hosts, known_services, known_certs -> host_ip\n"
     "    These are one row PER HOST, not per session. To attach them to a session\n"
     "    or an alert, join on the host: ON entity_context.ip = alerts.orig_h\n"
+    # v4 got the prefix right in WHERE and wrong in SELECT on the same query
+    # (`SELECT orig_h, resp_h ... FROM conn WHERE id_orig_h = ...`). The rule reads
+    # like a filtering rule unless you say otherwise, so say otherwise.
+    "\nThis applies to the SELECT list, GROUP BY and ORDER BY exactly as it applies\n"
+    "to WHERE. `SELECT orig_h FROM conn` fails even when the WHERE clause correctly\n"
+    "uses id_orig_h. Alias if you want a clean header: `SELECT id_orig_h AS orig_h`.\n"
     "════════════════════════════════════════════════════════════\n\n"
     "VERIFIED COLUMNS per table (use exactly these names):\n"
     "- conn: uid, id_orig_h, id_orig_p, id_resp_h, id_resp_p, proto, service, duration, "
     "orig_bytes, resp_bytes, conn_state, history, id_orig_network_name, id_resp_network_name, "
     "remote_organization, remote_country, remote_asn, remote_city, app, "
-    "id_orig_mac, id_orig_mac_vendor, id_resp_mac, id_resp_mac_vendor "
-    "(MAC address + resolved OUI vendor per side, the reliable MAC<->IP link)\n"
+    # These were documented as id_orig_mac / id_orig_mac_vendor / id_resp_mac /
+    # id_resp_mac_vendor, none of which exist. Checked against information_schema on
+    # prod 2026-08-04: conn carries orig_l2_addr and resp_l2_addr and no vendor column
+    # at all. A prompt that advertises a column the catalog does not have is worse
+    # than silence, because the model uses it and the query dies COLUMN_NOT_FOUND.
+    # For a resolved OUI vendor, entity_context.vendor_mac is the real source.
+    "orig_l2_addr, resp_l2_addr "
+    "(MAC per side; conn has NO vendor column, use entity_context.vendor_mac)\n"
     "- dns: uid, id_orig_h, id_resp_h, query, qtype_name, rcode_name, answers, "
     "icann_domain, icann_tld, id_orig_network_name\n"
     "- ssl: uid, id_orig_h, id_resp_h, server_name, version, cipher, ja3, ja3s, "
@@ -193,8 +332,15 @@ SQL_GEN_PROMPT = (
     "alert_signature_id, service\n"
     "- notice: uid, id_orig_h, id_resp_h, note, msg, severity_name, severity_level, "
     "id_orig_network_name, fuid\n"
+    # v4 wrote `a.alert_signature` against alerts on the 2026-08-04 bench, which is
+    # the one column it invents on this table, and the query dies with
+    # COLUMN_NOT_FOUND. Name the mistake and its fix inline, since a rule stated
+    # somewhere else loses to the shape of this line.
     "- alerts: ts_datetime, ts, uid, orig_h, orig_p, resp_h, resp_p, orig_network_name, "
-    "alert_type, alert_name, alert_detail, severity, dt. alert_type is one of "
+    "alert_type, alert_name, alert_detail, severity, dt. "
+    "⚠ alerts has NO alert_signature / alert_category / alert_severity: those live on "
+    "suricata_corelight only. On alerts the signature text is `alert_name` and the "
+    "severity is `severity`. alert_type is one of "
     # Live prod emits exactly these four. The view builder also has an 'anomaly'
     # arm, but it is discovery-driven and there is no `anomaly` table in either
     # database, so that arm is not in the deployed view. Advertising the type
@@ -271,6 +417,14 @@ SQL_GEN_PROMPT = (
     "client_cert_class, client_cert_subject_hash, client_cert_reasons, "
     "home_region, home_confidence, home_reasons, "
     "client_ja3, client_hassh, os_versions, domain_user, dt "
+    # v4 selected a bare `confidence` here on the 2026-08-04 probe and died
+    # COLUMN_NOT_FOUND. The list above is correct and complete; the trap is that
+    # entity_context has SEVERAL confidence columns and none of them is the bare
+    # name, while the neighbouring device_links does use the bare name. Naming the
+    # near miss is cheaper than hoping the list is read closely enough.
+    "(⚠ there is NO bare `confidence` column here: it is id_confidence, "
+    "org_confidence, owner_name_confidence, internal_domain_confidence or "
+    "home_confidence. Pick the one matching the field you are reporting.) "
     "(ONE ROW PER HOST PER DAY: identity + accounts + exposure + alert risk + session "
     "reach already joined together. Use this for 'what is this host / who is on it / "
     "is it risky' instead of joining asset_classification, alerts and known_* by hand. "
@@ -318,8 +472,13 @@ SQL_GEN_PROMPT = (
     "signal, not real DNS domains.)\n"
     # Device linking. The answer to "what ELSE does this person have", which no
     # single log can express -- it is a correlation across ssl/ssh/dns/dhcp.
+    # v4 selected `hostname` here on the 2026-08-04 probe; device_links has only 9
+    # columns and hostname is not one of them, even though the neighbouring
+    # entity_context and asset_classification both have it.
     "- device_links: ip, mac, dt, owner_cluster_id, linked_ips, linked_macs, "
-    "link_methods, link_evidence, confidence (ONE ROW PER HOST PER DAY: the other "
+    "link_methods, link_evidence, confidence (these NINE are all of them: no "
+    "hostname, no os_name, no device_type — join entity_context on ip for those) "
+    "(ONE ROW PER HOST PER DAY: the other "
     "IPs believed to belong to the SAME PERSON. linked_ips is a ' | '-delimited "
     "list, capped at 12. link_methods is a comma list drawn from same_mac, "
     "same_ja3, same_hassh, same_rdfp, same_vpn_ja3, mdns_companion, shared_cast, "
@@ -364,31 +523,54 @@ SQL_GEN_PROMPT = (
     "- suricata_corelight.alert_severity is a STRING holding a digit '1'-'4' (1=highest, "
     "4=informational). ALWAYS quote it: `alert_severity = '1'`, `alert_severity IN ('1','2')`. "
     "An unquoted `alert_severity = 1` or a range like `<= 2` fails with TYPE_MISMATCH.\n"
+    # Same trap, different column, and v4 walked into it on the 2026-08-04 probe with
+    # `id_resp_p IN (80,443)`. Verified against information_schema: every port column
+    # in this catalog (conn, suricata_corelight, alerts) is varchar, not a number.
+    "- EVERY PORT COLUMN IS ALSO A STRING: id_orig_p, id_resp_p, orig_p, resp_p are "
+    "varchar. ALWAYS quote ports: `id_resp_p IN ('80','443')`, `id_resp_p = '22'`. "
+    "An unquoted `id_resp_p IN (80,443)` fails with TYPE_MISMATCH. For numeric "
+    "comparison (a port RANGE, or ORDER BY port) cast first: "
+    "`CAST(id_resp_p AS integer) > 1024`.\n"
     "- For lateral movement / zone correlation, use suricata_corelight (has both-side zones). "
     "alerts only has orig_network_name.\n"
     "- For 'connections to Zoho/Google/AWS' style org queries, filter conn.remote_organization "
     "LIKE '%<org>%' (GeoIP enrichment).\n\n"
     "RULES:\n"
-    "1. ALWAYS include a date partition filter. Pick based on the analyst's time scope:\n"
-    "   - \"last N hours\" with N <= 24: `dt = 'TODAY'`\n"
-    "   - \"today\" (explicit): `dt = 'TODAY'`\n"
+    # dt is the UTC calendar day of ts, but the analyst is standing in the NOC and
+    # the venue is UTC-7. From 17:00 local onward the UTC date has already rolled,
+    # so `dt = '<utc today>'` holds only the hours since 17:00 local. Measured on
+    # prod at 19:33 local: 778,187 alerts against a true local-day 4,186,931, a 5.4x
+    # undercount that succeeds silently and gets worse the earlier in the evening
+    # you ask. Every same-day scope therefore takes the 2-partition prune plus
+    # explicit ts bounds; the prune is coarse, the ts bounds are the real window.
+    "1. ALWAYS include a date partition filter AND, for any window inside a day, "
+    "explicit ts bounds. dt is a UTC calendar day but the analyst's clock is not "
+    "UTC, so one local day spans TWO dt partitions. Pick by time scope:\n"
+    "   - \"today\" / \"tonight\" / \"so far today\": "
+    "`dt IN ('TODAY','YESTERDAY') AND ts >= DAY_START AND ts <= NOW`\n"
+    "   - \"last N hours\" with N <= 24: "
+    "`dt IN ('TODAY','YESTERDAY') AND ts >= <N-hour start> AND ts <= NOW`\n"
     "   - default / \"recent\" / no time mentioned / \"any\" / \"are there\": "
-    "       `dt IN ('TODAY','YESTERDAY')`   ← use a 2-day window, data rolls over hourly\n"
-    "   - \"yesterday\": `dt = 'YESTERDAY'`\n"
-    "   - \"last N days\" / \"past week\" / \"last week\": `dt >= 'START_DATE' AND dt <= 'TODAY'`\n"
-    "   TODAY, YESTERDAY, 7 days ago are computed for you in the user content.\n"
+    "`dt IN ('TODAY','YESTERDAY') AND ts >= WINDOW_START AND ts <= NOW`\n"
+    "   - \"yesterday\": "
+    "`dt IN ('YESTERDAY','TODAY') AND ts >= YDAY_START AND ts <= YDAY_END`\n"
+    "   - \"last N days\" / \"past week\" / \"last week\": "
+    "`dt >= 'START_DATE' AND dt <= 'TODAY'` (whole-day granularity is fine here)\n"
+    "   NEVER write a bare `dt = 'TODAY'` for a same-day question: it silently drops "
+    "the evening hours that already rolled into the next UTC day.\n"
+    "   TODAY, YESTERDAY, START_DATE and every epoch bound are computed for you in "
+    "the user content. Use them verbatim; do not compute dates yourself.\n"
     "2. ALWAYS include LIMIT (max 200)\n"
     "3. Only SELECT queries — no DDL/DML\n"
     "4. Match column prefix to the table: `id_orig_h` on raw Zeek tables, `orig_h` on alerts/uid_lookup\n"
     "5. For aggregations on conn use CAST(orig_bytes AS bigint)\n"
     "6. NEVER use the name 'suricata' — the table is 'suricata_corelight'\n"
-    # AQLight emitted `FROM blackhat_pope_logs.ssl` on the 2026-08-04 bench. It
-    # runs, because the execution context already names that database, but it
-    # hardcodes a value that comes from ATHENA_DATABASE. Point a box at another
-    # database and the qualified name silently keeps addressing the old one.
-    "6b. Use BARE table names: `FROM ssl`, never `FROM blackhat_pope_logs.ssl`. "
-    "The database is set by the query context; naming it in the SQL hardcodes a "
-    "value that is configuration.\n"
+    # v3 emitted `FROM blackhat_pope_logs.ssl`, which is why this rule and the
+    # _RE_DB_QUALIFIER strip both exist. v4 leaked a qualifier 0/22 times on the
+    # 2026-08-04 probe and invented no database names, so the long explanation is
+    # spending prompt budget on a fixed problem. One line is enough; the strip in
+    # _sub_tokens stays as the actual enforcement.
+    "6b. Use BARE table names: `FROM ssl`, never `FROM <database>.ssl`.\n"
     "7. For organisation/brand queries (Zoho, Google, AWS, etc.), search on MULTIPLE "
     "fields because GeoIP enrichment can be sparse: use BOTH conn.remote_organization LIKE '%Zoho%' "
     "AND ssl.server_name LIKE '%zoho%' (SSL SNI contains real hostnames like 'mdm.zoho.in'). "
@@ -408,7 +590,10 @@ SQL_GEN_PROMPT = (
     "      AND id_resp_network_name IS NOT NULL\n"
     "      AND id_orig_network_name <> id_resp_network_name\n"
     "  Or conn on sensitive ports for internal-to-internal:\n"
-    "    FROM conn WHERE dt=... AND id_resp_p IN (22,3389,445,3306,5432,5900,1433,23)\n"
+    # Ports QUOTED here. They are varchar, and an exemplar beats a rule: the
+    # unquoted version of this line is where v4 learned `id_resp_p IN (80,443)`.
+    "    FROM conn WHERE dt=... "
+    "AND id_resp_p IN ('22','3389','445','3306','5432','5900','1433','23')\n"
     "      AND id_orig_h LIKE '10.%' AND id_resp_h LIKE '10.%'\n\n"
     "* Beaconing / C2:\n"
     "  alert_signature/alert_name LIKE '%C2%' OR '%CnC%' OR '%Beacon%' OR '%RAT%' OR '%Trojan%'.\n"
@@ -477,10 +662,14 @@ SQL_GEN_PROMPT = (
     "      AND vendor_mac IS NOT NULL AND vendor_mac <> ''\n"
     "    GROUP BY mac, vendor_mac, device_type, type_name, brand, os_name, confidence\n"
     "    ORDER BY exact DESC, confidence DESC LIMIT 10\n"
-    "  (2) conn = the MAC<->IP link and activity volume (id_orig_mac is reliable; the "
-    "id_orig_mac_vendor COLUMN is almost always 'unknown', so IGNORE it):\n"
+    # Same nonexistent-column bug as the VERIFIED COLUMNS block above, and worse here:
+    # an exemplar is copied, so this one line taught v4 to write id_orig_mac on every
+    # MAC hunt. conn's MAC column is orig_l2_addr, and there is no vendor column on
+    # conn to warn about.
+    "  (2) conn = the MAC<->IP link and activity volume (orig_l2_addr is the MAC; conn "
+    "has NO vendor column, so take the vendor from (1) or (3)):\n"
     "    SELECT id_orig_h, COUNT(*) AS connections\n"
-    "    FROM conn WHERE dt IN ('TODAY','YESTERDAY') AND id_orig_mac='<mac>'\n"
+    "    FROM conn WHERE dt IN ('TODAY','YESTERDAY') AND orig_l2_addr='<mac>'\n"
     "    GROUP BY id_orig_h ORDER BY connections DESC LIMIT 20\n"
     "  (3) known_devices for the self-reported hostname + vendor_mac (exact MAC or OUI):\n"
     "    SELECT mac, vendor_mac, host_ip, annotations FROM known_devices\n"
@@ -524,7 +713,9 @@ SQL_GEN_PROMPT = (
     "CORRECTNESS CHECKS before you output SQL:\n"
     "1. Every WHERE on conn/dns/http/ssl/files/notice/suricata_corelight uses id_orig_h / id_resp_h.\n"
     "2. Every WHERE on alerts/uid_lookup/fuid_lookup uses orig_h / resp_h.\n"
-    "3. Date filter present. LIMIT present (max 200).\n"
+    "2b. The SELECT list, GROUP BY and ORDER BY use the same prefixes as the WHERE.\n"
+    "3. Date filter present, with ts bounds for any same-day scope. LIMIT present "
+    "(max 200).\n"
     "4. Never use `severity < N` on alerts — severity is a string enum.\n\n"
     "Generate 1-3 SQL queries to answer the analyst's question. "
     "Return ONLY a JSON array of SQL strings:\n"
@@ -576,6 +767,15 @@ async def generate_sql(
         _now = _dt.now(_tz.utc)
         _epoch_24h = int((_now - _td(hours=24)).timestamp())
         _epoch_now = int(_now.timestamp())
+        # `today` is the EVENT-LOCAL calendar day (see athena_client.today_partition),
+        # and a local day straddles two UTC dt partitions for most of the evening, so
+        # the model has to be handed the local day's real epoch bounds rather than
+        # left to infer them from a date string. Same for yesterday.
+        _utc_today = _now.strftime("%Y-%m-%d")
+        _day_start, _day_end = local_day_bounds(0)
+        _yday_start, _yday_end = local_day_bounds(-1)
+        _today_parts = ", ".join(repr(p) for p in local_day_partitions(0))
+        _yday_parts = ", ".join(repr(p) for p in local_day_partitions(-1))
 
         user_content = (
             f"Partition dates you may use:\n"
@@ -583,18 +783,27 @@ async def generate_sql(
             f"- yesterday: {_yesterday}\n"
             f"- 7 days ago: {_week_ago}\n"
             f"- 30 days ago: {_month_ago}\n"
-            f"- epoch bounds for exactly the last 24h (ts >= {_epoch_24h} AND ts <= {_epoch_now})\n\n"
+            f"- epoch bounds for exactly the last 24h (ts >= {_epoch_24h} AND ts <= {_epoch_now})\n"
+            f"- epoch bounds for today so far (ts >= {_day_start} AND ts <= {_day_end})\n"
+            f"- epoch bounds for all of yesterday (ts >= {_yday_start} AND ts <= {_yday_end})\n\n"
             f"Analyst query: {query}\n\n"
             f"{ioc_ctx}"
-            "Build the date filter based on the analyst's time scope. "
-            "For single-day queries use `dt = 'today'`. For multi-day ranges use "
-            "`dt >= 'START' AND dt <= 'today'`.\n"
-            "IMPORTANT, precise 24h window: whenever you use the 2-day partition prune "
-            f"`dt IN ('{today}','{_yesterday}')`, you MUST also add "
-            f"`AND ts >= {_epoch_24h} AND ts <= {_epoch_now}` "
-            "so the result is exactly the last 24 hours and not ~48h. This matters most for "
-            "COUNT/total/'how many' queries and any 'last 24 hours' phrasing. For a pure "
-            "existence check ('are there ANY X') the extra bound is harmless, so add it too."
+            "Build the date filter based on the analyst's time scope. The dt column is a "
+            "UTC calendar day; the analyst's clock is NOT UTC, so a single local day spans "
+            "two dt partitions. Never write a bare `dt = '" + today + "'` for a same-day "
+            "question, it drops every hour that already rolled into the next UTC day.\n"
+            f"- \"today\" / \"tonight\" / \"so far today\": `dt IN ({_today_parts}) "
+            f"AND ts >= {_day_start} AND ts <= {_day_end}`\n"
+            f"- \"yesterday\": `dt IN ({_yday_parts}) "
+            f"AND ts >= {_yday_start} AND ts <= {_yday_end}`\n"
+            f"- \"last N hours\" (N <= 24), \"recent\", or no time given: "
+            f"`dt IN ({_today_parts}) AND ts >= {_epoch_24h} AND ts <= {_epoch_now}` "
+            f"(for N < 24 keep the same prune and raise the lower bound by hand)\n"
+            f"- multi-day ranges: `dt >= 'START' AND dt <= '{today}'`\n"
+            "The partition prune is coarse (whole UTC days). The ts bounds are the real "
+            "window, so ALWAYS include both of them for any sub-multi-day scope. Without "
+            "them a 2-partition prune returns ~48h of rows and every COUNT is inflated; "
+            "with a single partition instead, every COUNT is silently truncated."
         )
 
         # HYBRID: NL->SQL is the ONE step to route to a SQL-specialist (AQLight) when
@@ -676,6 +885,10 @@ async def generate_sql(
             # `\w+\.\w+` rule would also eat qualified COLUMNS (`f.uid`, `s.server_name`
             # in the files-join pattern), which would corrupt every joined query.
             s = _RE_DB_QUALIFIER.sub(r"\1\2", s)
+            # Align orig_h/id_orig_h with the table. Runs AFTER the qualifier strip
+            # so the table census sees a bare table name to match on. Single-table
+            # queries only; see _fix_endpoint_prefix for why.
+            s = _fix_endpoint_prefix(s)
             return s
 
         # Inject date partition if missing.
@@ -690,15 +903,28 @@ async def generate_sql(
         # at a word boundary.
         _DT_PREDICATE = re.compile(
             r"(?:^|[^a-z0-9_])dt\s*(?:=|<|>|!=|<>|\bIN\b|\bBETWEEN\b)", re.IGNORECASE)
+        # The injected default is the 2-partition prune for the analyst's LOCAL day,
+        # not `dt = '<today>'`. A local day straddles two UTC dt partitions for most
+        # of the evening, so the single-partition form drops the hours that already
+        # rolled over. The ts bounds get added by the safety net below (which skips
+        # JOINs, where a bare `ts` is ambiguous).
+        _local_prune = (
+            f"dt IN ({', '.join(repr(p) for p in local_day_partitions(0))})"
+        )
         validated = []
         for sql in queries[:3]:
             sql = _sub_tokens(sql)
+            # The ts-less tables are DAILY SNAPSHOTS of one row per host, so two
+            # partitions would return each host twice and there is no ts to bound it
+            # back down with. `today` is already the analyst's local day, so a single
+            # partition is the right answer for them.
+            _prune = _local_prune if _query_supports_ts(sql) else f"dt = '{today}'"
             if not _DT_PREDICATE.search(sql):
                 # Try to add dt filter
                 if "WHERE" in sql.upper():
                     sql = re.sub(
                         r"(?i)(WHERE\s+)",
-                        f"\\1dt = '{today}' AND ",
+                        f"\\1{_prune} AND ",
                         sql,
                         count=1,
                     )
@@ -711,10 +937,10 @@ async def generate_sql(
                     m = re.search(r"(?i)\s+(GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b", body)
                     if m:
                         sql = (
-                            f"{body[:m.start()]} WHERE dt = '{today}'{body[m.start():]}"
+                            f"{body[:m.start()]} WHERE {_prune}{body[m.start():]}"
                         )
                     else:
-                        sql = f"{body} WHERE dt = '{today}'"
+                        sql = f"{body} WHERE {_prune}"
             # Safety net for the count-doubling window bug: if the query prunes with
             # the 2-day partition form (dt IN ('a','b')) but the model omitted the ts
             # bound the prompt asked for, inject BOTH bounds so "last 24h" is truly 24h,
@@ -723,17 +949,67 @@ async def generate_sql(
             # future at 01:00). Only when there is no ts predicate already and no JOIN
             # (a JOIN makes bare `ts` ambiguous across aliases; leave those to the
             # prompt). The dt tokens were already substituted to real YYYY-MM-DD above.
+            #
+            # It also has to catch the SINGLE-partition form. AQLight v4 answers
+            # "last 6 hours" / "today" with `dt = '<one date>'` and never uses the
+            # dt IN (..) form, so a net keyed only on dt IN () never fired for it.
+            # A single UTC partition is not a local day: measured on prod at 19:33
+            # local, `dt = '<utc today>'` gave 778,187 alerts where the local day
+            # held 4,186,931. Promote a same-day single partition to the local pair
+            # and bound it, keyed on the DATE VALUE so a genuine "yesterday" query
+            # gets yesterday's window rather than today's.
+            #
+            # Skipped entirely for the ts-less host-keyed tables, and that is right
+            # twice over: a bare `ts` there is COLUMN_NOT_FOUND, and those tables are
+            # DAILY SNAPSHOTS of one row per host rather than a time series, so
+            # spanning two partitions would duplicate every host. Their single
+            # partition is already the analyst's local day, because `today` is now
+            # local (see athena_client.today_partition).
+            # A JOIN is handled, not skipped, when the dt predicate is ALIAS-QUALIFIED
+            # (`a.dt = '...'`), because then `a.ts` is unambiguous too and the whole
+            # reason for the old skip disappears. v4 writes the joins that way. An
+            # UNQUALIFIED dt inside a join is still skipped: bare `ts` there is
+            # AMBIGUOUS_NAME, and failing the query outright is worse than a
+            # partition-granularity answer the analyst can see.
             low = sql.lower()
-            has_two_day_prune = re.search(r"dt\s+in\s*\(", low) is not None
             has_ts_bound = re.search(r"\bts\s*>=", low) is not None
             has_join = " join " in low
-            if has_two_day_prune and not has_ts_bound and not has_join:
-                sql = re.sub(
-                    r"(?i)(dt\s+IN\s*\([^)]*\))",
-                    rf"\1 AND ts >= {_epoch_24h} AND ts <= {_epoch_now}",
-                    sql,
-                    count=1,
-                )
+            has_two_day_prune = re.search(r"dt\s+in\s*\(", low) is not None
+            # Every same-day single-partition predicate, each with its optional alias.
+            _singles = list(re.finditer(
+                r"(?i)\b(?:([a-z_][a-z0-9_]*)\.)?dt\s*=\s*'(\d{4}-\d{2}-\d{2})'", sql))
+            if not has_ts_bound and _query_supports_ts(sql):
+                if has_two_day_prune and not has_join:
+                    sql = re.sub(
+                        r"(?i)(dt\s+IN\s*\([^)]*\))",
+                        rf"\1 AND ts >= {_epoch_24h} AND ts <= {_epoch_now}",
+                        sql,
+                        count=1,
+                    )
+                elif _singles and not (has_join and not _singles[0].group(1)):
+                    # Rewrite right-to-left so earlier match offsets stay valid. Each
+                    # side of a join needs the widened partition pair or the join
+                    # drops the rows that rolled into the next UTC day; the ts bound
+                    # is added once, on the first predicate, since bounding either
+                    # side of a uid join bounds the result.
+                    _spans = []
+                    for _m in _singles:
+                        _alias, _d = _m.group(1), _m.group(2)
+                        _q = f"{_alias}." if _alias else ""
+                        if _d in (today, _utc_today):
+                            _parts, _lo, _hi = local_day_partitions(0), _day_start, _day_end
+                        elif _d == _yesterday:
+                            _parts, _lo, _hi = local_day_partitions(-1), _yday_start, _yday_end
+                        else:
+                            # Some other explicit date. Leave the partition alone; the
+                            # analyst named a UTC day and we have no local window for it.
+                            continue
+                        _spans.append((_m, _q, _parts, _lo, _hi))
+                    for _i, (_m, _q, _parts, _lo, _hi) in reversed(list(enumerate(_spans))):
+                        _repl = f"{_q}dt IN ({', '.join(repr(p) for p in _parts)})"
+                        if _i == 0:
+                            _repl += f" AND {_q}ts >= {_lo} AND {_q}ts <= {_hi}"
+                        sql = sql[:_m.start()] + _repl + sql[_m.end():]
             if "LIMIT" not in sql.upper():
                 sql = sql.rstrip().rstrip(";") + " LIMIT 200"
             validated.append(sql)
@@ -1210,6 +1486,19 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
     uid = row.get("uid") or ""
     orig_h = row.get("orig_h") or ""
     resp_h = row.get("resp_h") or ""
+    network = (row.get("orig_network_name") or "").strip()
+
+    def _parse_port(raw: str | None) -> int | None:
+        if raw is None or raw == "":
+            return None
+        try:
+            p = int(raw)
+        except (ValueError, TypeError):
+            return None
+        return p if 0 <= p <= 65535 else None
+
+    src_port = _parse_port(row.get("orig_p"))
+    dst_port = _parse_port(row.get("resp_p"))
 
     # Identity is derived from the RAW host, before redaction, then hashed. Using
     # the redacted value would collapse every out-of-scope host onto one id, and
@@ -1230,13 +1519,17 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
         orig_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
     if resp_h and not ipscope.is_in_scope(resp_h):
         resp_h = ipscope.OUT_OF_SCOPE_PLACEHOLDER
+    if network:
+        network = credscrub.scrub_secrets(ipscope.redact_text(network))
+    if uid:
+        uid = credscrub.scrub_secrets(ipscope.redact_text(uid))
     alert_id = (
         f"{alert_name}|{host_key}|{ts_raw}"
         if alert_name
         else uid or f"alrt-{hash((ts_raw, description)) & 0xFFFFFFFF:08x}"
     )
 
-    return {
+    out: dict[str, Any] = {
         "id": alert_id,
         "timestamp": ts_raw,
         "severity": _normalize_severity(row.get("severity")),
@@ -1245,6 +1538,17 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
         "srcIp": orig_h or None,
         "dstIp": resp_h or None,
     }
+    if src_port is not None:
+        out["srcPort"] = src_port
+    if dst_port is not None:
+        out["dstPort"] = dst_port
+    if uid:
+        out["uid"] = uid
+    if network:
+        out["network"] = network
+    if occ > 0:
+        out["occurrences"] = occ
+    return out
 
 
 @app.get("/alerts/recent")
@@ -1277,6 +1581,9 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
             ARBITRARY(alert_detail) AS alert_detail,
             ARBITRARY(resp_h) AS resp_h,
             ARBITRARY(uid) AS uid,
+            ARBITRARY(orig_p) AS orig_p,
+            ARBITRARY(resp_p) AS resp_p,
+            ARBITRARY(orig_network_name) AS orig_network_name,
             COUNT(*) AS occurrences
         FROM alerts
         WHERE {dt}
