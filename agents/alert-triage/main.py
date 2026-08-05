@@ -855,6 +855,10 @@ async def llm_triage(
             confidence = max(0.0, min(1.0, float(m.group(1))))
         except ValueError:
             logger.warning("llm_triage: confidence value unparseable, using low default 0.3")
+        # Strip the fence out of the operator-facing text — it's parsed into
+        # `confidence` above and the UI renders that as a bar; left in place
+        # it shows up as a literal trailing code block.
+        answer = answer[:m.start()].rstrip() + answer[m.end():]
     else:
         logger.warning("llm_triage: no confidence trailer in answer (truncated/malformed?), using low default 0.3")
         # The low confidence alone is not enough. A truncated answer still LOOKS

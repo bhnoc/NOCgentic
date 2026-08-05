@@ -95,3 +95,17 @@ def test_confidence_clamped_to_unit_interval(label, module, caller, monkeypatch)
     answer, confidence = caller(module, over, monkeypatch)
     assert 0.0 <= confidence <= 1.0
     assert confidence == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("label,module,caller", AGENTS)
+def test_confidence_fence_is_stripped_from_the_answer(label, module, caller, monkeypatch):
+    """The fence is parsed into `confidence` and the UI renders that as a bar.
+    Regression: it used to survive in `answer` too, so formatAnswer() rendered
+    it a second time as a literal trailing code block — '{"confidence": 0.95}'
+    visible in the chat bubble under the real answer text."""
+    good = '## Answer\nClear finding.\n```json\n{"confidence": 0.95}\n```'
+    answer, confidence = caller(module, good, monkeypatch)
+    assert confidence == pytest.approx(0.95), f"{label}: sanity check on the fixture"
+    assert "confidence" not in answer, f"{label}: fence text leaked into the answer: {answer!r}"
+    assert "```" not in answer, f"{label}: fence markers leaked into the answer: {answer!r}"
+    assert "Clear finding." in answer, f"{label}: stripping the fence must not eat real content"

@@ -607,6 +607,10 @@ async def llm_analyze(
             confidence = max(0.0, min(1.0, float(m.group(1))))
         except ValueError:
             pass
+        # Strip the fence out of the operator-facing text — it's parsed into
+        # `confidence` above and the UI renders that as a bar; left in place
+        # it shows up as a literal trailing code block.
+        answer = answer[:m.start()].rstrip() + answer[m.end():]
     else:
         logger.warning("confidence fence not found in answer; defaulting to low (0.3)")
 

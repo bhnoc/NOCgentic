@@ -624,15 +624,11 @@
   // up the swap button without re-rendering the whole message.
   const laneState = new Map();
 
-  /** Render one lane's answer/confidence/metrics/data — the swappable region. */
+  /** Render one lane's answer/metrics/data — the swappable region.
+   *  Confidence moves to the lane bar (top-right, left of the model label) —
+   *  see renderLaneBar — so it isn't duplicated here. */
   function renderLaneBody(src, agentKey) {
     const answerHtml = formatAnswer(src.answer || '');
-    let confHtml = '';
-    if (typeof src.confidence === 'number') {
-      const pct = Math.round(src.confidence * 100);
-      const fillClass = pct >= 70 ? 'conf-high' : pct >= 40 ? 'conf-medium' : 'conf-low';
-      confHtml = `<div class="confidence-row"><span class="confidence-label">Confidence</span><div class="confidence-bar"><div class="confidence-fill ${fillClass}" style="width:${pct}%"></div></div><span class="confidence-pct">${pct}%</span></div>`;
-    }
     let metricsHtml = '';
     const m = src.data?.llm_metrics;
     if (m) {
@@ -650,10 +646,61 @@
     if (src.data && agentKey === 'thousandeyes-analyst') {
       dataHtml = renderThousandEyesData(src.data);
     } else if (src.data) {
-      const rawDataHtml = renderData({...src.data, llm_metrics: undefined});
-      dataHtml = rawDataHtml ? `<details class="data-collapse"><summary>Raw Data</summary>${rawDataHtml}</details>` : '';
+      dataHtml = renderDataTabs(src.data);
     }
-    return `${answerHtml}${confHtml}${metricsHtml}${dataHtml}`;
+    return `${answerHtml}${metricsHtml}${dataHtml}`;
+  }
+
+  /** Confidence pill for the lane bar: color-coded, no label — the position
+   *  (top-right of the bubble) is the label. */
+  function renderConfidencePill(confidence) {
+    if (typeof confidence !== 'number') return '';
+    const pct = Math.round(confidence * 100);
+    const cls = pct >= 70 ? 'conf-high' : pct >= 40 ? 'conf-medium' : 'conf-low';
+    return `<span class="confidence-pill ${cls}" title="Confidence">${pct}%</span>`;
+  }
+
+  /**
+   * Query / Raw Data tabs for one lane's data blob. Query shows the SQL
+   * athena-hunter actually ran (data.query_details, when present); Raw Data is
+   * the full JSON. Both live in a scrollable, WORD-WRAPPED box — pre.code-block
+   * used overflow-x:auto, so a long SQL string or JSON line forced the analyst
+   * to scroll sideways instead of just reading down. Only one tab when there's
+   * no SQL to show (alert-triage/thousandeyes shapes don't expose query text).
+   */
+  function renderDataTabs(data) {
+    const queries = Array.isArray(data.query_details) ? data.query_details : [];
+    const queryHtml = queries.length
+      ? queries.map((q, i) => `
+          <div class="query-item">
+            ${queries.length > 1 ? `<div class="query-item-index">Query ${i + 1}</div>` : ''}
+            <pre class="code-block code-wrap">${escHtml(q.sql || '')}</pre>
+            <div class="query-item-stats">
+              ${q.rows != null ? `<span>${q.rows} rows</span>` : ''}
+              ${q.time_ms != null ? `<span>${q.time_ms}ms</span>` : ''}
+              ${q.scanned_mb != null ? `<span>${q.scanned_mb}MB scanned</span>` : ''}
+            </div>
+          </div>`).join('')
+      : '';
+    const rawDataHtml = renderData({ ...data, llm_metrics: undefined, query_details: undefined });
+    if (!queryHtml && !rawDataHtml) return '';
+
+    const tabs = [];
+    if (queryHtml) tabs.push({ key: 'query', label: 'Query', html: queryHtml });
+    if (rawDataHtml) tabs.push({ key: 'raw', label: 'Raw Data', html: rawDataHtml });
+    if (tabs.length === 1) {
+      // Nothing to switch between — skip the tab strip, keep the box.
+      return `<div class="data-panel">${tabs[0].html}</div>`;
+    }
+    const tabId = `datatabs-${Math.random().toString(36).slice(2, 9)}`;
+    const tabButtons = tabs.map((t, i) =>
+      `<button type="button" class="data-tab${i === 0 ? ' active' : ''}" data-tab-key="${t.key}">${t.label}</button>`
+    ).join('');
+    const tabPanels = tabs.map((t, i) =>
+      `<div class="data-panel${i === 0 ? ' active' : ''}" data-tab-key="${t.key}">${t.html}</div>`
+    ).join('');
+    return `<div class="data-tabs" id="${tabId}">` +
+      `<div class="data-tab-strip">${tabButtons}</div>${tabPanels}</div>`;
   }
 
   /**
@@ -666,14 +713,19 @@
    */
   function renderLaneBar(laneKey) {
     const st = laneState.get(laneKey);
-    // Nothing to swap between (single-lane box) — render no bar at all rather
-    // than a disabled control, so the single-lane UI is unchanged.
-    if (!st || st.lanes.length < 2) {
-      if (!st || !st.racing) return '';
+    if (!st) return '';
+    const confHtml = renderConfidencePill(st.confidence);
+    // Nothing to swap between (single-lane box) — render just the confidence
+    // pill (or nothing at all if there's no confidence either), not a
+    // disabled swap control, so the single-lane UI is unchanged apart from
+    // gaining the pill.
+    if (st.lanes.length < 2) {
+      if (!st.racing) return confHtml;
       // One lane in, the other still running: show the pending state so the user
       // knows a second opinion is coming rather than wondering if it broke.
       const only = st.lanes.length === 1 ? st.lanes[0] : null;
-      return `<span class="lane-current">${escHtml(only ? only.label : 'Fastest model')}</span>` +
+      return confHtml +
+             `<span class="lane-current">${escHtml(only ? only.label : 'Fastest model')}</span>` +
              `<span class="lane-pending">second model still working…</span>`;
     }
     const active = st.lanes.find(l => l.lane === st.active) || st.lanes[0];
@@ -682,6 +734,7 @@
     const isWinner = active.winner === true;
     const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
     return (
+      confHtml +
       `<span class="lane-current">${escHtml(active.label)}` +
       (isWinner ? '<span class="lane-badge-fastest">FASTEST</span>' : '') +
       `</span>` +
@@ -703,6 +756,7 @@
     const idx = st.lanes.findIndex(l => l.lane === st.active);
     const next = st.lanes[(idx + 1) % st.lanes.length];
     st.active = next.lane;
+    st.confidence = next.confidence;
     const body = document.getElementById(`lanebody-${laneKey}`);
     if (body) {
       body.innerHTML = renderLaneBody(
@@ -725,6 +779,18 @@
     const btn = ev.target.closest && ev.target.closest('.lane-swap');
     if (!btn) return;
     swapLane(btn.getAttribute('data-lane-key'));
+  });
+
+  // Delegated for the same reason: a swap replaces the whole lane body,
+  // Query/Raw Data tab strip included.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest && ev.target.closest('.data-tab');
+    if (!btn) return;
+    const strip = btn.closest('.data-tabs');
+    if (!strip) return;
+    const key = btn.getAttribute('data-tab-key');
+    strip.querySelectorAll('.data-tab').forEach(b => b.classList.toggle('active', b === btn));
+    strip.querySelectorAll('.data-panel').forEach(p => p.classList.toggle('active', p.getAttribute('data-tab-key') === key));
   });
 
   // ========== Message rendering ==========
@@ -773,14 +839,15 @@
     } else {
       const laneKey = job.jobId || `anon-${Date.now()}`;
       // Track lanes client-side so a swap can re-render from memory with no refetch.
-      if (job.lanes && job.lanes.length) {
-        laneState.set(laneKey, {
-          lanes: job.lanes,
-          active: job.lane || job.lanes[0].lane,
-          agentKey,
-          racing: job.lanesRacing === true,
-        });
-      }
+      // Stored even for a single-lane response so the confidence pill (lane bar,
+      // top-right) has something to read without a lanes array.
+      laneState.set(laneKey, {
+        lanes: job.lanes && job.lanes.length ? job.lanes : [],
+        active: job.lane || (job.lanes && job.lanes[0] && job.lanes[0].lane),
+        agentKey,
+        racing: job.lanesRacing === true,
+        confidence: job.confidence,
+      });
       const bodyHtml = renderLaneBody({
         answer: job.answer, confidence: job.confidence, data: job.data,
       }, agentKey);

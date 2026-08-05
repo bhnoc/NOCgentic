@@ -180,6 +180,62 @@ check('single-lane answer still renders', /stub answer for/.test(singleLane.text
 check('no lane bar content on a single-lane answer', singleLane.barEmpty === true);
 check('no swap control on a single-lane answer', singleLane.swapButtons === 0);
 
+// A single-lane box WITH a confidence value must still show the pill — no
+// lanes to swap between, but confidence is independent of the race.
+await evaluate(`(() => {
+  document.getElementById('query-input').value = 'confidence pill check';
+  sendQuery();
+})()`);
+await sleep(2800);
+const confPill = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('.message.agent')];
+  const last = bubbles[bubbles.length - 1];
+  const pill = last.querySelector('.confidence-pill');
+  return {
+    text: last.textContent.replace(/\\s+/g, ' ').trim(),
+    pillText: pill ? pill.textContent.trim() : null,
+    swapButtons: last.querySelectorAll('.lane-swap').length,
+  };
+})()`);
+check('single-lane confidence pill renders', confPill.pillText === '42%', JSON.stringify(confPill));
+check('still no swap control alongside a bare confidence pill', confPill.swapButtons === 0);
+
+// Query / Raw Data tabs: both present when query_details carries SQL, the
+// Query panel is shown first, and the long single-line SQL wraps rather than
+// forcing horizontal scroll.
+await evaluate(`(() => {
+  document.getElementById('query-input').value = 'query tabs check';
+  sendQuery();
+})()`);
+await sleep(2800);
+const queryTabs = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('.message.agent')];
+  const last = bubbles[bubbles.length - 1];
+  const tabs = [...last.querySelectorAll('.data-tab')].map(b => b.textContent.trim());
+  const activeTab = last.querySelector('.data-tab.active');
+  const activePanel = last.querySelector('.data-panel.active');
+  const pre = last.querySelector('.data-panel.active pre.code-block');
+  const rawTab = [...last.querySelectorAll('.data-tab')].find(b => b.textContent.trim() === 'Raw Data');
+  rawTab && rawTab.click();
+  const afterClickPanel = last.querySelector('.data-panel.active');
+  return {
+    tabs,
+    activeTabLabel: activeTab ? activeTab.textContent.trim() : null,
+    firstPanelHasSql: activePanel ? activePanel.textContent.includes('SELECT') : false,
+    preWraps: pre ? pre.classList.contains('code-wrap') : false,
+    preOverflowX: pre ? getComputedStyle(pre).overflowX : null,
+    preWhiteSpace: pre ? getComputedStyle(pre).whiteSpace : null,
+    afterClickShowsRawData: afterClickPanel ? afterClickPanel.getAttribute('data-tab-key') === 'raw' : false,
+    afterClickHasTotalRows: afterClickPanel ? afterClickPanel.textContent.includes('total_rows') : false,
+  };
+})()`);
+check('Query and Raw Data tabs both present', JSON.stringify(queryTabs.tabs) === '["Query","Raw Data"]', JSON.stringify(queryTabs.tabs));
+check('Query tab is active by default', queryTabs.activeTabLabel === 'Query', queryTabs.activeTabLabel);
+check('Query panel shows the actual SQL', queryTabs.firstPanelHasSql === true);
+check('the SQL block wraps instead of scrolling sideways', queryTabs.preWraps === true && queryTabs.preOverflowX === 'hidden' && queryTabs.preWhiteSpace === 'pre-wrap', JSON.stringify(queryTabs));
+check('clicking Raw Data switches panels', queryTabs.afterClickShowsRawData === true);
+check('Raw Data panel shows the JSON blob', queryTabs.afterClickHasTotalRows === true);
+
 check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
 
 await send('Page.close').catch(() => {});

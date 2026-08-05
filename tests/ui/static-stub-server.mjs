@@ -13,6 +13,8 @@ const received = [];
 // first and the pair on a later poll — otherwise the swap control would appear
 // fully formed on the first render and the pending state would never be tested.
 const LANE_TRIGGER = 'lane race';
+const CONFIDENCE_TRIGGER = 'confidence pill check';
+const QUERY_TABS_TRIGGER = 'query tabs check';
 const laneOf = (name, over = {}) => ({
   lane: name,
   label: name === 'cloud' ? 'Cloud (Gemini)' : 'Local (AQLight)',
@@ -48,6 +50,28 @@ const server = createServer(async (req, res) => {
         lanesRacing: true,
       });
       lanePolls.set(jobId, 0);
+    } else if (String(query || '').toLowerCase().includes(CONFIDENCE_TRIGGER)) {
+      // Single-lane response (no lanes array) but WITH a confidence value —
+      // the pill must still render even when there's nothing to swap between.
+      jobs.set(jobId, {
+        jobId, status: 'done', agentUsed: 'athena-hunter', hints: [],
+        answer: 'SINGLE LANE: confidence pill check answer.',
+        confidence: 0.42,
+      });
+    } else if (String(query || '').toLowerCase().includes(QUERY_TABS_TRIGGER)) {
+      // A very long single-line SQL string, on purpose: this is what used to
+      // force the box to scroll sideways instead of wrapping.
+      const longSql = 'SELECT ' + Array.from({ length: 20 }, (_, i) => `col_${i}`).join(', ') +
+        " FROM alerts WHERE dt = '2026-08-05' AND alert_name IS NOT NULL GROUP BY alert_name ORDER BY ts DESC LIMIT 100";
+      jobs.set(jobId, {
+        jobId, status: 'done', agentUsed: 'athena-hunter', hints: [],
+        answer: 'QUERY TABS: answer text.',
+        confidence: 0.8,
+        data: {
+          query_details: [{ sql: longSql, rows: 3, time_ms: 120, scanned_mb: 4.2 }],
+          total_rows: 3,
+        },
+      });
     } else {
       jobs.set(jobId, { jobId, status: 'done', answer: 'stub answer for: ' + query, agentUsed: 'stub', hints: [] });
     }
