@@ -70,6 +70,36 @@ describe('threat hunt registry', () => {
     expect(correct[0].id).toBe('bh-benign');
     expect(correct[0].label).toBe('BH Benign');
   });
+
+  it('ships batch-2 hunts with the expected close codes', () => {
+    const expected: Record<string, string> = {
+      'fakecorp-supplychain-dns': 'true-positive',
+      'northlab-singleton-c2': 'true-positive',
+      'stagecast-license-pii-http': 'bh-benign',
+      'noc-log4j-sensor-test': 'bh-benign',
+      'rivertide-azure-background': 'bh-benign',
+    };
+    expect(hunts.length).toBeGreaterThanOrEqual(7);
+    for (const [id, closeId] of Object.entries(expected)) {
+      const hunt = hunts.find(h => h.id === id);
+      expect(hunt, id).toBeDefined();
+      const correct = (hunt!.nodes.decision.actions ?? []).filter(a => a.correct);
+      expect(correct, id).toHaveLength(1);
+      expect(correct[0].id, id).toBe(closeId);
+    }
+  });
+
+  it('keeps authored hunt copy free of known real Slack identifiers', () => {
+    const blob = JSON.stringify(hunts).toLowerCase();
+    const banned = [
+      'checkmarx', 'teampcp', 'litellm', 'sfrclak', 'pepsico', 'pwcinternal',
+      'httpforever', 'safeactivation', 'worksodsirius', 'phiplips', 'ghabovethec',
+      'falconforce', 'informafestivals', 'bytespider', 'mend.io', 'ihs.gov',
+    ];
+    for (const term of banned) {
+      expect(blob.includes(term), term).toBe(false);
+    }
+  });
 });
 
 describe.each(hunts.map(h => [h.id, h] as const))('hunt contract: %s', (_id, hunt) => {
