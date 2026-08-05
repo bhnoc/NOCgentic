@@ -180,7 +180,43 @@
     return out;
   }
 
+  /**
+   * The query behind the Triage button. Same rules as a hunt chip, because it is
+   * the same thing: text assembled from live alert fields and sent as a query.
+   *
+   * The alert DESCRIPTION never appears in it. That is vendor prose, so it can carry
+   * a vendor name or a restricted zone word and trip a guardrail into answering with
+   * a silent cover, which reads to the operator as the platform having nothing to
+   * say. alertTopic() reduces it to one of our own labels instead. Restricted
+   * addresses and out-of-range ports are dropped by the same helpers the chips use,
+   * and the finished string is checked once more before it goes out. If it still
+   * fails, the caller gets the generic question rather than a covered answer.
+   */
+  function buildTriageQuery(alert) {
+    var a = alert || {};
+    var topic = alertTopic(a.description);
+    var sev = severityWord(a.severity);
+    var src = huntableIp(a.srcIp);
+    var dst = huntableIp(a.dstIp);
+    var port = huntablePort(a.dstPort);
+
+    var subject = topic
+      ? (sev ? 'this ' + sev + ' severity ' + topic + ' alert' : 'this ' + topic + ' alert')
+      : (sev ? 'this ' + sev + ' severity alert' : 'this alert');
+
+    var q = 'Triage ' + subject;
+    if (src && dst) q += ' involving ' + src + ' and ' + dst;
+    else if (src) q += ' from ' + src;
+    else if (dst) q += ' targeting ' + dst;
+    if (port) q += ' on port ' + port;
+    q += '. What is happening and what should we check next?';
+
+    var generic = 'How serious is this alert and what should we check next?';
+    return alertHintIsSafe(q) ? q : generic;
+  }
+
   root.buildAlertHuntHints = buildAlertHuntHints;
+  root.buildTriageQuery = buildTriageQuery;
   root.alertHintIsSafe = alertHintIsSafe;
   root.MAX_HUNT_HINTS = MAX_HUNT_HINTS;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

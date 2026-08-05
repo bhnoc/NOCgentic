@@ -177,3 +177,58 @@ describe('alertCache kill-switch polling is sticky', () => {
     expect(alertCache.status().killed).toBe(true);
   });
 });
+
+describe('alertCache dequeue enriched fields', () => {
+  it('passes through ports, uid, occurrences and maps observedAt from raw timestamp', () => {
+    const observed = '2026-07-20T12:34:56.000Z';
+    alertCache.__enqueueForTest(
+      rawAlert({
+        id: 'enriched-1',
+        timestamp: observed,
+        srcIp: '10.220.42.5',
+        dstIp: '8.8.8.8',
+        srcPort: 54321,
+        dstPort: 443,
+        uid: 'CAbCdEf123',
+        occurrences: 7,
+      }),
+    );
+
+    const before = Date.now();
+    const out = alertCache.dequeue();
+    const after = Date.now();
+
+    expect(out).not.toBeNull();
+    expect(out!.srcPort).toBe(54321);
+    expect(out!.dstPort).toBe(443);
+    expect(out!.uid).toBe('CAbCdEf123');
+    expect(out!.occurrences).toBe(7);
+    expect(out!.observedAt).toBe(observed);
+    // Theatrical emit clock — restamped to approximately now, not Athena time.
+    expect(out!.timestamp).not.toBe(observed);
+    const emitMs = Date.parse(out!.timestamp);
+    expect(emitMs).toBeGreaterThanOrEqual(before - 50);
+    expect(emitMs).toBeLessThanOrEqual(after + 50);
+  });
+
+  it('scrubs restricted zone names in network', () => {
+    alertCache.__enqueueForTest(
+      rawAlert({ id: 'net-1', network: 'Registration VLAN' }),
+    );
+
+    const out = alertCache.dequeue();
+    expect(out!.network).toBe('internal VLAN');
+  });
+
+  it('omits empty optional enrichment fields', () => {
+    alertCache.__enqueueForTest(rawAlert({ id: 'bare-1' }));
+
+    const out = alertCache.dequeue();
+    expect(out!.srcPort).toBeUndefined();
+    expect(out!.dstPort).toBeUndefined();
+    expect(out!.uid).toBeUndefined();
+    expect(out!.network).toBeUndefined();
+    expect(out!.occurrences).toBeUndefined();
+    expect(out!.observedAt).toBe('2026-07-20T00:00:00.000Z');
+  });
+});

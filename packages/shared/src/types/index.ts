@@ -51,6 +51,12 @@ export interface Alert {
   description: string;
   srcIp?: string;
   dstIp?: string;
+  srcPort?: number;
   dstPort?: number;
+  uid?: string;
+  network?: string;
+  /** Original Athena event time; `timestamp` is re-stamped on emit for the feed clock. */
+  observedAt?: string;
+  occurrences?: number;
   action?: string;
 }

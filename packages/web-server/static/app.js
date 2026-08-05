@@ -29,6 +29,27 @@
   }
 
   // ========== Alert Feed ==========
+  // Built by alertHints.js, not here, so the Triage query goes through the same
+  // guardrail filter as the hunt chips. It is the same hazard: text assembled from
+  // live alert fields and submitted as a query, where one vendor name or zone word
+  // gets it answered with a silent cover.
+  function triageAlert(alert, ev) {
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+    if (document.getElementById('send-btn').disabled) return;
+    const input = document.getElementById('query-input');
+    // Guarded like the hint row below: if alertHints.js failed to load, ask the
+    // generic question rather than throwing inside a click handler.
+    input.value = typeof buildTriageQuery === 'function'
+      ? buildTriageQuery(alert)
+      : 'How serious is this alert and what should we check next?';
+    autoResize(input);
+    input.focus();
+    sendQuery();
+  }
+
   function renderAlerts(alerts) {
     if (!alerts || alerts.length === 0) return;
     const feed = document.getElementById('alerts-feed');
@@ -36,7 +57,7 @@
     if (empty) empty.remove();
 
     alerts.reverse().forEach(a => {
-      if (feed.querySelector(`[data-id="${a.id}"]`)) return;
+      if (feed.querySelector(`[data-id="${CSS.escape(a.id)}"]`)) return;
       const card = document.createElement('div');
       const sev = (a.severity || 'low').toLowerCase();
       card.className = 'alert-card sev-card-' + sev;
@@ -48,7 +69,7 @@
 
       card.innerHTML = `
         <div class="alert-top">
-          <span class="sev-badge ${sevClass}">${sev}</span>
+          <span class="sev-badge ${sevClass}">${escHtml(sev)}</span>
           <span class="alert-time">${timeStr}</span>
         </div>
         <div class="alert-desc">${escHtml(a.description)}</div>
@@ -114,6 +135,12 @@
       });
     });
 
+    const triageBtn = el.body.querySelector('.alert-triage-btn');
+    if (triageBtn) triageBtn.addEventListener('click', (ev) => {
+      closeAlertModal();
+      triageAlert(alert, ev);
+    });
+
     if (el.close) el.close.focus();
   }
 
@@ -157,15 +184,27 @@
     const when = isNaN(ts.getTime())
       ? String(a.timestamp || 'unknown')
       : ts.toLocaleString('en-US', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    let observedStr = '';
+    if (a.observedAt) {
+      const obs = new Date(a.observedAt);
+      observedStr = Number.isNaN(obs.getTime())
+        ? String(a.observedAt)
+        : obs.toLocaleString('en-US', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    }
 
     const rows = [
-      ['Source',   a.source],
-      ['Src IP',   a.srcIp],
-      ['Dst IP',   a.dstIp],
-      ['Dst Port', a.dstPort === 0 || a.dstPort ? String(a.dstPort) : ''],
-      ['Action',   a.action],
-      ['Detected', when],
-      ['Alert ID', a.id],
+      ['Source',      a.source],
+      ['Src IP',      a.srcIp],
+      ['Src Port',    a.srcPort === 0 || a.srcPort ? String(a.srcPort) : ''],
+      ['Dst IP',      a.dstIp],
+      ['Dst Port',    a.dstPort === 0 || a.dstPort ? String(a.dstPort) : ''],
+      ['Network',     a.network],
+      ['Action',      a.action],
+      ['Detected',    when],
+      ['Observed',    observedStr],
+      ['Occurrences', a.occurrences != null && a.occurrences > 0 ? String(a.occurrences) : ''],
+      ['UID',         a.uid],
+      ['Alert ID',    a.id],
     ].filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '');
 
     const grid = rows.map(([label, value]) =>
@@ -188,6 +227,7 @@
       <div class="alert-detail-desc">${escHtml(a.description || '')}</div>
       <dl class="alert-detail-grid">${grid}</dl>
       ${hintRow}
+      <button type="button" class="alert-triage-btn">Triage</button>
     `;
   }
 
@@ -283,12 +323,12 @@
   function injectDemoAlerts() {
     const now = Date.now();
     renderAlerts([
-      { id:'d1', severity:'critical', source:'paloalto', description:'C2 beacon detected -- high frequency TCP/4444', srcIp:'10.220.44.88', dstPort:4444, timestamp:new Date(now-12000).toISOString() },
-      { id:'d2', severity:'high', source:'corelight', description:'Port scan -- 1,247 SYN packets in 10s', srcIp:'45.83.193.150', timestamp:new Date(now-45000).toISOString() },
-      { id:'d3', severity:'high', source:'paloalto', description:'Outbound DENY -- blocked TOR exit node connection', srcIp:'10.220.42.15', dstPort:9001, timestamp:new Date(now-90000).toISOString() },
-      { id:'d4', severity:'medium', source:'corelight', description:'DNS tunneling suspected -- 63-char subdomain', srcIp:'10.220.41.22', timestamp:new Date(now-130000).toISOString() },
-      { id:'d5', severity:'medium', source:'partner', description:'Threat intel match -- IP on Emerging Threats blocklist', srcIp:'185.220.101.45', timestamp:new Date(now-200000).toISOString() },
-      { id:'d6', severity:'low', source:'corelight', description:'Unusual protocol -- SSH on TCP/8022', srcIp:'10.220.65.14', dstPort:8022, timestamp:new Date(now-310000).toISOString() },
+      { id:'d1', severity:'critical', source:'paloalto', description:'C2 beacon detected -- high frequency TCP/4444', srcIp:'10.220.44.88', dstIp:'185.220.101.45', srcPort:49152, dstPort:4444, uid:'Cdemo001', network:'Vendor WiFi', occurrences:12, observedAt:new Date(now-12000).toISOString(), timestamp:new Date(now-12000).toISOString() },
+      { id:'d2', severity:'high', source:'corelight', description:'Port scan -- 1,247 SYN packets in 10s', srcIp:'45.83.193.150', dstIp:'10.220.40.10', dstPort:22, uid:'Cdemo002', network:'Core', occurrences:3, observedAt:new Date(now-45000).toISOString(), timestamp:new Date(now-45000).toISOString() },
+      { id:'d3', severity:'high', source:'paloalto', description:'Outbound DENY -- blocked TOR exit node connection', srcIp:'10.220.42.15', dstIp:'185.220.101.99', dstPort:9001, uid:'Cdemo003', observedAt:new Date(now-90000).toISOString(), timestamp:new Date(now-90000).toISOString() },
+      { id:'d4', severity:'medium', source:'corelight', description:'DNS tunneling suspected -- 63-char subdomain', srcIp:'10.220.41.22', dstIp:'8.8.8.8', dstPort:53, uid:'Cdemo004', network:'Attendee', observedAt:new Date(now-130000).toISOString(), timestamp:new Date(now-130000).toISOString() },
+      { id:'d5', severity:'medium', source:'partner', description:'Threat intel match -- IP on Emerging Threats blocklist', srcIp:'185.220.101.45', dstIp:'10.220.50.2', dstPort:443, observedAt:new Date(now-200000).toISOString(), timestamp:new Date(now-200000).toISOString() },
+      { id:'d6', severity:'low', source:'corelight', description:'Unusual protocol -- SSH on TCP/8022', srcIp:'10.220.65.14', dstIp:'10.220.10.5', srcPort:50222, dstPort:8022, uid:'Cdemo006', occurrences:2, observedAt:new Date(now-310000).toISOString(), timestamp:new Date(now-310000).toISOString() },
     ]);
   }
 
@@ -307,7 +347,14 @@
       renderAlerts([{
         id:'demo-'+(counter++), severity:t.severity, source:t.source,
         description:t.descriptions[Math.floor(Math.random()*t.descriptions.length)],
-        srcIp:randomIp(), timestamp:new Date().toISOString(),
+        srcIp:randomIp(), dstIp:randomIp(),
+        srcPort:1024 + Math.floor(Math.random()*60000),
+        dstPort:[22, 443, 80, 445, 3389, 53][Math.floor(Math.random()*6)],
+        uid:'Cdemo' + String(counter).padStart(6, '0'),
+        network:['Core', 'Vendor WiFi', 'Attendee', 'Partner'][Math.floor(Math.random()*4)],
+        occurrences:1 + Math.floor(Math.random()*20),
+        observedAt:new Date(Date.now() - Math.floor(Math.random()*3600000)).toISOString(),
+        timestamp:new Date().toISOString(),
       }]);
     }, 8000 + Math.random()*12000);
   }

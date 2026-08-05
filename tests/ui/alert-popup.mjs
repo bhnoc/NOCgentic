@@ -249,6 +249,31 @@ check('no hunt chip is built around a restricted address',
   restricted.chips.length > 0 && restricted.chips.every(c => !c.includes('10.220.152.9')),
   JSON.stringify(restricted.chips));
 
+// ---- the Triage button sends a guardrail-safe query about this alert ----
+// t2 is the restricted-subnet alert and the popup is already open on it, which is the
+// case worth checking: the button has to submit something, and it must not be the
+// address or the vendor prose in the description.
+const triageText = await evaluate(`(() => {
+  const btn = document.querySelector('.alert-modal .alert-triage-btn');
+  if (!btn) return null;
+  btn.click();
+  return true;
+})()`);
+await sleep(2600);
+const afterTriage = await evaluate(`(() => ({
+  hidden: document.getElementById('alert-modal').hidden,
+  lastUser: [...document.querySelectorAll('.message.user .message-bubble')].pop()?.textContent.trim() || null,
+}))()`);
+check('the Triage button exists', triageText === true);
+check('Triage closes the popup', afterTriage.hidden === true);
+check('Triage sent a query', typeof afterTriage.lastUser === 'string' && afterTriage.lastUser.length > 0,
+  JSON.stringify(afterTriage.lastUser));
+check('the Triage query carries no restricted address',
+  !(afterTriage.lastUser || '').includes('10.220.152.9'), JSON.stringify(afterTriage.lastUser));
+check('the Triage query carries no vendor prose from the description',
+  !/corelight|paloalto|suricata/i.test(afterTriage.lastUser || ''),
+  JSON.stringify(afterTriage.lastUser));
+
 check('no uncaught page errors', pageErrors.length === 0, pageErrors.join(' | '));
 
 await send('Page.close').catch(() => {});
