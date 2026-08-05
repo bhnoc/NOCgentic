@@ -632,10 +632,15 @@ def make_stub_complete(mode: str = "good"):
                     data = json.loads(m.group(1))
                 except Exception:
                     data = {}
-            ta = data.get("total_alerts", 0)
-            tf = data.get("total_flows", 0)
-            td = data.get("total_dns", 0)
-            sb = data.get("severity_breakdown", {})
+            # alert-triage renamed these keys (ct-1/ct-5) so the payload states
+            # which population each count covers. Accept both spellings: the
+            # stub must keep echoing real numbers, or the faithfulness checks
+            # score a silent zero against a payload that is actually correct.
+            ta = data.get("alerts_returned_for_analysis", data.get("total_alerts", 0))
+            tf = data.get("flows_returned_for_analysis", data.get("total_flows", 0))
+            td = data.get("dns_returned_for_analysis", data.get("total_dns", 0))
+            sb = data.get("severity_breakdown_of_returned_rows",
+                          data.get("severity_breakdown", {}))
             empty = (ta in (0, "0")) and (tf in (0, "0"))
             conf = 0.2 if empty else 0.82
             crit = sb.get("critical", 0)

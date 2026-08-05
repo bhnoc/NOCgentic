@@ -62,3 +62,6 @@ nginx/nginx-ssl.conf
 
 # Shadow the Hunter operator vault (never commit originals)
 docs/mocks/shadow-packages/**/redaction-map.json
+
+# QA sweep working dir (findings, validation verdicts, harnesses) — local only
+qa/
