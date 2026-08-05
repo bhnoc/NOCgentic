@@ -78,12 +78,32 @@ class TestFeedSqlExclusions:
         assert "severity <> 'informational'" in sql
 
     def test_self_signed_cert_notice_excluded(self, hunter):
+        """The live message reads 'self-signed certificate in certificate
+        chain' (hyphenated) — a first pass only matched 'self signed' (space)
+        and 476-of-500 rows kept showing up. Both spellings must be covered."""
         sql = self._sql(hunter)
         assert "SSL::Invalid_Server_Cert" in sql
         assert "self signed" in sql.lower()
+        assert "self-signed" in sql.lower()
 
     def test_et_info_exclusion_still_present(self, hunter):
         """Regression: the new exclusions must not have replaced the old one."""
         sql = self._sql(hunter)
         assert "ET INFO%" in sql
         assert "ETPRO INFO%" in sql
+
+    def test_live_self_signed_message_matches_the_like_predicate(self, hunter):
+        """Exact regression: the reported live string still showed up (×70)
+        after the first pass, because it is hyphenated and that pass only
+        checked for a space. Reproduces the SQL LIKE predicate (both arms are
+        plain substring checks, no other wildcards) against that literal
+        string rather than re-deriving the fix's logic."""
+        sql = self._sql(hunter)
+        live_detail = (
+            "SSL certificate validation failed with "
+            "(self-signed certificate in certificate chain)"
+        )
+        assert "AND NOT (alert_name = 'SSL::Invalid_Server_Cert'" in sql
+        assert "self signed" in sql.lower()
+        assert "self-signed" in sql.lower()
+        assert "self-signed" in live_detail.lower()  # sanity: this IS the hyphenated form

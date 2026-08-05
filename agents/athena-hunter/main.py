@@ -1674,7 +1674,8 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
           AND UPPER(alert_name) NOT LIKE 'ETPRO INFO%'
           AND severity <> 'informational'
           AND NOT (alert_name = 'SSL::Invalid_Server_Cert'
-                    AND LOWER(alert_detail) LIKE '%self signed%')
+                    AND (LOWER(alert_detail) LIKE '%self signed%'
+                         OR LOWER(alert_detail) LIKE '%self-signed%'))
         GROUP BY alert_name, alert_type, severity, orig_h
         ORDER BY MAX(ts) DESC
         LIMIT {limit}
