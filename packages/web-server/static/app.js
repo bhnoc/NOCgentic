@@ -744,8 +744,130 @@
     } catch (_) { document.getElementById('api-dot').className = 'status-dot offline'; document.getElementById('api-label').textContent = 'API DOWN'; }
   }
 
+  // ========== View switching (chat | threat hunt) ==========
+  let currentView = 'chat';
+  let activeHuntId = null;
+
+  function renderHuntPicker() {
+    const host = document.getElementById('hunt-view');
+    const hunts = window.THREAT_HUNTS || [];
+    if (!host || !window.ThreatHunt || hunts.length === 0) return;
+
+    // Single hunt: mount directly (legacy path).
+    if (hunts.length === 1) {
+      activeHuntId = hunts[0].id;
+      ThreatHunt.mount(host, hunts[0], handleHuntOutcome);
+      return;
+    }
+
+    host.innerHTML =
+      '<div class="hunt-briefing">' +
+        '<div class="hunt-panel hunt-briefing-card">' +
+          '<div class="hunt-panel-head">' +
+            '<span>Threat Hunt</span>' +
+            '<span class="hunt-meta">' + hunts.length + ' scenarios</span>' +
+          '</div>' +
+          '<div class="hunt-panel-body">' +
+            '<div class="hunt-briefing-title">Select a hunt</div>' +
+            '<p class="hunt-briefing-text">Each drill is a short click-only investigation ending in one BH close code. Dotted terms explain on hover once a hunt starts.</p>' +
+            '<div class="hunt-separator"></div>' +
+            '<div class="hunt-picker-list" id="hunt-picker-list"></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    const list = host.querySelector('#hunt-picker-list');
+    hunts.forEach((hunt) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'hunt-btn hunt-picker-item';
+      btn.innerHTML =
+        '<span class="hunt-picker-title"></span>' +
+        '<span class="hunt-hint hunt-picker-meta"></span>';
+      btn.querySelector('.hunt-picker-title').textContent = hunt.meta.title;
+      btn.querySelector('.hunt-picker-meta').textContent =
+        'target ' + Math.floor(hunt.meta.targetSeconds / 60) + ':' +
+        String(hunt.meta.targetSeconds % 60).padStart(2, '0') + ' · ' + hunt.id;
+      btn.addEventListener('click', () => mountHunt(hunt.id));
+      list.appendChild(btn);
+    });
+    activeHuntId = null;
+  }
+
+  function injectHuntBackButton() {
+    const hunts = window.THREAT_HUNTS || [];
+    if (hunts.length < 2) return;
+    const host = document.getElementById('hunt-view');
+    const card = host && host.querySelector('.hunt-briefing-card .hunt-panel-body');
+    if (!card || host.querySelector('#hunt-back-picker')) return;
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.id = 'hunt-back-picker';
+    back.className = 'hunt-btn';
+    back.style.marginTop = '10px';
+    back.textContent = '← All hunts';
+    back.addEventListener('click', renderHuntPicker);
+    card.appendChild(back);
+  }
+
+  function mountHunt(huntId) {
+    const host = document.getElementById('hunt-view');
+    const hunts = window.THREAT_HUNTS || [];
+    const hunt = hunts.find((h) => h.id === huntId) || hunts[0];
+    if (!host || !hunt || !window.ThreatHunt) return;
+    activeHuntId = hunt.id;
+    ThreatHunt.mount(host, hunt, handleHuntOutcome, injectHuntBackButton);
+  }
+
+  function setView(view) {
+    if (view === currentView) return;
+    currentView = view;
+    const huntActive = view === 'hunt';
+    document.querySelector('main').hidden = huntActive;
+    document.querySelector('.sidebar').hidden = huntActive;
+    document.getElementById('hunt-view').hidden = !huntActive;
+    document.getElementById('tab-chat').classList.toggle('active', !huntActive);
+    document.getElementById('tab-hunt').classList.toggle('active', huntActive);
+
+    if (huntActive) {
+      if (activeHuntId) mountHunt(activeHuntId);
+      else renderHuntPicker();
+    }
+
+    // Deep link: #threat-hunt opens the hunt directly. Use replaceState so
+    // tab flips don't pollute browser history.
+    const hash = huntActive ? '#threat-hunt' : '';
+    history.replaceState(null, '', location.pathname + location.search + hash);
+  }
+
+  function handleHuntOutcome(kind, subject) {
+    const win = kind === 'hunt-win';
+    showToast(win ? 'ok' : 'critical',
+      (win ? 'Hunt resolved — ' : 'Wrong call — ') + subject.src + ' // ' + subject.time + ' elapsed');
+  }
+
+  function applyHashView() {
+    setView(location.hash === '#threat-hunt' ? 'hunt' : 'chat');
+  }
+
+  window.addEventListener('hashchange', applyHashView);
+
+  // ========== Toasts ==========
+  function showToast(tone, text) {
+    const stack = document.getElementById('toast-stack');
+    if (!stack) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-' + tone;
+    toast.textContent = text;
+    stack.appendChild(toast);
+    setTimeout(() => toast.classList.add('toast-out'), 4500);
+    setTimeout(() => toast.remove(), 5000);
+    while (stack.children.length > 4) stack.removeChild(stack.firstChild);
+  }
+
   // ========== Boot ==========
   connectWS();
+  applyHashView();
   loadEventLabel();
   loadInitialAlerts();
   applyMobileAlertMode();
