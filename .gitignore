@@ -65,3 +65,9 @@ docs/mocks/shadow-packages/**/redaction-map.json
 
 # QA sweep working dir (findings, validation verdicts, harnesses) — local only
 qa/
+
+# Third-party source read locally for reference (guardrails-ai checkout + its
+# tarball). ~23MB of vendored upstream code that nothing here imports; kept on
+# disk for reading, never committed.
+guardrails-main/
+g.tgz
