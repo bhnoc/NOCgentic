@@ -15,6 +15,7 @@ window.ThreatHunt = (function () {
   let config = null;
   let onOutcome = null; // (kind, subject) => void — 'hunt-win' | 'hunt-lose'
   let onBriefing = null; // optional () => void — after briefing DOM is ready
+  let onLeave = null; // optional () => void — return to hunt picker at any time
 
   // Game state
   let phase = 'briefing'; // briefing | playing | ended
@@ -37,7 +38,8 @@ window.ThreatHunt = (function () {
     openingLine: 'Hunt open. Pivots are on the right, evidence collects itself, the clock is running.',
     briefingHint: 'Pivot between sources, collect evidence, then choose one close code. Dotted terms explain on hover. Every pivot is a button; no commands to type.',
     noEvidence: 'No evidence yet. Evidence collects on every pivot.',
-    logsButton: 'View logs',
+    evidenceHint: 'Click a chip to open its captures.',
+    leaveButton: '\u2190 All hunts',
     logsTitle: 'Log captures',
     logsQuerying: 'Querying sensor · Esc to cancel',
     logsLoadingTitle: 'Pulling log captures…',
@@ -190,6 +192,29 @@ window.ThreatHunt = (function () {
     });
   }
 
+  /** Tear down play state and hand control back to the picker (if wired). */
+  function leaveToPicker() {
+    if (typeof onLeave !== 'function') return;
+    stopTimer();
+    clearLineQueueTimer();
+    lineQueue = [];
+    closeLogsModal();
+    hideGlossaryTip();
+    onLeave();
+  }
+
+  function leaveButtonHtml(extraClass) {
+    if (typeof onLeave !== 'function') return '';
+    const cls = 'hunt-leave' + (extraClass ? ' ' + extraClass : '');
+    return '<button type="button" class="' + cls + '" id="hunt-leave-btn">' +
+      esc(uiText('leaveButton')) + '</button>';
+  }
+
+  function bindLeaveButton(scope) {
+    const btn = (scope || root).querySelector('#hunt-leave-btn');
+    if (btn) btn.addEventListener('click', leaveToPicker);
+  }
+
   // ---- Briefing ----
   function renderBriefing() {
     stopTimer();
@@ -205,6 +230,7 @@ window.ThreatHunt = (function () {
           <div class="hunt-panel-head">
             <span>Threat Hunt</span>
             <span class="hunt-meta">target ${esc(fmt(config.meta.targetSeconds))}</span>
+            ${leaveButtonHtml('hunt-leave-head')}
           </div>
           <div class="hunt-panel-body">
             <div class="hunt-briefing-title">${annotate(config.meta.title)}</div>
@@ -216,6 +242,7 @@ window.ThreatHunt = (function () {
         </div>
       </div>`;
     bindGlossaryTips(root);
+    bindLeaveButton(root);
     root.querySelector('#hunt-start-btn').addEventListener('click', start);
     if (typeof onBriefing === 'function') onBriefing();
   }
@@ -229,6 +256,7 @@ window.ThreatHunt = (function () {
             <span>Investigation</span>
             <span class="hunt-meta">${esc(config.meta.title)}</span>
             <span class="hunt-timer" id="hunt-timer">${esc(fmt(elapsed))} / ${esc(fmt(config.meta.targetSeconds))}</span>
+            ${leaveButtonHtml('hunt-leave-head')}
           </div>
           <div class="hunt-timeline" id="hunt-timeline" hidden></div>
           <div class="hunt-feed" id="hunt-feed"></div>
@@ -247,13 +275,10 @@ window.ThreatHunt = (function () {
               <span class="hunt-meta" id="hunt-evidence-count">0 collected</span>
             </div>
             <div class="hunt-panel-body" id="hunt-evidence"></div>
-            <div class="hunt-logs-bar" id="hunt-logs-panel" hidden>
-              <button type="button" class="hunt-btn" id="hunt-logs-open">${esc(uiText('logsButton'))}</button>
-              <span class="hunt-meta" id="hunt-logs-meta"></span>
-            </div>
           </div>
         </div>
       </div>`;
+    bindLeaveButton(root);
   }
 
   // ---- Feed streaming ----
@@ -353,11 +378,14 @@ window.ThreatHunt = (function () {
       box.innerHTML = '<span class="hunt-hint">' + esc(uiText('noEvidence')) + '</span>';
       return;
     }
-    box.innerHTML = '<div class="hunt-chips">' +
+    const hasCaptures = landed.some(item => item.sourceLogs && item.sourceLogs.length);
+    box.innerHTML =
+      (hasCaptures ? '<p class="hunt-hint hunt-evidence-hint">' + esc(uiText('evidenceHint')) + '</p>' : '') +
+      '<div class="hunt-chips">' +
       landed.map((item, i) => {
-        // Chips backed by log captures open them; plain chips stay static.
+        // Captures open from the evidence chip — no separate View logs control.
         if (item.sourceLogs && item.sourceLogs.length) {
-          return `<button type="button" class="hunt-chip hunt-chip-link" data-ev="${i}" title="View supporting logs">${annotate(item.label)}</button>`;
+          return `<button type="button" class="hunt-chip hunt-chip-link" data-ev="${i}" title="Open supporting log captures">${annotate(item.label)}</button>`;
         }
         return `<span class="hunt-chip">${annotate(item.label)}</span>`;
       }).join('') +
@@ -530,7 +558,6 @@ window.ThreatHunt = (function () {
       appendLine({ time, tag: '[evidence]', tone: 'ok', text: item.label + ' — ' + item.detail, evidenceItem: collected });
     }
     renderEvidence();
-    renderLogs();
     renderTimeline();
     renderNodePanel();
   }
@@ -655,25 +682,6 @@ window.ThreatHunt = (function () {
     }, delayMs);
   }
 
-  function renderLogs() {
-    const panel = root.querySelector('#hunt-logs-panel');
-    const meta = root.querySelector('#hunt-logs-meta');
-    const openBtn = root.querySelector('#hunt-logs-open');
-    if (!panel || !openBtn) return;
-    closeLogsModal();
-    const node = config.nodes[nodeId] || {};
-    const blocks = node.logs || [];
-    if (!blocks.length) {
-      panel.hidden = true;
-      if (meta) meta.textContent = '';
-      openBtn.onclick = null;
-      return;
-    }
-    panel.hidden = false;
-    if (meta) meta.textContent = blocks.length + (blocks.length === 1 ? ' capture' : ' captures');
-    openBtn.onclick = () => openLogsModal(blocks);
-  }
-
   function start() {
     phase = 'playing';
     nodeId = config.startNode;
@@ -727,11 +735,13 @@ window.ThreatHunt = (function () {
           : ''}
         ${underTarget ? '<span class="hunt-badge-ok">Under target</span>' : ''}
         <div class="hunt-dialog-footer">
+          ${leaveButtonHtml()}
           <button class="hunt-btn" id="hunt-close-btn">Close</button>
           <button class="hunt-btn hunt-btn-primary" id="hunt-again-btn">&#8635; Play Again</button>
         </div>
       </div>`;
     bindGlossaryTips(overlay);
+    bindLeaveButton(overlay);
     overlay.querySelector('#hunt-close-btn').addEventListener('click', () => {
       hideGlossaryTip();
       overlay.remove();
@@ -746,11 +756,23 @@ window.ThreatHunt = (function () {
   }
 
   // ---- Public API ----
-  function mount(el, huntConfig, outcomeCb, briefingCb) {
+  /**
+   * Fourth arg may be a legacy onBriefing function, or an options object:
+   * { onBriefing?, onLeave? }. onLeave renders "← All hunts" on briefing,
+   * play, and end screens so the picker is always one click away.
+   */
+  function mount(el, huntConfig, outcomeCb, briefingOrOpts) {
     root = el;
     config = huntConfig;
     onOutcome = outcomeCb || null;
-    onBriefing = briefingCb || null;
+    onBriefing = null;
+    onLeave = null;
+    if (typeof briefingOrOpts === 'function') {
+      onBriefing = briefingOrOpts;
+    } else if (briefingOrOpts && typeof briefingOrOpts === 'object') {
+      onBriefing = briefingOrOpts.onBriefing || null;
+      onLeave = briefingOrOpts.onLeave || null;
+    }
     warnConfigGaps(config);
     renderBriefing();
   }

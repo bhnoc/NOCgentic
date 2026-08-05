@@ -1,0 +1,117 @@
+{
+  "source": {
+    "dataset": "corelight_http_raw (dns/conn/x509)",
+    "fiction_src_ip": "10.44.31.21",
+    "pulled": "2026-08-05 via cortex xql from conference Corelight",
+    "rule": "Real DDNS/org/SSID/C2 names fiction per NORTHLAB singleton map. Real IPs/domains/people never stored in this file."
+  },
+  "nodes": {
+    "observed-logs": {
+      "title": "corelight_dns \u00b7 DDNS A-lookup rollup",
+      "lines": [
+        "# corelight_dns \u00b7 DDNS A-lookup rollup \u00b7 src 10.44.31.21",
+        "# window from event ts: 2026-08-02T15:54:53Z \u2192 2026-08-04T19:27:05Z (~3 calendar days)",
+        " hits  qtype  rcode     query",
+        "  947  A      NOERROR   starbright.ddns.example",
+        "  947  TOTAL  answers=203.0.113.141  days=3  src_hosts=1"
+      ]
+    },
+    "c2-sessions": {
+      "blocks": [
+        {
+          "id": "log-c2-hint",
+          "title": "HINT \u00b7 corelight \u00b7 DDNS resolve + S0 callbacks on :4061",
+          "lines": [
+            "# Hint from the wire (obfuscated from live Corelight dns/conn/x509 rows)",
+            "# Same shape the hunt thread called out: DDNS resolve + relentless S0 to the A answer",
+            "id.orig_h=10.44.31.21",
+            "query=starbright.ddns.example",
+            "answers=203.0.113.141",
+            "id.resp_h=203.0.113.141",
+            "id.resp_p=4061",
+            "conn_state=S0",
+            "history=S",
+            "certificate.issuer=O=RailBeacon C2",
+            "notice=SSL::Invalid_Server_Cert",
+            "notice=ET MALWARE RailBeacon Framework SSL/TLS Certificate Observed",
+            "notice=ET INFO Packed Executable Download",
+            "note=multi-day DDNS + dead-air TCP on :4061; not constrained to a published lab appliance",
+            "",
+            "# Example rows (fields compacted)",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-02T15:54:53.503193Z\",\"uid\":\"Cfict0003101\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"10.44.0.53\",\"id.resp_p\":53,\"query\":\"starbright.ddns.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.141\"],\"id.vlan\":4431,\"proto\":\"udp\"}",
+            "{\"_path\":\"conn\",\"ts\":\"2026-08-02T15:51:41.381743Z\",\"uid\":\"Cfict0003201\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"203.0.113.141\",\"id.resp_p\":4061,\"proto\":\"tcp\",\"conn_state\":\"S0\",\"history\":\"S\",\"id.vlan\":4431,\"id.resp_h_name.vals\":[\"starbright.ddns.example\"]}",
+            "{\"_path\":\"x509\",\"ts\":\"2026-08-04T17:08:14.807151Z\",\"certificate.issuer\":\"O=RailBeacon C2\",\"certificate.subject\":\"O=RailBeacon C2\",\"certificate.key_type\":\"ecdsa\",\"certificate.key_length\":384,\"certificate.not_valid_before\":\"2026-07-29T09:17:24.000000Z\",\"certificate.not_valid_after\":\"2027-07-29T09:17:24.000000Z\",\"certificate.serial\":\"CCF4C957D5D89823A8C683353919CB06\",\"fingerprint\":\"d119a70ffbc849a1848bce7dc46d58337d7a49391bda9b45ca144d956f10537e\",\"host_cert\":true,\"vlan\":4431}"
+          ]
+        },
+        {
+          "id": "log-c2-sessions",
+          "title": "corelight_conn + dns \u00b7 timed beacon samples",
+          "lines": [
+            "# corelight_conn + dns \u00b7 timed beacon samples (identities fiction)",
+            "id.orig_h=10.44.31.21",
+            "id.resp_h=203.0.113.141",
+            "id.resp_p=4061",
+            "conn_state=S0",
+            "query=starbright.ddns.example",
+            "",
+            "# DNS A lookups across ~3 days (chronological samples)",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-02T15:54:53.503193Z\",\"uid\":\"Cfict0003101\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"10.44.0.53\",\"id.resp_p\":53,\"query\":\"starbright.ddns.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.141\"],\"id.vlan\":4431,\"proto\":\"udp\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-02T18:18:42.552825Z\",\"uid\":\"Cfict0003102\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"10.44.0.53\",\"id.resp_p\":53,\"query\":\"starbright.ddns.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.141\"],\"id.vlan\":4431,\"proto\":\"udp\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-03T00:08:24.801486Z\",\"uid\":\"Cfict0003103\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"10.44.0.53\",\"id.resp_p\":53,\"query\":\"starbright.ddns.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.141\"],\"id.vlan\":4431,\"proto\":\"udp\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-03T14:22:11.410002Z\",\"uid\":\"Cfict0003104\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"10.44.0.53\",\"id.resp_p\":53,\"query\":\"starbright.ddns.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.141\"],\"id.vlan\":4431,\"proto\":\"udp\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-04T17:36:43.694568Z\",\"uid\":\"Cfict0003105\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"10.44.0.53\",\"id.resp_p\":53,\"query\":\"starbright.ddns.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.141\"],\"id.vlan\":4431,\"proto\":\"udp\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-04T19:00:37.330815Z\",\"uid\":\"Cfict0003106\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"10.44.0.53\",\"id.resp_p\":53,\"query\":\"starbright.ddns.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.141\"],\"id.vlan\":4431,\"proto\":\"udp\"}",
+            "",
+            "# TCP follow-ups to the A answer (all S0 in sampled window \u00b7 8067 total)",
+            "---",
+            "{\"_path\":\"conn\",\"ts\":\"2026-08-02T15:51:41.381743Z\",\"uid\":\"Cfict0003201\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"203.0.113.141\",\"id.resp_p\":4061,\"proto\":\"tcp\",\"conn_state\":\"S0\",\"history\":\"S\",\"id.vlan\":4431,\"id.resp_h_name.vals\":[\"starbright.ddns.example\"]}",
+            "---",
+            "{\"_path\":\"conn\",\"ts\":\"2026-08-02T16:00:02.840867Z\",\"uid\":\"Cfict0003202\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"203.0.113.141\",\"id.resp_p\":4061,\"proto\":\"tcp\",\"conn_state\":\"S0\",\"history\":\"S\",\"id.vlan\":4431,\"id.resp_h_name.vals\":[\"starbright.ddns.example\"]}",
+            "---",
+            "{\"_path\":\"conn\",\"ts\":\"2026-08-04T17:57:58.424017Z\",\"uid\":\"Cfict0003203\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"203.0.113.141\",\"id.resp_p\":4061,\"proto\":\"tcp\",\"conn_state\":\"S0\",\"history\":\"S\",\"id.vlan\":4431,\"id.resp_h_name.vals\":[\"starbright.ddns.example\"]}",
+            "---",
+            "{\"_path\":\"conn\",\"ts\":\"2026-08-04T18:44:00.550064Z\",\"uid\":\"Cfict0003204\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"203.0.113.141\",\"id.resp_p\":4061,\"proto\":\"tcp\",\"conn_state\":\"S0\",\"history\":\"S\",\"id.vlan\":4431,\"id.resp_h_name.vals\":[\"starbright.ddns.example\"]}",
+            "---",
+            "{\"_path\":\"conn\",\"ts\":\"2026-08-04T19:12:20.001428Z\",\"uid\":\"Cfict0003205\",\"id.orig_h\":\"10.44.31.21\",\"id.resp_h\":\"203.0.113.141\",\"id.resp_p\":4061,\"proto\":\"tcp\",\"conn_state\":\"S0\",\"history\":\"S\",\"id.vlan\":4431,\"id.resp_h_name.vals\":[\"starbright.ddns.example\"]}",
+            "---",
+            "{\"_path\":\"x509\",\"ts\":\"2026-08-04T17:08:14.807151Z\",\"certificate.issuer\":\"O=RailBeacon C2\",\"certificate.subject\":\"O=RailBeacon C2\",\"certificate.key_type\":\"ecdsa\",\"certificate.key_length\":384,\"certificate.not_valid_before\":\"2026-07-29T09:17:24.000000Z\",\"certificate.not_valid_after\":\"2027-07-29T09:17:24.000000Z\",\"certificate.serial\":\"CCF4C957D5D89823A8C683353919CB06\",\"fingerprint\":\"d119a70ffbc849a1848bce7dc46d58337d7a49391bda9b45ca144d956f10537e\",\"host_cert\":true,\"vlan\":4431}"
+          ]
+        }
+      ]
+    },
+    "auto-class": {
+      "title": "auto-class first-pass \u00b7 Social Engineering Lab",
+      "lines": [
+        "# auto-class first-pass \u00b7 Social Engineering Lab VLAN",
+        "src=10.44.31.21",
+        "vlan_label=Social Engineering Lab",
+        "auto_class_claim=BH Benign coursework",
+        "hostname=desktop-lab31a.local",
+        "",
+        "# syllabus coverage check (course map excerpt)",
+        "syllabus_topics=phishing-kit labs, browser credential harvest demos, awareness tabletop",
+        "syllabus_ddns=starbright.ddns.example \u2192 NOT LISTED",
+        "syllabus_external_beacon=multi-day DDNS callbacks \u2192 NOT LISTED",
+        "note=VLAN membership is a peer-check hint, not a close code"
+      ]
+    },
+    "class-peers": {
+      "title": "peer search \u00b7 Social Engineering Lab \u2192 same DDNS",
+      "lines": [
+        "# peer search \u00b7 Social Engineering Lab VLAN \u2192 same DDNS query",
+        "query=starbright.ddns.example",
+        "scope=Social Engineering Lab VLAN samples \u00b7 same multi-day window",
+        "hits  id.orig_h",
+        " 947  10.44.31.21",
+        "peers_matching=0",
+        "note=pattern unique to 10.44.31.21 \u2014 sanctioned class C2 would show peers"
+      ]
+    }
+  }
+}

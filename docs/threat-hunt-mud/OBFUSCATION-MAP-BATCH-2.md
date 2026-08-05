@@ -5,6 +5,7 @@ shipped MUD copy must never contain the **Real** column.
 
 | Hunt id | Real thread theme (do not ship) | Fiction in MUD |
 | --- | --- | --- |
+| `northlab-cleartext-siem-login` | Cleartext classroom SIEM UI logins to cloud VPS `:8001`; peer students on same dest | LogDeck / `logdeckd` / `LogDeck_Security_Essentials`; `10.44.22.11` + peers `.12/.13/.15/.16`; dest `203.0.113.40`; alert A-5521 — see `logs/OBFUSCATION-MAP-CLEARTEXT-SIEM-LOGIN.md` |
 | `fakecorp-supplychain-dns` | Named supply-chain / RAT DNS on general Wi-Fi; managed booth laptop | WirePipe / `wirepipe.zone` / `litewire.cloud` / `sfrlake.example`; GLASSLINE MDM; `10.44.30.12`; alert A-6602 |
 | `northlab-singleton-c2` | DDNS / C2 with false “class” auto-clear; singleton beacon | `starbright.ddns.example`; Social Engineering Lab VLAN; `10.44.31.21`; alert A-6610 |
 | `stagecast-license-pii-http` | Vendor license HTTP POST with PII | StageCast / `activate.stagecast.example`; Riley Quill (invented); `10.44.32.40`; alert A-6621 |

@@ -33,8 +33,8 @@ interface HuntConfig {
 
 // Chrome-copy keys the engine accepts in config.ui (threat-hunt.js DEFAULT_UI).
 const UI_KEYS = [
-  'openingTag', 'openingLine', 'briefingHint', 'noEvidence',
-  'logsButton', 'logsTitle', 'logsQuerying', 'logsLoadingTitle', 'logsLoadingMeta',
+  'openingTag', 'openingLine', 'briefingHint', 'noEvidence', 'evidenceHint', 'leaveButton',
+  'logsTitle', 'logsQuerying', 'logsLoadingTitle', 'logsLoadingMeta',
   'timelineTitle', 'timelineHint', 'timelineUnobserved', 'timelineClickPrompt', 'timelineEmpty',
 ];
 
@@ -138,8 +138,21 @@ describe('threat hunt registry', () => {
         }
       }
     }
-    // The MCP hunt ships hints on all five evidence-bearing rooms.
+    // Full-length hunts ship hints on evidence-bearing rooms (MCP alone has 5).
     expect(hinted).toBeGreaterThanOrEqual(5);
+  });
+
+  it('ships logs on every evidence-bearing room so chips open captures (no View logs bar)', () => {
+    for (const hunt of hunts) {
+      for (const [key, node] of Object.entries(hunt.nodes)) {
+        if (node.isDecision) continue;
+        if ((node.evidence ?? []).length === 0) continue;
+        const logs = node.logs ?? [];
+        expect(logs.length, `${hunt.id}/${key}`).toBeGreaterThan(0);
+        expect(logs[0].lines.length, `${hunt.id}/${key}`).toBeGreaterThan(2);
+      }
+      expect((hunt.timeline ?? []).length, hunt.id).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it('ships obfuscated Corelight log captures on fakecorp-cleartext-mcp rooms', () => {
@@ -189,6 +202,38 @@ describe('threat hunt registry', () => {
     expect(correct[0].label).toBe('BH Benign');
   });
 
+  it('ships obfuscated Corelight log captures on northlab-cleartext-siem-login rooms', () => {
+    const hunt = hunts.find(h => h.id === 'northlab-cleartext-siem-login');
+    expect(hunt).toBeDefined();
+    for (const key of ['observed-logs', 'http-login', 'dest-context', 'class-peers']) {
+      const logs = hunt!.nodes[key].logs ?? [];
+      expect(logs.length, key).toBeGreaterThan(0);
+      expect(logs[0].title.length, key).toBeGreaterThan(0);
+      expect(logs[0].lines.length, key).toBeGreaterThan(2);
+      const blob = logs.map(l => l.lines.join('\n')).join('\n').toLowerCase();
+      expect(blob.includes('10.220.57'), key).toBe(false);
+      expect(blob.includes('splunk'), key).toBe(false);
+      expect(
+        blob.includes('10.44.22.11') || blob.includes('203.0.113.40') || blob.includes('logdeck'),
+        key,
+      ).toBe(true);
+    }
+    expect((hunt!.timeline ?? []).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('puts a cleartext-SIEM HINT block in http-login logs (creds on :8001 + path set)', () => {
+    const hunt = hunts.find(h => h.id === 'northlab-cleartext-siem-login');
+    const logs = hunt!.nodes['http-login'].logs ?? [];
+    const blob = logs.map(l => l.lines.join('\n')).join('\n');
+    const titles = logs.map(l => l.title).join('\n');
+    expect(titles).toMatch(/HINT/i);
+    expect(blob).toMatch(/id\.resp_p=8001|"id\.resp_p":8001/);
+    expect(blob).toContain('password=[REDACTED]');
+    expect(blob).toContain('/en-GB/account/login');
+    expect(blob).toContain('/en-GB/logdeckd/__raw/services/appsbrowser/account:login');
+    expect((blob + '\n' + titles).toLowerCase()).not.toContain('smoking gun');
+  });
+
   it('ships batch-2 hunts with the expected close codes', () => {
     const expected: Record<string, string> = {
       'fakecorp-supplychain-dns': 'true-positive',
@@ -215,7 +260,8 @@ describe('threat hunt registry', () => {
       'falconforce', 'informafestivals', 'bytespider', 'mend.io', 'ihs.gov',
       // Product / path leftovers from live threads (fiction map must win).
       'recorded-future', 'google-secops', 'silentpush', 'opencti',
-      'httpforever.com', '10.220.107',
+      'httpforever.com', '10.220.107', '10.220.57', '138.197',
+      'splunk', 'ekoparty', 'veronica', 'cvut', 'corala',
     ];
     for (const term of banned) {
       expect(blob.includes(term), term).toBe(false);
@@ -227,8 +273,11 @@ describe('threat hunt registry', () => {
     expect(blob.includes('52.14.88')).toBe(false);
     expect(blob.toLowerCase().includes('azure.com')).toBe(false);
     expect(blob).not.toMatch(/Bearer\s+mcpk_(?!\[REDACTED\])/);
-    expect(blob).not.toMatch(/password\s*=\s*[^\s"\\,]{3,}/i);
+    // Allow password=[REDACTED] only — never live password values.
+    expect(blob).not.toMatch(/password\s*=\s*(?!\[REDACTED\])[^\s"\\,]{3,}/i);
     // Public IPv4 must be RFC 5737 documentation ranges only (or absent).
+    // Conference fiction uses 10.44.0.0/16. Loopback must not appear — use a
+    // fiction hostname in JNDI/test payloads instead.
     const ips = blob.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? [];
     for (const ip of ips) {
       const [a, b, c] = ip.split('.').map(Number);
@@ -239,6 +288,7 @@ describe('threat hunt registry', () => {
         (a === 203 && b === 0 && c === 113);
       expect(conf || testNet, `non-fiction IP ${ip}`).toBe(true);
     }
+    expect(blob.includes('127.0.0.1')).toBe(false);
     // Emails only on invented .example tenants.
     for (const email of blob.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? []) {
       expect(email.endsWith('.example'), email).toBe(true);

@@ -100,9 +100,10 @@ export interface ThreatHuntNode {
   /** Collected on entry. Every visit is worth something — no punishing dead ends. */
   evidence?: ThreatHuntEvidence[];
   /**
-   * Optional obfuscated log captures shown in the Logs rail when this node is
-   * active. Authored from real sensor rows, then hard-scrubbed (no real IPs,
-   * orgs, people, or bearer tokens).
+   * Optional obfuscated log captures. When present, evidence chips collected
+   * on this node become clickable and reopen these captures in the modal
+   * (timeline markers can reopen them too). Authored from real sensor rows,
+   * then hard-scrubbed (no real IPs, orgs, people, or bearer tokens).
    */
   logs?: ThreatHuntLogBlock[];
   /** Outbound pivots. Omit on the decision node. */
@@ -151,13 +152,14 @@ export interface ThreatHuntConfig {
    * Optional overrides for engine chrome copy, so a config alone controls
    * every rendered string. Any subset may be set; unset keys use engine
    * defaults. Keys: openingTag, openingLine, briefingHint, noEvidence,
-   * logsButton, logsTitle, logsQuerying, logsLoadingTitle, logsLoadingMeta,
-   * timelineTitle, timelineHint, timelineUnobserved, timelineClickPrompt,
-   * timelineEmpty.
+   * evidenceHint, leaveButton, logsTitle, logsQuerying, logsLoadingTitle,
+   * logsLoadingMeta, timelineTitle, timelineHint, timelineUnobserved,
+   * timelineClickPrompt, timelineEmpty.
    */
   ui?: Partial<Record<
-    | 'openingTag' | 'openingLine' | 'briefingHint' | 'noEvidence'
-    | 'logsButton' | 'logsTitle' | 'logsQuerying'
+    | 'openingTag' | 'openingLine' | 'briefingHint' | 'noEvidence' | 'evidenceHint'
+    | 'leaveButton'
+    | 'logsTitle' | 'logsQuerying'
     | 'logsLoadingTitle' | 'logsLoadingMeta'
     | 'timelineTitle' | 'timelineHint' | 'timelineUnobserved'
     | 'timelineClickPrompt' | 'timelineEmpty',

@@ -5,12 +5,16 @@
  * True Positive, but shared classroom VLAN peers on a training SIEM earn
  * BH Benign. Live registry: packages/web-server/static/threat-hunt-config.js
  * (window.THREAT_HUNTS).
+ * Full-length logs / timeline / hints live in
+ * packages/web-server/static/threat-hunt-config.js (hunt id northlab-cleartext-siem-login)
+ * and docs/threat-hunt-mud/logs/northlab-cleartext-siem-login.obfuscated.json.
+ * This file is a graph sketch / teaching note — prefer the live registry.
  */
 window.THREATHUNT_NORTHLAB_CLEARTEXT_SIEM_LOGIN = {
   id: 'northlab-cleartext-siem-login',
   meta: {
     title: 'Cleartext SIEM login, classroom VLAN',
-    briefing: 'Alert A-5521 is open: cleartext HTTP from 10.44.22.11 to a cloud VPS, LogDeck SIEM UI login paths, credentials from 3 attempts visible on the wire. Source sits on a Malware Traffic Lab classroom VLAN. Pivot through the evidence, separate ugly cleartext from unsanctioned incident, and post the correct BH close code. Target: under 3 minutes.',
+    briefing: 'Alert A-5521 is open: cleartext HTTP from 10.44.22.11 to a cloud VPS, LogDeck SIEM UI login paths, credentials from 3 distinct usernames in an 8m window visible on the wire. Source sits on a Malware Traffic Lab classroom VLAN. Pivot through the evidence, separate ugly cleartext from unsanctioned incident, and post the correct BH close code. Target: under 3 minutes.',
     targetSeconds: 180
   },
   glossary: {

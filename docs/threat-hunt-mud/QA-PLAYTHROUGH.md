@@ -28,7 +28,7 @@ PORT=3010 npm run dev
 - [ ] Path: Observed → HTTP sessions → Resolver → Device → Class traffic
 - [ ] Before enough evidence, **Move to close codes** is disabled with a clear Needs N hint
 - [ ] After ≥4 evidence, gate unlocks
-- [ ] **View logs** → staged “querying” → captures; Esc / backdrop / Close all dismiss
+- [ ] **Evidence chip** → staged “querying” → captures; Esc / backdrop / Close all dismiss (no separate View logs button)
 - [ ] Evidence chip → Show hint highlights the right rows and scrolls to first mark
 - [ ] Timeline marker click opens captures with rows pre-highlighted
 - [ ] False Positive → lose dialog names True Positive as correct first move
@@ -45,7 +45,7 @@ For each remaining picker entry:
 
 - [ ] Start → walk to close codes without dead ends
 - [ ] Correct close wins; one wrong close loses and teaches
-- [ ] No console errors; no broken “View logs” if the room has no captures
+- [ ] No console errors; evidence chips without captures stay non-clickable (full-length hunts should always ship logs)
 
 ## After checklist
 

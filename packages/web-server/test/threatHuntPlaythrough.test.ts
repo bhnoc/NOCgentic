@@ -257,15 +257,57 @@ describe('playthrough: fakecorp-cleartext-mcp story', () => {
   });
 });
 
+describe('playthrough story: northlab-cleartext-siem-login logs', () => {
+  const siem = hunts.find(h => h.id === 'northlab-cleartext-siem-login')!;
+
+  it('is registered with full-length log surfaces', () => {
+    expect(siem).toBeDefined();
+    for (const id of ['observed-logs', 'http-login', 'dest-context', 'class-peers']) {
+      expect((siem.nodes[id].logs ?? []).length, id).toBeGreaterThan(0);
+    }
+  });
+
+  it('timeline is chronological and grounded in correlated logs', () => {
+    const events = siem.timeline ?? [];
+    expect(events.length).toBeGreaterThanOrEqual(4);
+    const times = events.map(e => e.t);
+    expect(times).toEqual([...times].sort());
+    for (const e of events) {
+      const blob = (e.nodes ?? []).map(n => nodeLogBlob(siem, n)).join('\n');
+      for (const h of e.hint ?? []) {
+        expect(blob.includes(h), `${e.id}: hint "${h}"`).toBe(true);
+      }
+    }
+  });
+
+  it('http-login timed samples are chronological', () => {
+    const blob = nodeLogBlob(siem, 'http-login');
+    const times = [...blob.matchAll(/ts":"2026-08-04T([^"]+)/g)].map(m => m[1]);
+    expect(times.length).toBeGreaterThanOrEqual(3);
+    expect(times).toEqual([...times].sort());
+  });
+
+  it('rollups and narration agree on 3 usernames / 8m / :8001', () => {
+    const rollup = nodeLogBlob(siem, 'observed-logs');
+    expect(rollup).toMatch(/usernames=3/);
+    expect(rollup).toMatch(/8001/);
+    expect(rollup).toMatch(/8m/);
+    const start = siem.nodes[siem.startNode].narration;
+    expect(start).toMatch(/8m/);
+    expect(start).toMatch(/18:41:29/);
+    expect(start).toMatch(/18:49:37/);
+  });
+});
+
 /** Key numbers / anchors that briefing and start narration must both carry. */
 const STORY_ANCHORS: Record<string, RegExp[]> = {
-  'northlab-cleartext-siem-login': [/A-5521/, /10\.44\.22\.11/, /3/, /6m/, /8001/, /LogDeck/],
-  'fakecorp-supplychain-dns': [/A-6602/, /10\.44\.30\.12/, /12m/, /wirepipe\.zone/, /NXDOMAIN/, /GLASSLINE|WirePipe/],
+  'northlab-cleartext-siem-login': [/A-5521/, /10\.44\.22\.11/, /3/, /8m/, /8001/, /LogDeck/],
+  'fakecorp-supplychain-dns': [/A-6602/, /10\.44\.30\.12/, /2h|two DNS bursts/i, /wirepipe\.zone/, /NXDOMAIN/, /GLASSLINE|WirePipe/],
   'northlab-singleton-c2': [/A-6610/, /10\.44\.31\.21/, /starbright\.ddns\.example/, /3 day|~3 day|multi-day/i],
   'stagecast-license-pii-http': [/A-6621/, /10\.44\.32\.40/, /activate\.stagecast\.example/, /SC-77419/, /activate\.php/],
   'noc-log4j-sensor-test': [/A-6633/, /10\.44\.1\.14/, /alwayshttp\.example/, /same minute/, /Suricata/, /NGFW/],
   'rivertide-azure-background': [
-    /A-6644/, /10\.44\.33\.36/, /40m/, /RIVERTIDE/,
+    /A-6644/, /10\.44\.33\.36/, /37m/, /RIVERTIDE/,
     /flexops\.azure\.intra\.rivertide\.example/,
     /rivdirect\.postgres\.azure\.intra\.rivertide\.example/,
   ],

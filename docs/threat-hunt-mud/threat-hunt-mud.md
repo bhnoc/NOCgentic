@@ -53,7 +53,7 @@ Full types live in `docs/threat-hunt-mud/ThreatHunt.d.ts`. Summary:
 | `nodes[].tag` | Bracketed mono source tag for the feed ("[proxy]"). |
 | `nodes[].narration` | Appended to the log feed on entry. |
 | `nodes[].evidence` | `{ id, label, detail, hint? }[]`, collected once each, shown as chips. When the node has `logs`, the chip is clickable and reopens those captures; `hint` substrings drive the modal's "Show hint" highlight. |
-| `nodes[].logs` | Optional obfuscated capture blocks `{ id?, title, lines }[]`. Renders the "View logs" bar + modal; hides when absent. |
+| `nodes[].logs` | Optional obfuscated capture blocks `{ id?, title, lines }[]`. Evidence chips on that room become clickable and open the captures modal; timeline markers can reopen them too. |
 | `nodes[].exits` | `{ to, label, requiresEvidence? }[]` pivot buttons. |
 | `nodes[].isDecision` | Marks the containment node. Exactly one should be reachable. |
 | `nodes[].actions` | `{ id, label, correct?, resultNote }[]`. Exactly one `correct: true`. |

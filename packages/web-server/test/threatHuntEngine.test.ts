@@ -31,7 +31,7 @@ declare global {
         el: HTMLElement,
         config: HuntConfig,
         onOutcome?: (kind: string, subject?: Record<string, unknown>) => void,
-        onBriefing?: () => void,
+        onBriefingOrOpts?: (() => void) | { onBriefing?: () => void; onLeave?: () => void },
       ) => void;
       reset: () => void;
     };
@@ -166,6 +166,34 @@ describe('threat hunt engine UI: fakecorp-cleartext-mcp', () => {
     expect(host.querySelector('#hunt-feed')?.textContent).toMatch(/A-4418|289|MCP/);
   });
 
+  it('offers All hunts on briefing and during play when onLeave is wired', () => {
+    let left = 0;
+    window.ThreatHunt!.mount(host, mcp, undefined, {
+      onLeave: () => { left += 1; },
+    });
+    const briefingLeave = host.querySelector('#hunt-leave-btn') as HTMLButtonElement | null;
+    expect(briefingLeave?.textContent).toMatch(/All hunts/i);
+    briefingLeave!.click();
+    expect(left).toBe(1);
+
+    window.ThreatHunt!.mount(host, mcp, undefined, {
+      onLeave: () => { left += 1; },
+    });
+    clickLabeledButton(host, 'Start Hunt');
+    flushFeed();
+    const playLeave = host.querySelector('#hunt-leave-btn') as HTMLButtonElement | null;
+    expect(playLeave).toBeTruthy();
+    playLeave!.click();
+    expect(left).toBe(2);
+  });
+
+  it('hides All hunts when onLeave is not provided', () => {
+    expect(host.querySelector('#hunt-leave-btn')).toBeNull();
+    clickLabeledButton(host, 'Start Hunt');
+    flushFeed();
+    expect(host.querySelector('#hunt-leave-btn')).toBeNull();
+  });
+
   it('keeps the class→decision gate locked until 4 evidence, then unlocks', () => {
     clickLabeledButton(host, 'Start Hunt');
     flushFeed();
@@ -195,32 +223,33 @@ describe('threat hunt engine UI: fakecorp-cleartext-mcp', () => {
     expect(unlocked.disabled).toBe(false);
   });
 
-  it('lands evidence chips, opens logs modal with hint marks, and closes frictionlessly', () => {
+  it('lands evidence chips, opens logs from the chip (no separate View logs bar), and closes frictionlessly', () => {
     clickLabeledButton(host, 'Start Hunt');
     flushFeed();
     findAction(host, 'Inspect the HTTP sessions').click();
     flushFeed();
 
     expect(host.querySelector('#hunt-evidence-count')?.textContent).toMatch(/collected/);
+    // Captures open from evidence chips only — no node-bar View logs control.
+    expect(host.querySelector('#hunt-logs-open')).toBeNull();
+    expect(host.querySelector('#hunt-logs-panel')).toBeNull();
+    expect(host.querySelector('.hunt-evidence-hint')?.textContent).toMatch(/chip/i);
+
     const chips = host.querySelectorAll('#hunt-evidence .hunt-chip-link');
     expect(chips.length).toBeGreaterThan(0);
 
-    // Node-bar View logs: captures load, no hint button (hints come from chips/timeline).
-    const openBtn = host.querySelector('#hunt-logs-open') as HTMLButtonElement;
-    expect(openBtn).toBeTruthy();
-    expect(host.querySelector('#hunt-logs-panel')?.hasAttribute('hidden')).toBe(false);
-    openBtn.click();
+    // Chip without hints on observed-logs may exist; http-conn chip has hints.
+    (chips[chips.length - 1] as HTMLButtonElement).click();
     let modal = document.querySelector('#hunt-logs-modal');
     expect(modal).toBeTruthy();
     vi.advanceTimersByTime(2000);
     expect(modal?.querySelector('.hunt-log-pre')).toBeTruthy();
-    expect(modal?.querySelector('#hunt-logs-hint')).toBeNull();
 
     // Esc closes
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(document.querySelector('#hunt-logs-modal')).toBeNull();
 
-    // Evidence chip opens with Show hint → marks
+    // Re-open: Show hint → marks (http-conn evidence carries hint substrings)
     (chips[chips.length - 1] as HTMLButtonElement).click();
     modal = document.querySelector('#hunt-logs-modal');
     expect(modal).toBeTruthy();
@@ -233,7 +262,7 @@ describe('threat hunt engine UI: fakecorp-cleartext-mcp', () => {
     expect(document.querySelector('#hunt-logs-modal')).toBeNull();
 
     // Backdrop click on the overlay dismisses
-    openBtn.click();
+    (chips[0] as HTMLButtonElement).click();
     modal = document.querySelector('#hunt-logs-modal');
     vi.advanceTimersByTime(2000);
     modal!.dispatchEvent(new MouseEvent('click', { bubbles: true }));

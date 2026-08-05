@@ -1224,6 +1224,37 @@
       background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-card) 100%);
     }
 
+    /* Return to hunt picker — always available when multiple hunts/apps exist */
+    .hunt-leave {
+      appearance: none;
+      margin: 0;
+      margin-left: auto;
+      padding: 4px 8px;
+      border: 1px solid var(--border-bright);
+      border-radius: 1px;
+      background: transparent;
+      color: var(--ice-300);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 400;
+      letter-spacing: 0.04em;
+      text-transform: none;
+      cursor: pointer;
+      transition: all var(--transition);
+      white-space: nowrap;
+    }
+
+    .hunt-leave:hover {
+      background: rgba(30,144,255,0.12);
+      border-color: var(--ice-500);
+      color: var(--ice-100);
+    }
+
+    .hunt-dialog-footer .hunt-leave {
+      margin-left: 0;
+      margin-right: auto;
+    }
+
     .hunt-meta {
       font-family: var(--font-mono);
       font-size: 10px;
@@ -1840,6 +1871,10 @@
       word-break: break-word;
     }
 
+    .hunt-evidence-hint {
+      margin: 0 0 8px;
+    }
+
     .hunt-chips {
       display: flex;
       flex-wrap: wrap;
@@ -1858,7 +1893,7 @@
       cursor: default;
     }
 
-    /* Evidence chips backed by log captures are clickable */
+    /* Evidence chips backed by log captures are the only capture entrypoint */
     button.hunt-chip-link {
       appearance: none;
       font: inherit;
@@ -1866,6 +1901,9 @@
       font-size: 10px;
       cursor: pointer;
       transition: all var(--transition);
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 2px;
     }
 
     button.hunt-chip-link:hover {

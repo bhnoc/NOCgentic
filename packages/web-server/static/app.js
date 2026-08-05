@@ -843,21 +843,9 @@
     }
   }
 
-  function injectHuntBackButton() {
-    const hunts = window.THREAT_HUNTS || [];
-    const apps = huntApps();
-    if (hunts.length + apps.length < 2) return;
-    const host = document.getElementById('hunt-view');
-    const card = host && host.querySelector('.hunt-briefing-card .hunt-panel-body');
-    if (!card || host.querySelector('#hunt-back-picker')) return;
-    const back = document.createElement('button');
-    back.type = 'button';
-    back.id = 'hunt-back-picker';
-    back.className = 'hunt-btn';
-    back.style.marginTop = '10px';
-    back.textContent = '← All hunts';
-    back.addEventListener('click', renderHuntPicker);
-    card.appendChild(back);
+  function leaveToHuntPicker() {
+    activeHuntId = null;
+    renderHuntPicker();
   }
 
   function mountHunt(huntId) {
@@ -866,7 +854,11 @@
     const hunt = hunts.find((h) => h.id === huntId) || hunts[0];
     if (!host || !hunt || !window.ThreatHunt) return;
     activeHuntId = hunt.id;
-    ThreatHunt.mount(host, hunt, handleHuntOutcome, injectHuntBackButton);
+    // Picker return is available on briefing, during play, and on the end dialog.
+    const canLeave = hunts.length + huntApps().length >= 2;
+    ThreatHunt.mount(host, hunt, handleHuntOutcome, {
+      onLeave: canLeave ? leaveToHuntPicker : null,
+    });
   }
 
   function setView(view) {

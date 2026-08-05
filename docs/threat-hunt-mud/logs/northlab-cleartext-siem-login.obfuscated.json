@@ -1,0 +1,114 @@
+{
+  "source": {
+    "dataset": "corelight_http_raw",
+    "fiction_src_ip": "10.44.22.11",
+    "pulled": "2026-08-05 via cortex xql from conference Corelight",
+    "rule": "Passwords redacted; org/host/URI/product names fiction per NORTHLAB/LogDeck map. Real IPs/domains/people/passwords never stored in this file."
+  },
+  "nodes": {
+    "observed-logs": {
+      "title": "corelight_http_raw · cleartext SIEM login rollup",
+      "lines": [
+        "# corelight_http_raw · cleartext SIEM login rollup · src 10.44.22.11 · dst port 8001",
+        "# window for the three distinct-username login posts: 18:41:29–18:49:37 (~8m)",
+        " hits  methods  status  uri",
+        "    1  POST     200     /en-GB/account/login",
+        "    1  POST     403     /en-GB/logdeckd/__raw/services/appsbrowser/account:login",
+        "    1  POST     200     /en-GB/logdeckd/__raw/services/appsbrowser/account:login",
+        "    3  TOTAL   usernames=3  dst_port=8001  tls=absent"
+      ]
+    },
+    "http-login": {
+      "blocks": [
+        {
+          "id": "log-http-hint",
+          "title": "HINT · corelight_http_raw · cleartext credentials on :8001",
+          "lines": [
+            "# Hint from the wire (obfuscated from live Corelight http rows)",
+            "# Same shape the hunt thread called out: SIEM UI login in the clear to a cloud VPS",
+            "id.orig_h=10.44.22.11",
+            "id.resp_h=203.0.113.40",
+            "id.resp_p=8001",
+            "version=HTTP/1.1",
+            "tls=absent",
+            "server=LogDeckd",
+            "host=logdeck-lab.cloud-vps.example",
+            "uri_set=/en-GB/account/login,/en-GB/logdeckd/__raw/services/appsbrowser/account:login",
+            "usernames=labadmin,course-feed,instructor+lab@northlab.example",
+            "password=[REDACTED]",
+            "user_agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150.0 Safari/537.36",
+            "note=username+password form fields in cleartext POST bodies on port 8001 to a cloud VPS LogDeck UI",
+            "",
+            "# Example rows (fields compacted · secrets redacted)",
+            "{\"_path\":\"http\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"POST\",\"host\":\"logdeck-lab.cloud-vps.example\",\"uri\":\"/en-GB/account/login\",\"status_code\":200,\"server\":\"LogDeckd\",\"user_agent\":\"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150.0 Safari/537.36\"}",
+            "post_body=cval=1458296129&username=labadmin&password=[REDACTED]&return_to=%2Fen-GB%2F&set_has_logged_in=false",
+            "{\"_path\":\"http\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"POST\",\"uri\":\"/en-GB/logdeckd/__raw/services/appsbrowser/account:login\",\"status_code\":403,\"server\":\"LogDeckd\"}",
+            "post_body=username=instructor%2Blab%40northlab.example&password=[REDACTED]"
+          ]
+        },
+        {
+          "id": "log-http-login",
+          "title": "corelight_http_raw · timed login samples",
+          "lines": [
+            "# corelight_http_raw · timed login samples (secrets redacted, identities fiction)",
+            "id.orig_h=10.44.22.11",
+            "id.resp_p=8001",
+            "version=HTTP/1.1",
+            "tls=absent",
+            "server=LogDeckd",
+            "host=logdeck-lab.cloud-vps.example",
+            "",
+            "# Timed credential posts (chronological · three distinct usernames in ~8m)",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-04T18:41:29.352254Z\",\"uid\":\"Cfict0000101\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"POST\",\"host\":\"logdeck-lab.cloud-vps.example\",\"uri\":\"/en-GB/account/login\",\"status_code\":200,\"server\":\"LogDeckd\",\"user_agent\":\"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150.0 Safari/537.36\"}",
+            "post_body=cval=1458296129&username=labadmin&password=[REDACTED]&return_to=%2Fen-GB%2F&set_has_logged_in=false",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-04T18:45:07.728056Z\",\"uid\":\"Cfict0000102\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"POST\",\"host\":\"logdeck-lab.cloud-vps.example\",\"uri\":\"/en-GB/logdeckd/__raw/services/appsbrowser/account:login\",\"status_code\":403,\"server\":\"LogDeckd\"}",
+            "post_body=username=instructor%2Blab%40northlab.example&password=[REDACTED]",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-04T18:49:37.842350Z\",\"uid\":\"Cfict0000103\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"POST\",\"host\":\"logdeck-lab.cloud-vps.example\",\"uri\":\"/en-GB/logdeckd/__raw/services/appsbrowser/account:login\",\"status_code\":200,\"server\":\"LogDeckd\"}",
+            "post_body=username=course-feed&password=[REDACTED]"
+          ]
+        }
+      ]
+    },
+    "dest-context": {
+      "title": "destination profile · LogDeck class tooling crumbs",
+      "lines": [
+        "# destination profile · 203.0.113.40:8001 (obfuscated from live http rows)",
+        "id.resp_h=203.0.113.40",
+        "id.resp_p=8001",
+        "server=LogDeckd",
+        "host=logdeck-lab.cloud-vps.example",
+        "tls=absent",
+        "app_pack=LogDeck_Security_Essentials",
+        "app_pack=logdeck_app_for_logdeck_o11y_cloud",
+        "",
+        "# URI crumbs (chronological samples after the login burst)",
+        "---",
+        "{\"_path\":\"http\",\"ts\":\"2026-08-04T18:52:25.070141Z\",\"uid\":\"Cfict0000110\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"GET\",\"uri\":\"/en-GB/logdeckd/__raw/servicesNS/labadmin/LogDeck_Security_Essentials/apps/local\",\"status_code\":200,\"server\":\"LogDeckd\"}",
+        "---",
+        "{\"_path\":\"http\",\"ts\":\"2026-08-04T18:52:25.295253Z\",\"uid\":\"Cfict0000111\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"GET\",\"uri\":\"/en-GB/logdeckd/__raw/servicesNS/labadmin/LogDeck_Security_Essentials/data/ui/views/home\",\"status_code\":200,\"server\":\"LogDeckd\"}",
+        "---",
+        "{\"_path\":\"http\",\"ts\":\"2026-08-04T18:44:32.482419Z\",\"uid\":\"Cfict0000112\",\"id.orig_h\":\"10.44.22.11\",\"id.resp_h\":\"203.0.113.40\",\"id.resp_p\":8001,\"method\":\"GET\",\"uri\":\"/en-GB/logdeckd/__raw/services/appsbrowser/v1/app/\",\"status_code\":200,\"server\":\"LogDeckd\"}",
+        "note=Pattern matches a temporary classroom SIEM with security-lab app packs, not a corporate production tenant"
+      ]
+    },
+    "class-peers": {
+      "title": "peer search · Malware Traffic Lab VLAN → same LogDeck dest",
+      "lines": [
+        "# peer search · same window · cleartext LogDeck UI on :8001",
+        "query=id.resp_h=203.0.113.40 and id.resp_p=8001",
+        "scope=Malware Traffic Lab VLAN samples",
+        "hits  id.orig_h",
+        "4587  10.44.22.11",
+        "  91  10.44.22.15",
+        "  62  10.44.22.12",
+        "  59  10.44.22.13",
+        "   5  10.44.22.16",
+        "peers_matching=4",
+        "note=shared class traffic on the same cloud VPS LogDeck UI — not a singleton hostile login spray"
+      ]
+    }
+  }
+}

