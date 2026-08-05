@@ -1616,6 +1616,20 @@ def _athena_row_to_alert(row: dict[str, str]) -> dict[str, Any]:
     return out
 
 
+def _row_touches_conference_network(row: dict[str, str]) -> bool:
+    """True if either endpoint of this alert row is inside a conference subnet.
+
+    Separate from ipscope.row_in_scope: that function is a redaction gate ("is
+    it safe to display this row's addresses verbatim") and passes public
+    internet addresses. This is the feed's scope gate ("is the venue actually
+    on one side of this event") — an alert entirely between two outside
+    addresses is not a Black Hat NOC finding, whatever its severity.
+    """
+    return ipscope.is_conference_network(row.get("orig_h") or "") or ipscope.is_conference_network(
+        row.get("resp_h") or ""
+    )
+
+
 @app.get("/alerts/recent")
 async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
     """Return deduplicated alerts from Athena mapped to the UI Alert shape.
@@ -1635,7 +1649,10 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
 
         dt = date_filter(hours)
         # Exclude noisy ET INFO signatures — they're informational, not
-        # actionable, and flood the feed with duplicates.
+        # actionable, and flood the feed with duplicates. Same reasoning drops
+        # 'informational' severity outright (Suricata sev 4, 83% of live rows)
+        # and the self-signed-cert notice, which alone was 476 of 500 sampled
+        # notice rows — real signal buried under a re-used demo cert.
         sql = f"""
         SELECT
             alert_name,
@@ -1655,6 +1672,9 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
           AND alert_name IS NOT NULL
           AND UPPER(alert_name) NOT LIKE 'ET INFO%'
           AND UPPER(alert_name) NOT LIKE 'ETPRO INFO%'
+          AND severity <> 'informational'
+          AND NOT (alert_name = 'SSL::Invalid_Server_Cert'
+                    AND LOWER(alert_detail) LIKE '%self signed%')
         GROUP BY alert_name, alert_type, severity, orig_h
         ORDER BY MAX(ts) DESC
         LIMIT {limit}
@@ -1662,6 +1682,11 @@ async def alerts_recent(hours: int = 1, limit: int = 100) -> dict[str, Any]:
 
         try:
             rows, meta = await execute_custom_sql(sql)
+            # Scope filter: the feed is a Black Hat NOC view, not a general Athena
+            # dump. An alert with neither endpoint inside a conference subnet
+            # (e.g. two internet hosts correlated via a lookup join) is dropped
+            # rather than shown with a redacted host the analyst cannot act on.
+            rows = [r for r in rows if _row_touches_conference_network(r)]
             alerts = [_athena_row_to_alert(r) for r in rows]
             span.set_attribute("alerts.count", len(alerts))
             span.set_attribute("athena.execution_time_ms", meta.get("execution_time_ms", 0))

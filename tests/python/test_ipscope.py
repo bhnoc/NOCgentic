@@ -16,6 +16,7 @@ from shared.ipscope import (  # noqa: E402
     OUT_OF_SCOPE_PLACEHOLDER,
     IN_SCOPE_NETWORKS,
     filter_rows,
+    is_conference_network,
     is_in_scope,
     prefix_is_out_of_scope,
     redact_obj,
@@ -208,3 +209,24 @@ class TestPrefixScope:
     def test_single_octet_and_full_quad_ignored(self):
         assert not prefix_is_out_of_scope("10")
         assert not prefix_is_out_of_scope("10.0.1.63")
+
+
+class TestConferenceNetworkOnly:
+    """is_conference_network is narrower than is_in_scope: public addresses are
+    safe to display but are not the venue, and the alert-feed scope filter
+    needs the venue-only question, not the display-safety one."""
+
+    def test_conference_subnet_is_a_conference_network(self):
+        assert is_conference_network("10.220.40.7")
+        assert is_conference_network("192.168.150.1")
+
+    def test_public_address_is_not_a_conference_network(self):
+        assert is_in_scope("45.83.193.150")
+        assert not is_conference_network("45.83.193.150")
+
+    def test_out_of_scope_private_address_is_not_a_conference_network(self):
+        assert not is_conference_network("10.0.1.63")
+
+    def test_unparseable_input_is_not_a_conference_network(self):
+        assert not is_conference_network("not-an-ip")
+        assert not is_conference_network("")

@@ -29,6 +29,7 @@ __all__ = [
     "IN_SCOPE_NETWORKS",
     "OUT_OF_SCOPE_PLACEHOLDER",
     "is_in_scope",
+    "is_conference_network",
     "prefix_is_out_of_scope",
     "redact_text",
     "redact_obj",
@@ -73,6 +74,21 @@ def is_in_scope(value: str) -> bool:
     # is_global is precisely "publicly routable" — excludes private, loopback,
     # link-local and CGNAT without enumerating them.
     return bool(addr.is_global)
+
+
+def is_conference_network(value: str) -> bool:
+    """True only if this address is inside one of the conference subnets.
+
+    Distinct from is_in_scope(): that function also passes public internet
+    addresses because "safe to display" and "is one of our monitored ranges"
+    are different questions. This one answers the narrower question the alert
+    feed's scope filter needs — is the venue itself on one side of this event.
+    """
+    try:
+        addr = ipaddress.ip_address(value.strip())
+    except (ValueError, AttributeError):
+        return False
+    return any(addr in net for net in IN_SCOPE_NETWORKS)
 
 
 def prefix_is_out_of_scope(prefix: str) -> bool:

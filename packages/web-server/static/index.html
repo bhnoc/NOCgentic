@@ -16,13 +16,13 @@
 
   <!-- ===== HEADER ===== -->
   <header>
-    <div class="header-brand">
+    <button type="button" class="header-brand" id="header-brand-home" onclick="setView('chat')" aria-label="Back to chat">
       <img class="header-logo-img" src="https://blackhat.com/images/logo.png" alt="Black Hat" />
       <div>
         <div class="header-title">BLACKHAT NOCGentic</div>
         <div class="header-subtitle">AI-Powered Network Operations Center // <span id="event-label-header">NOC</span></div>
       </div>
-    </div>
+    </button>
     <nav class="header-tabs" id="header-tabs">
       <button class="header-tab active" id="tab-chat" onclick="setView('chat')">Chat</button>
       <button class="header-tab" id="tab-hunt" onclick="setView('hunt')">Threat Hunt</button>
