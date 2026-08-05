@@ -571,16 +571,25 @@ async def llm_analyze(
     )
 
     # model= is intentionally omitted: llm_complete defaults to GEMINI_MODEL
-    # (gemini-3.5-flash-lite since sweep 3), which the thinking_budget=0->-1 clamp
-    # covers. Catch broadly, not just RuntimeError: a provider 429/5xx/timeout must
-    # degrade gracefully here, not surface as an unhandled 500 (spec-104/spec-6 class).
+    # (gemini-3.5-flash-lite since sweep 3). Catch broadly, not just RuntimeError: a
+    # provider 429/5xx/timeout must degrade gracefully here, not surface as an
+    # unhandled 500 (spec-104/spec-6 class).
     try:
         answer = await llm_complete(
             system_prompt=SYSTEM_PROMPT,
             user_content=user_content,
-            max_tokens=4096,
+            # Bound the thinking rather than relying on the 0->-1 clamp. That clamp
+            # does NOT mean "don't think": -1 is UNBOUNDED dynamic thinking, and
+            # Gemini draws thinking tokens from max_output_tokens, so reasoning can
+            # starve the prose. Measured against the live provider on 2026-08-05: at
+            # tb=0/mx=4096 this call hit finish_reason=max_tokens (4092 output
+            # tokens, stopped mid-sentence, no confidence fence) on 1 of 2 runs — and
+            # a missing fence means llm_analyze discards the answer entirely for the
+            # "issue calling the model" retry message. At tb=1024/mx=8192 it finished
+            # cleanly 2 of 2. Same remedy as alert-triage's synthesis call.
+            max_tokens=8192,
             temperature=0.1,
-            thinking_budget=0,
+            thinking_budget=1024,
             lane=lane,
             role="prose",
         )

@@ -821,9 +821,19 @@ async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
         raw = await llm_complete(
             system_prompt=HINTS_SYSTEM_PROMPT,
             user_content=prompt,
-            max_tokens=1024,
+            # Same trap llm_classify above already documents: thinking_budget=0 is
+            # clamped to -1 (UNBOUNDED dynamic) on flash-lite and thinking shares
+            # max_output_tokens, so a tight ceiling gets eaten by reasoning. Measured
+            # against the live provider on 2026-08-05: at tb=0/mx=1024 this hit
+            # finish_reason=max_tokens on 2 of 2 runs, burning 1020 output tokens to
+            # emit ~120 characters of prose. Nothing parseable survived, so
+            # _parse_hints found no hints and EVERY call silently fell back to the
+            # static _fallback_hints — the same silent-fallback failure mode that
+            # llm_classify had. At tb=512/mx=4096 it finished cleanly 2 of 2 using
+            # only ~400 output tokens, so the wider ceiling costs nothing in practice.
+            max_tokens=4096,
             temperature=0.4,
-            thinking_budget=0,
+            thinking_budget=512,
         )
         logger.info("Hints raw LLM response (%d chars): %s", len(raw), raw[:500])
         hints = _parse_hints(raw)

@@ -410,11 +410,22 @@ async def llm_deter(query: str, context: dict[str, Any], lane: str | None = None
             system_prompt=SYSTEM_PROMPT,
             user_content=user_content,
             model=DETER_MODEL,
-            max_tokens=2048,
+            # 2048 was not enough room and thinking_budget=0 made it worse. `0` is
+            # clamped to -1 (UNBOUNDED dynamic thinking) for any *flash-lite* model
+            # in llm_client, and Gemini draws thinking tokens from max_output_tokens
+            # — so reasoning could eat the ceiling and truncate the answer. Measured
+            # against the live provider on 2026-08-05: at tb=0/mx=2048 this call hit
+            # finish_reason=max_tokens on 2 of 2 runs, burning 2044 output tokens to
+            # emit ~300 characters and stopping mid-sentence before the confidence
+            # fence. At tb=512/mx=4096 it finished cleanly 2 of 2, needing up to
+            # 2090 output tokens — above the old ceiling on its own, so raising the
+            # ceiling is required and not just belt-and-braces. Same remedy as
+            # alert-triage, athena-hunter SQL gen and the orchestrator's classify.
+            max_tokens=4096,
             # Slightly warm: identical phrasing across a contained session's turns
             # would itself be a pattern worth noticing.
             temperature=0.4,
-            thinking_budget=0,
+            thinking_budget=512,
             lane=lane,
             role="prose",
         )

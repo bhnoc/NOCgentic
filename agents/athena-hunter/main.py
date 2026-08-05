@@ -1390,9 +1390,20 @@ async def llm_analyze(
             answer = await llm_complete(
                 system_prompt=SYSTEM_PROMPT,
                 user_content=user_content,
-                max_tokens=4096,
+                # Bound the thinking here for the same reason the SQL-gen call
+                # above already does: `0` is clamped to -1 (UNBOUNDED dynamic) on
+                # flash-lite and thinking shares max_output_tokens. Measured
+                # against the live provider on 2026-08-05, this call did NOT
+                # truncate at tb=0/mx=4096 — but it spent 3911 and 3742 output
+                # tokens of its 4096 to emit ~2000 characters, i.e. ~95% of the
+                # ceiling with under 200 tokens of margin. One longer result set
+                # is all it takes to become the alert-triage failure, where a
+                # missing confidence fence discards the answer entirely. Bounding
+                # thinking also roughly HALVED usage (3911 -> 2124) for the same
+                # output, so this is cheaper as well as safer.
+                max_tokens=8192,
                 temperature=0.1,
-                thinking_budget=0,
+                thinking_budget=1024,
                 # role="prose": on the local lane this is Foundation-Sec, NOT AQLight.
                 lane=lane,
                 role="prose",
