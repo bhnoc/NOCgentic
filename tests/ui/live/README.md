@@ -26,4 +26,17 @@ DOM count every 3s after a query settles, because hints populate
 asynchronously (up to ~20s after `status: done`) and a driver that checks
 once right at settle can wrongly conclude hints never arrived.
 
-`cdp.mjs` is the shared connect/evaluate/check helper both scripts import.
+`threat-hunt-playthrough.mjs` plays one Threat Hunt scenario end to end
+(`HUNT_INDEX=N` selects which of the 7): picker, briefing, start, walk exits,
+open an evidence chip's log capture, reach the decision node, choose an
+action, read the end dialog, Play Again.
+
+`threat-hunt-features.mjs` probes glossary hover tips, the `requiresEvidence`
+gate's stated reason, and the timeline strip's reveal/click/caption/modal
+behavior on the reference scenario.
+
+`threat-hunt-edge-cases.mjs` covers leaving mid-hunt and re-entering, and
+rapid double-clicks on an exit and on a decision action — the class of bug
+that also showed up in the main chat's hint chips (see `qa-sweep-6`/`-8`).
+
+`cdp.mjs` is the shared connect/evaluate/check helper every script imports.

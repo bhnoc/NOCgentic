@@ -20,6 +20,7 @@ window.ThreatHunt = (function () {
   // Game state
   let phase = 'briefing'; // briefing | playing | ended
   let nodeId = null;
+  let lastEnteredNode = null; // enterNode() re-entrancy guard; reset in start()
   let evidence = [];
   let elapsed = 0;
   let timer = null;
@@ -540,6 +541,17 @@ window.ThreatHunt = (function () {
   }
 
   function enterNode(id) {
+    // Re-entrancy guard: a double-click on an exit button fires two click
+    // events before renderNodePanel()'s DOM rebuild can rebind/disable
+    // anything (both are queued in the same task), so without this a
+    // double-click advanced through two nodes at once — one narration/
+    // evidence append per call, silently skipping a node. Compare against
+    // the LAST node actually entered, not the current nodeId: start()
+    // pre-sets nodeId = config.startNode before calling enterNode(startNode)
+    // for the very first render, so guarding on nodeId directly skips that
+    // call too.
+    if (id === lastEnteredNode) return;
+    lastEnteredNode = id;
     const node = config.nodes[id];
     const time = fmt(elapsed);
     nodeId = id;
@@ -685,6 +697,7 @@ window.ThreatHunt = (function () {
   function start() {
     phase = 'playing';
     nodeId = config.startNode;
+    lastEnteredNode = null;
     evidence = [];
     elapsed = 0;
     result = null;
@@ -701,6 +714,11 @@ window.ThreatHunt = (function () {
   }
 
   function choose(action) {
+    // Re-entrancy guard: two click events from a double-click on the same
+    // decision button both fire before renderNodePanel()'s disable takes
+    // effect (they're queued in the same task), so without this a
+    // double-click ran choose() twice and stacked two end dialogs.
+    if (phase !== 'playing') return;
     const correct = !!action.correct;
     const time = fmt(elapsed);
     stopTimer();
