@@ -23,6 +23,7 @@ window.ThreatHunt = (function () {
   let elapsed = 0;
   let timer = null;
   let result = null; // { action, correct, elapsed }
+  let logsLoadTimer = null;
 
   function esc(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -163,6 +164,10 @@ window.ThreatHunt = (function () {
               <span class="hunt-meta" id="hunt-evidence-count">0 collected</span>
             </div>
             <div class="hunt-panel-body" id="hunt-evidence"></div>
+            <div class="hunt-logs-bar" id="hunt-logs-panel" hidden>
+              <button type="button" class="hunt-btn" id="hunt-logs-open">View logs</button>
+              <span class="hunt-meta" id="hunt-logs-meta"></span>
+            </div>
           </div>
         </div>
       </div>`;
@@ -266,7 +271,107 @@ window.ThreatHunt = (function () {
       appendLine({ time, tag: '[evidence]', tone: 'ok', text: item.label + ' — ' + item.detail });
     }
     renderEvidence();
+    renderLogs();
     renderNodePanel();
+  }
+
+  function closeLogsModal() {
+    if (logsLoadTimer) {
+      clearTimeout(logsLoadTimer);
+      logsLoadTimer = null;
+    }
+    const overlay = root && root.querySelector('#hunt-logs-modal');
+    if (overlay) overlay.remove();
+    document.removeEventListener('keydown', onLogsModalKeydown);
+  }
+
+  function onLogsModalKeydown(ev) {
+    if (ev.key === 'Escape') closeLogsModal();
+  }
+
+  function renderLogsBody(blocks) {
+    return blocks.map((block) => {
+      const title = esc(block.title || 'log capture');
+      const lines = (block.lines || []).map((line) => esc(line)).join('\n');
+      return '<div class="hunt-log-block">' +
+        '<div class="hunt-log-title">' + title + '</div>' +
+        '<pre class="hunt-log-pre">' + lines + '</pre>' +
+        '</div>';
+    }).join('');
+  }
+
+  function openLogsModal(blocks) {
+    closeLogsModal();
+    const overlay = document.createElement('div');
+    overlay.id = 'hunt-logs-modal';
+    overlay.className = 'hunt-dialog-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', 'Log captures');
+    overlay.setAttribute('aria-busy', 'true');
+    overlay.innerHTML =
+      '<div class="hunt-dialog hunt-logs-dialog">' +
+        '<div class="hunt-dialog-title">Log captures</div>' +
+        '<div class="hunt-dialog-meta" id="hunt-logs-modal-meta">Querying sensor · Esc to cancel</div>' +
+        '<div class="hunt-logs-modal-body" id="hunt-logs-modal-body">' +
+          '<div class="hunt-logs-loading" aria-live="polite">' +
+            '<div class="hunt-logs-spinner" aria-hidden="true"></div>' +
+            '<div class="hunt-logs-loading-title">Pulling log captures…</div>' +
+            '<div class="hunt-logs-loading-meta">sensor query · resolving rows</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="hunt-dialog-footer">' +
+          '<button type="button" class="hunt-btn" id="hunt-logs-close">Cancel</button>' +
+        '</div>' +
+      '</div>';
+    overlay.addEventListener('click', (ev) => {
+      if (ev.target === overlay) closeLogsModal();
+    });
+    overlay.querySelector('#hunt-logs-close').addEventListener('click', closeLogsModal);
+    document.addEventListener('keydown', onLogsModalKeydown);
+    root.appendChild(overlay);
+    overlay.querySelector('#hunt-logs-close').focus();
+
+    // Staged delay so the pull feels like a sensor query, not instant DOM.
+    const delayMs = 700 + Math.floor(Math.random() * 700);
+    logsLoadTimer = setTimeout(() => {
+      logsLoadTimer = null;
+      if (!root || !root.contains(overlay)) return;
+      overlay.setAttribute('aria-busy', 'false');
+      const meta = overlay.querySelector('#hunt-logs-modal-meta');
+      const body = overlay.querySelector('#hunt-logs-modal-body');
+      const closeBtn = overlay.querySelector('#hunt-logs-close');
+      if (meta) {
+        meta.textContent = blocks.length +
+          (blocks.length === 1 ? ' capture' : ' captures') +
+          ' · Esc or backdrop to close';
+      }
+      if (body) body.innerHTML = renderLogsBody(blocks);
+      if (closeBtn) {
+        closeBtn.textContent = 'Close';
+        closeBtn.classList.add('hunt-btn-primary');
+        closeBtn.focus();
+      }
+    }, delayMs);
+  }
+
+  function renderLogs() {
+    const panel = root.querySelector('#hunt-logs-panel');
+    const meta = root.querySelector('#hunt-logs-meta');
+    const openBtn = root.querySelector('#hunt-logs-open');
+    if (!panel || !openBtn) return;
+    closeLogsModal();
+    const node = config.nodes[nodeId] || {};
+    const blocks = node.logs || [];
+    if (!blocks.length) {
+      panel.hidden = true;
+      if (meta) meta.textContent = '';
+      openBtn.onclick = null;
+      return;
+    }
+    panel.hidden = false;
+    if (meta) meta.textContent = blocks.length + (blocks.length === 1 ? ' capture' : ' captures');
+    openBtn.onclick = () => openLogsModal(blocks);
   }
 
   function start() {

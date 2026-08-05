@@ -8,11 +8,12 @@ import path from 'node:path';
 // registered hunt against the contract.
 
 interface HuntEvidence { id: string; label: string; detail: string }
+interface HuntLogBlock { id?: string; title: string; lines: string[] }
 interface HuntExit { to: string; label: string; requiresEvidence?: number }
 interface HuntAction { id: string; label: string; correct?: boolean; resultNote: string }
 interface HuntNode {
   name: string; tag: string; narration: string;
-  evidence?: HuntEvidence[]; exits?: HuntExit[];
+  evidence?: HuntEvidence[]; logs?: HuntLogBlock[]; exits?: HuntExit[];
   isDecision?: boolean; actions?: HuntAction[];
 }
 interface HuntConfig {
@@ -54,6 +55,38 @@ describe('threat hunt registry', () => {
     expect(correct).toHaveLength(1);
     expect(correct[0].id).toBe('true-positive');
     expect(correct[0].label).toBe('True Positive');
+  });
+
+  it('ships obfuscated Corelight log captures on fakecorp-cleartext-mcp rooms', () => {
+    const hunt = hunts.find(h => h.id === 'fakecorp-cleartext-mcp');
+    expect(hunt).toBeDefined();
+    for (const key of ['observed-logs', 'http-conn', 'dns-logs', 'device-profile', 'class-context']) {
+      const logs = hunt!.nodes[key].logs ?? [];
+      expect(logs.length, key).toBeGreaterThan(0);
+      expect(logs[0].title.length, key).toBeGreaterThan(0);
+      expect(logs[0].lines.length, key).toBeGreaterThan(2);
+      const blob = logs.map(l => l.lines.join('\n')).join('\n').toLowerCase();
+      expect(blob.includes('10.220.107'), key).toBe(false);
+      expect(blob.includes('mcpk_[redacted]') || blob.includes('10.44.18.72') || key === 'class-context' || key === 'device-profile', key).toBe(true);
+    }
+  });
+
+  it('puts a cleartext-MCP HINT block in http-conn logs (bearer on :80 + path set)', () => {
+    const hunt = hunts.find(h => h.id === 'fakecorp-cleartext-mcp');
+    const logs = hunt!.nodes['http-conn'].logs ?? [];
+    const blob = logs.map(l => l.lines.join('\n')).join('\n');
+    const titles = logs.map(l => l.title).join('\n');
+    expect(titles).toMatch(/HINT/i);
+    expect(blob).toMatch(/id\.resp_p=80|"id\.resp_p":80/);
+    expect(blob).toMatch(/Bearer mcpk_\[REDACTED\]/);
+    for (const path of [
+      '/vaultwatch/mcp', '/talon/mcp', '/redline-intel/mcp', '/graph-ti/mcp',
+      '/pulsefeed/mcp', '/badgeauth/mcp', '/notekeep/mcp',
+    ]) {
+      expect(blob.includes(path), path).toBe(true);
+    }
+    // Soft label only — do not shout SMOKING GUN.
+    expect((blob + '\n' + titles).toLowerCase()).not.toContain('smoking gun');
   });
 
   it('ships northlab-cleartext-siem-login with BH Benign as the correct close code', () => {

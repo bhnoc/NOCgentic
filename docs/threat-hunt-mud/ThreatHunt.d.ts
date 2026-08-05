@@ -48,6 +48,15 @@ export interface ThreatHuntAction {
   resultNote: string;
 }
 
+export interface ThreatHuntLogBlock {
+  /** Stable id for the capture block. */
+  id?: string;
+  /** Short source label shown above the pre block: "corelight_http_raw · URI rollup". */
+  title: string;
+  /** Preformatted log lines (already obfuscated). Rendered verbatim in a mono panel. */
+  lines: string[];
+}
+
 export interface ThreatHuntNode {
   /** Panel-header name of the surface: "Proxy logs". */
   name: string;
@@ -57,6 +66,12 @@ export interface ThreatHuntNode {
   narration: string;
   /** Collected on entry. Every visit is worth something — no punishing dead ends. */
   evidence?: ThreatHuntEvidence[];
+  /**
+   * Optional obfuscated log captures shown in the Logs rail when this node is
+   * active. Authored from real sensor rows, then hard-scrubbed (no real IPs,
+   * orgs, people, or bearer tokens).
+   */
+  logs?: ThreatHuntLogBlock[];
   /** Outbound pivots. Omit on the decision node. */
   exits?: ThreatHuntExit[];
   /** Marks the containment-choice node. Its actions replace the pivot list. */

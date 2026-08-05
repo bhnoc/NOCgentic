@@ -17,6 +17,7 @@ any threat hunt (real or authored) becomes playable by writing a config.
 
 | File | What it is |
 | --- | --- |
+| `SESSION-HANDOFF.md` | **Start here next session** — branch, log pipeline status, next hunts, QA notes. |
 | `PLAN.md` | The original implementation plan (architecture, decisions, scope). |
 | `FROM-SLACK-TO-MUD.md` | Memo: take a Slack threat-hunt thread → obfuscate → rooms → close code → ELI5 glossary → ship config (worked FAKE CORP example). |
 | `threat-hunt-mud.md` | Authoring guide: how a hunt plays, the config contract, voice rules, how to add hunts. |
