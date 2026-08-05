@@ -1,0 +1,130 @@
+{
+  "source": {
+    "dataset": "corelight_http_raw (dns + http)",
+    "fiction_src_ip": "10.44.33.36",
+    "pulled": "2026-08-05 via cortex xql from conference Corelight",
+    "rule": "Org/host/proxy names fiction per RIVERTIDE/EdgeTunnel map. Real floor IPs, real-org hostnames, and azure.com tenants never stored in this file. Event ts from _raw_log."
+  },
+  "nodes": {
+    "observed-logs": {
+      "blocks": [
+        {
+          "id": "log-dns-rollup",
+          "title": "corelight_http_raw · corp Azure/intranet DNS rollup",
+          "lines": [
+            "# corelight_http_raw · dns · src 10.44.33.36 · Physical Access Lab VLAN",
+            "# window for RIVERTIDE Azure/intranet names: 17:03:14–17:40:28 (~37m)",
+            " hits  query",
+            "   19  flexops.azure.intra.rivertide.example",
+            "   15  badgeprint.azure.intra.rivertide.example",
+            "   13  rivdirect.postgres.azure.intra.rivertide.example",
+            "   34  gateway.edgetunnel-two.example",
+            "   28  sitereview.edgetunnel.example",
+            "   47  TOTAL   azure_intranet_names=3  window_m=37"
+          ]
+        },
+        {
+          "id": "log-dns-timed",
+          "title": "corelight_http_raw · timed Azure/intranet DNS samples",
+          "lines": [
+            "# corelight_http_raw · timed dns samples (identities fiction · ts from _raw_log)",
+            "id.orig_h=10.44.33.36",
+            "id.resp_h=10.44.0.53",
+            "qtype=A",
+            "",
+            "# Timed queries (chronological · ~37m Azure/intranet burst)",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-01T17:03:14.331229Z\",\"uid\":\"Cfict0006610\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"10.44.0.53\",\"query\":\"flexops.azure.intra.rivertide.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NXDOMAIN\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-01T17:03:19.320147Z\",\"uid\":\"Cfict0006611\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"10.44.0.53\",\"query\":\"badgeprint.azure.intra.rivertide.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NXDOMAIN\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-01T17:03:34.482764Z\",\"uid\":\"Cfict0006612\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"10.44.0.53\",\"query\":\"flexops.azure.intra.rivertide.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NXDOMAIN\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-01T17:30:52.617098Z\",\"uid\":\"Cfict0006613\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"10.44.0.53\",\"query\":\"badgeprint.azure.intra.rivertide.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NXDOMAIN\"}",
+            "---",
+            "{\"_path\":\"dns\",\"ts\":\"2026-08-01T17:40:28.299195Z\",\"uid\":\"Cfict0006614\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"10.44.0.53\",\"query\":\"rivdirect.postgres.azure.intra.rivertide.example\",\"qtype_name\":\"A\",\"rcode_name\":\"NXDOMAIN\"}",
+            "note=Venue resolvers NXDOMAIN corp intranet names; volume + EdgeTunnel still read as laptop background, not a successful cloud probe"
+          ]
+        }
+      ]
+    },
+    "proxy-background": {
+      "blocks": [
+        {
+          "id": "log-proxy-hint",
+          "title": "HINT · corelight_http_raw · EdgeTunnel proxy CONNECT",
+          "lines": [
+            "# Hint from the wire (obfuscated from live Corelight http rows)",
+            "# Same shape the hunt thread called out: enterprise tunnel agent keepalives, not interactive DB abuse",
+            "id.orig_h=10.44.33.36",
+            "method=CONNECT",
+            "user_agent=Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0",
+            "Proxy-Authorization=Digest … realm=\"edgetunnel-two.example\"",
+            "uri_set=gateway.edgetunnel-two.example:80,www.edgetunnel.example:80,keepalive.cloud-portal.example:443",
+            "status_mix=407,200,204",
+            "note=EdgeTunnel CONNECT + Digest realm + portal keepalives = managed-endpoint proxy chatter",
+            "",
+            "# Example rows (fields compacted)",
+            "{\"_path\":\"http\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"203.0.113.66\",\"id.resp_p\":443,\"method\":\"CONNECT\",\"uri\":\"gateway.edgetunnel-two.example:80\",\"status_code\":200,\"user_agent\":\"Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0\"}",
+            "{\"_path\":\"http\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"203.0.113.66\",\"id.resp_p\":8080,\"method\":\"CONNECT\",\"uri\":\"www.edgetunnel.example:80\",\"status_code\":407,\"user_agent\":\"Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0\"}",
+            "client_headers={\"Host\":\"www.edgetunnel.example:80\",\"User-Agent\":\"Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0\",\"Proxy-Authorization\":\"Digest username=\\\"[REDACTED]\\\", realm=\\\"edgetunnel-two.example\\\"\"}"
+          ]
+        },
+        {
+          "id": "log-proxy-timed",
+          "title": "corelight_http_raw · timed EdgeTunnel samples",
+          "lines": [
+            "# corelight_http_raw · timed EdgeTunnel CONNECT samples (identities fiction)",
+            "id.orig_h=10.44.33.36",
+            "user_agent=Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0",
+            "",
+            "# Timed proxy rows (chronological · agent start through azure DNS window)",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:59:41.114857Z\",\"uid\":\"Cfict0006601\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"203.0.113.66\",\"id.resp_p\":443,\"method\":\"CONNECT\",\"uri\":\"gateway.edgetunnel-two.example:80\",\"status_code\":200,\"user_agent\":\"Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0\"}",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:59:41.193357Z\",\"uid\":\"Cfict0006602\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"203.0.113.66\",\"id.resp_p\":443,\"method\":\"GET\",\"host\":\"gateway.edgetunnel-two.example\",\"uri\":\"/et_conn_test\",\"status_code\":204,\"user_agent\":\"Mozilla/5.0 EdgeTunnel/1.0\"}",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:59:41.613791Z\",\"uid\":\"Cfict0006603\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"203.0.113.66\",\"id.resp_p\":443,\"method\":\"CONNECT\",\"uri\":\"keepalive.cloud-portal.example:443\",\"status_code\":200,\"user_agent\":\"Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0\"}",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-01T16:59:55.724899Z\",\"uid\":\"Cfict0006604\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"203.0.113.66\",\"id.resp_p\":8080,\"method\":\"CONNECT\",\"uri\":\"www.edgetunnel.example:80\",\"status_code\":407,\"user_agent\":\"Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0\"}",
+            "Proxy-Authorization=Digest username=\"[REDACTED]\", realm=\"edgetunnel-two.example\"",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-01T17:40:11.155269Z\",\"uid\":\"Cfict0006605\",\"id.orig_h\":\"10.44.33.36\",\"id.resp_h\":\"203.0.113.66\",\"id.resp_p\":8080,\"method\":\"CONNECT\",\"uri\":\"www.edgetunnel.example:80\",\"status_code\":407,\"user_agent\":\"Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0\"}",
+            "note=Repeated CONNECT 407/200 to EdgeTunnel portals across the same hour as the Azure DNS burst — background agent, not a scan"
+          ]
+        }
+      ]
+    },
+    "asset-org": {
+      "title": "asset profile · RIVERTIDE managed endpoint",
+      "lines": [
+        "# asset profile · 10.44.33.36 (obfuscated from live host identity)",
+        "hostname=RT-WIN-US-36",
+        "os=Windows",
+        "org=RIVERTIDE",
+        "org_confidence=HIGH",
+        "sharepoint=share.rivertide.example",
+        "proxy_agent=EdgeTunnel",
+        "user_agent_marker=Windows Microsoft Windows 11 Enterprise EdgeTunnel/1.0",
+        "vlan_label=Physical Access Lab",
+        "active_window=2026-08-01 16:59 → 2026-08-01 22:22",
+        "interactive_username=not observed on cleartext HTTP/NTLM this date",
+        "note=Org + SharePoint + EdgeTunnel label a managed RIVERTIDE laptop. Provenance beyond tenant signals is not established here."
+      ]
+    },
+    "class-align": {
+      "title": "class alignment · Physical Access Lab",
+      "lines": [
+        "# class alignment · syllabus vs observed destinations",
+        "vlan_label=Physical Access Lab",
+        "syllabus_topics=badges, RFID, door controllers, physical access tooling",
+        "rivertide_azure_labs_assigned=false",
+        "observed_names=flexops.azure.intra.rivertide.example,badgeprint.azure.intra.rivertide.example,rivdirect.postgres.azure.intra.rivertide.example",
+        "peer_hostile_pattern=false",
+        "credential_spray=false",
+        "exploit_payload=false",
+        "note=Class topic mismatch explains the gut-check; EdgeTunnel + RIVERTIDE tenant DNS still read as corp laptop background on a training VLAN"
+      ]
+    }
+  }
+}

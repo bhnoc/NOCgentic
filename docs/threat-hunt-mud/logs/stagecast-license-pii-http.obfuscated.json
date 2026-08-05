@@ -1,0 +1,120 @@
+{
+  "source": {
+    "dataset": "corelight_http_raw",
+    "fiction_src_ip": "10.44.32.40",
+    "pulled": "2026-08-05 via cortex xql from conference Corelight",
+    "rule": "PII/identities fiction per LICENSE-PII map. Real IPs/domains/people/product names never stored in this file."
+  },
+  "nodes": {
+    "observed-logs": {
+      "title": "corelight_http_raw \u00b7 cleartext license activate rollup",
+      "lines": [
+        "# corelight_http_raw \u00b7 cleartext license activate rollup \u00b7 src 10.44.32.40 \u00b7 dst port 80",
+        "# window for alerted host GET+POST: 19:06:43\u201319:06:44 (same second-pair)",
+        " hits  methods  status  uri",
+        "    1  GET      200     /activate.php",
+        "    1  POST     200     /activate.php",
+        "    2  TOTAL   dst_port=80  tls=absent  host=activate.stagecast.example",
+        "note=cleartext HTTP license activation to vendor host; PII fields in POST body"
+      ]
+    },
+    "post-body": {
+      "blocks": [
+        {
+          "id": "log-post-hint",
+          "title": "HINT \u00b7 corelight_http_raw \u00b7 cleartext license PII on :80",
+          "lines": [
+            "# Hint from the wire (obfuscated from live Corelight http rows)",
+            "# Same shape the hunt thread called out: license activate.php POST with name/email/serial in the clear",
+            "id.orig_h=10.44.32.40",
+            "id.resp_h=203.0.113.50",
+            "id.resp_p=80",
+            "version=HTTP/1.1",
+            "tls=absent",
+            "server=Apache",
+            "host=activate.stagecast.example",
+            "uri=/activate.php?db=9&vendor=20091028&product=4",
+            "fields=FirstName,LastName,Email,Company,Zip,Country,SerialNumber,Snapshot",
+            "FirstName=Riley",
+            "LastName=Quill",
+            "Email=rquill@stagecast.example",
+            "SerialNumber=SC-77419",
+            "user_agent=StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0",
+            "note=license form PII + device serial in cleartext POST body on port 80 to vendor activation host",
+            "",
+            "# Example rows (fields compacted \u00b7 identities fiction)",
+            "{\"_path\":\"http\",\"id.orig_h\":\"10.44.32.40\",\"id.resp_h\":\"203.0.113.50\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"activate.stagecast.example\",\"uri\":\"/activate.php?db=9&vendor=20091028&product=4\",\"status_code\":200,\"server\":\"Apache\",\"user_agent\":\"StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0\"}",
+            "post_body=Session=1785611203&SerialNumber=SC-77419&RequestNumber=7960422516&FirstName=Riley&LastName=Quill&Company=StageCast&Country=usa&Zip=89109&Email=rquill@stagecast.example&Custom1=StageMac-12&Snapshot=ComputerName=STAGE-MAC-12,User=stageuser,OS=MacPPC,Screen=1512x982,LocalIP=10.44.32.40,CpuType=1635268148,SysVersion=26.5.2,MAC=a483e7124490,ioSN=SCIO77419M0&Confirm=Send",
+            "post_reply=<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><!--STAGECASTACTIVATIONRESPONSE:MAXACTIVATIONS--><HTML><HEAD>\\r<TITLE>Activation Error"
+          ]
+        },
+        {
+          "id": "log-post-timed",
+          "title": "corelight_http_raw \u00b7 timed activate samples",
+          "lines": [
+            "# corelight_http_raw \u00b7 timed activate samples (identities fiction)",
+            "id.orig_h=10.44.32.40",
+            "id.resp_p=80",
+            "version=HTTP/1.1",
+            "tls=absent",
+            "server=Apache",
+            "host=activate.stagecast.example",
+            "",
+            "# Timed activate exchange (chronological \u00b7 event ts from _raw_log)",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-01T19:06:43.912655Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.32.40\",\"id.resp_h\":\"203.0.113.50\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"activate.stagecast.example\",\"uri\":\"/activate.php?db=9&vendor=20091028&product=4\",\"status_code\":200,\"server\":\"Apache\",\"user_agent\":\"StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0\"}",
+            "---",
+            "{\"_path\":\"http\",\"ts\":\"2026-08-01T19:06:44.334226Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.32.40\",\"id.resp_h\":\"203.0.113.50\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"activate.stagecast.example\",\"uri\":\"/activate.php?db=9&vendor=20091028&product=4\",\"status_code\":200,\"server\":\"Apache\",\"user_agent\":\"StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0\"}",
+            "post_body=Session=1785611203&SerialNumber=SC-77419&RequestNumber=7960422516&FirstName=Riley&LastName=Quill&Company=StageCast&Country=usa&Zip=89109&Email=rquill@stagecast.example&Custom1=StageMac-12&Snapshot=ComputerName=STAGE-MAC-12,User=stageuser,OS=MacPPC,Screen=1512x982,LocalIP=10.44.32.40,CpuType=1635268148,SysVersion=26.5.2,MAC=a483e7124490,ioSN=SCIO77419M0&Confirm=Send",
+            "post_reply=<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><!--STAGECASTACTIVATIONRESPONSE:MAXACTIVATIONS--><HTML><HEAD>\\r<TITLE>Activation Error"
+          ]
+        }
+      ]
+    },
+    "app-profile": {
+      "title": "client application \u00b7 StageCast Playback Console",
+      "lines": [
+        "# client application crumbs \u00b7 src 10.44.32.40 (obfuscated from live http rows + entity profile)",
+        "id.orig_h=10.44.32.40",
+        "id.orig_network_name=General WiFi",
+        "os=macOS",
+        "user_agent=StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0",
+        "app=StageCast Playback Console",
+        "host=activate.stagecast.example",
+        "id.resp_p=80",
+        "tls=absent",
+        "server=Apache",
+        "flow=client-initiated license registration (GET then POST)",
+        "traffic_shape=inbound-dominant overall; this flow is deliberate app registration",
+        "",
+        "# Sample row (fields compacted)",
+        "---",
+        "{\"_path\":\"http\",\"ts\":\"2026-08-01T19:06:43.912655Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.32.40\",\"id.resp_h\":\"203.0.113.50\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"activate.stagecast.example\",\"uri\":\"/activate.php?db=9&vendor=20091028&product=4\",\"status_code\":200,\"server\":\"Apache\",\"user_agent\":\"StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0\",\"client_headers\":{\"Host\":\"activate.stagecast.example\",\"Cache-Control\":\"no-cache\",\"Accept\":\"*/*\",\"User-Agent\":\"StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0\",\"Accept-Language\":\"en-US,en;q=0.9\",\"Accept-Encoding\":\"gzip, deflate\",\"Connection\":\"keep-alive\"}}",
+        "note=UA + Host match StageCast Playback Console calling its vendor activation endpoint \u2014 not a random phishing POST"
+      ]
+    },
+    "vendor-pattern": {
+      "title": "vendor-normal \u00b7 recurring StageCast activate.php",
+      "lines": [
+        "# vendor-normal search \u00b7 same activate host + URI shape (obfuscated from live http rows)",
+        "query=host=activate.stagecast.example and uri contains \"/activate.php\"",
+        "scope=general Wi-Fi floor samples",
+        "hits  id.orig_h  note",
+        "   2  10.44.32.40         alerted host \u00b7 2026-08-01 19:06 GET+POST",
+        "   6  10.44.32.55        peer StageCast floor device \u00b7 2026-08-03 00:26\u201300:27",
+        "vendor_peers=1",
+        "field_layout=FirstName,LastName,Email,Company,SerialNumber,Snapshot,Confirm",
+        "follow_on=none observed (no second-stage payload, no redirect chain, no lateral sweep)",
+        "",
+        "# Peer timed sample (chronological \u00b7 event ts from _raw_log)",
+        "---",
+        "{\"_path\":\"http\",\"ts\":\"2026-08-03T00:26:56.855357Z\",\"uid\":\"Cfict0000210\",\"id.orig_h\":\"10.44.32.55\",\"id.resp_h\":\"203.0.113.50\",\"id.resp_p\":80,\"method\":\"GET\",\"host\":\"activate.stagecast.example\",\"uri\":\"/activate.php?db=9&vendor=20091028&product=4\",\"status_code\":200,\"server\":\"Apache\",\"user_agent\":\"StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0\"}",
+        "---",
+        "{\"_path\":\"http\",\"ts\":\"2026-08-03T00:27:01.842578Z\",\"uid\":\"Cfict0000210\",\"id.orig_h\":\"10.44.32.55\",\"id.resp_h\":\"203.0.113.50\",\"id.resp_p\":80,\"method\":\"POST\",\"host\":\"activate.stagecast.example\",\"uri\":\"/activate.php?db=9&vendor=20091028&product=4\",\"status_code\":200,\"server\":\"Apache\",\"user_agent\":\"StageCast Playback Console/1 CFNetwork/3860.600.21 Darwin/25.5.0\"}",
+        "post_body=Session=1785716821&SerialNumber=SC-77419&RequestNumber=7960414707&FirstName=Riley&LastName=Quill&Company=StageCast&Country=usa&Zip=89109&Email=rquill@stagecast.example&Custom1=StageMac-12&Snapshot=ComputerName=STAGE-MAC-12,User=stageuser,OS=MacPPC,Screen=1512x982,LocalIP=10.44.32.55,CpuType=1635268148,SysVersion=26.5.2,MAC=a483e71255ab,ioSN=SCIO77419M1&Confirm=Send",
+        "post_reply=<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><!--STAGECASTACTIVATIONRESPONSE:MAXACTIVATIONS--><HTML><HEAD>\\r<TITLE>Activation Error",
+        "note=identical URI + field layout on a second floor host \u2014 known vendor licensing over legacy HTTP"
+      ]
+    }
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "source": {
+    "dataset": "corelight_http_raw (_path=dns, suricata_corelight, ssl)",
+    "fiction_src_ip": "10.44.30.12",
+    "pulled": "2026-08-05 via cortex xql from conference Corelight",
+    "rule": "Orgs/people/real IOC domains/floor IPs/live cloud IPs never stored. Fiction per WirePipe/GLASSLINE map. Use event ts from _raw_log."
+  },
+  "nodes": {
+    "observed-logs": {
+      "title": "corelight_dns · supply-chain DNS rollup",
+      "lines": [
+        "# corelight_dns · supply-chain DNS rollup · src 10.44.30.12 · general Wi-Fi",
+        "# two bursts ~2h apart: 15:45:32 and 17:40:52 (event ts from _raw_log)",
+        " hits  rcode      query",
+        "    4  NOERROR   wirepipe.zone",
+        "    4  NXDOMAIN  models.litewire.cloud",
+        "    4  NXDOMAIN  sfrlake.example",
+        "   12  TOTAL    bursts=2  resolver=10.44.16.16"
+      ]
+    },
+    "detections": {
+      "blocks": [
+        {
+          "id": "log-et-hint",
+          "title": "HINT · suricata_corelight · ET malware DNS",
+          "lines": [
+            "# Hint from the wire (obfuscated from live Suricata DNS alerts)",
+            "# Same shape the hunt thread called out: ET MALWARE on WirePipe + RAT DNS",
+            "id.orig_h=10.44.30.12",
+            "service=dns",
+            "alert.severity=2",
+            "alert.action=allowed",
+            "network=general Wi-Fi",
+            "note=signature-true ET malware DNS hits; campaign age does not clear a live resolve",
+            "",
+            "# Signature rollup (hits match DNS lookup counts)",
+            " hits  alert.signature",
+            "    4  ET MALWARE Observed DNS Query to WirePipe Supply Chain Attack Domain (wirepipe .zone)",
+            "    4  ET MALWARE Observed DNS Query to WirePipe Supply Chain Attack Domain (litewire .cloud)",
+            "    4  ET MALWARE plain-cipher-js RAT C2 Domain in DNS Lookup (sfrlake .example)",
+            "   12  TOTAL"
+          ]
+        },
+        {
+          "id": "log-et-timed",
+          "title": "suricata_corelight · timed ET malware samples",
+          "lines": [
+            "# suricata_corelight · timed ET malware DNS samples (identities fiction)",
+            "id.orig_h=10.44.30.12",
+            "service=dns",
+            "",
+            "# Burst 1 · 15:45",
+            "---",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-04T15:45:32.343768Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"service\":\"dns\",\"alert.signature\":\"ET MALWARE Observed DNS Query to WirePipe Supply Chain Attack Domain (litewire .cloud)\",\"alert.signature_id\":2068453,\"alert.severity\":2,\"alert.category\":\"A Network Trojan was detected\",\"alert.action\":\"allowed\"}",
+            "---",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-04T15:45:32.492608Z\",\"uid\":\"Cfict0000202\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"service\":\"dns\",\"alert.signature\":\"ET MALWARE Observed DNS Query to WirePipe Supply Chain Attack Domain (wirepipe .zone)\",\"alert.signature_id\":2068454,\"alert.severity\":2,\"alert.category\":\"A Network Trojan was detected\",\"alert.action\":\"allowed\"}",
+            "---",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-04T15:45:37.675742Z\",\"uid\":\"Cfict0000203\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"service\":\"dns\",\"alert.signature\":\"ET MALWARE plain-cipher-js RAT C2 Domain in DNS Lookup (sfrlake .example)\",\"alert.signature_id\":2068515,\"alert.severity\":2,\"alert.category\":\"Domain Observed Used for C2 Detected\",\"alert.action\":\"allowed\"}",
+            "",
+            "# Burst 2 · 17:40",
+            "---",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-04T17:40:52.586659Z\",\"uid\":\"Cfict0000211\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"service\":\"dns\",\"alert.signature\":\"ET MALWARE Observed DNS Query to WirePipe Supply Chain Attack Domain (litewire .cloud)\",\"alert.signature_id\":2068453,\"alert.severity\":2,\"alert.action\":\"allowed\"}",
+            "---",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-04T17:40:52.737302Z\",\"uid\":\"Cfict0000212\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"service\":\"dns\",\"alert.signature\":\"ET MALWARE Observed DNS Query to WirePipe Supply Chain Attack Domain (wirepipe .zone)\",\"alert.signature_id\":2068454,\"alert.severity\":2,\"alert.action\":\"allowed\"}",
+            "---",
+            "{\"_path\":\"suricata_corelight\",\"ts\":\"2026-08-04T17:40:53.881172Z\",\"uid\":\"Cfict0000213\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"service\":\"dns\",\"alert.signature\":\"ET MALWARE plain-cipher-js RAT C2 Domain in DNS Lookup (sfrlake .example)\",\"alert.signature_id\":2068515,\"alert.severity\":2,\"alert.action\":\"allowed\"}"
+          ]
+        }
+      ]
+    },
+    "device-profile": {
+      "title": "asset profile · GLASSLINE MDM + SaaS crumbs",
+      "lines": [
+        "# asset profile · 10.44.30.12 (obfuscated from live dns+ssl rows)",
+        "hostname=GLASSLINE-W11",
+        "os=Windows",
+        "mdm=GLASSLINE MDM",
+        "org=GLASSLINE",
+        "network=general Wi-Fi",
+        "saas=saas.glassline.example",
+        "saas=login-saas.glassline.example",
+        "mdm_checkin=checkin.dm.glassline-mdm.example",
+        "mdm_agents=agents.manage.glassline-mdm.example",
+        "idp=login.glassline-id.example",
+        "note=MDM/SaaS explain identity; they do not clear ET malware DNS to WirePipe infrastructure",
+        "",
+        "# Timed TLS crumbs near burst 1 (server_name fiction · dest IPs TEST-NET)",
+        "---",
+        "{\"_path\":\"ssl\",\"ts\":\"2026-08-04T15:44:57.889609Z\",\"uid\":\"Cfict0000221\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"203.0.113.51\",\"id.resp_p\":443,\"server_name\":\"login.glassline-id.example\",\"version\":\"TLSv13\"}",
+        "---",
+        "{\"_path\":\"ssl\",\"ts\":\"2026-08-04T15:45:04.769150Z\",\"uid\":\"Cfict0000222\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"198.51.100.41\",\"id.resp_p\":443,\"server_name\":\"saas.glassline.example\",\"version\":\"TLSv12\"}",
+        "---",
+        "{\"_path\":\"ssl\",\"ts\":\"2026-08-04T15:45:10.451817Z\",\"uid\":\"Cfict0000223\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"203.0.113.52\",\"id.resp_p\":443,\"server_name\":\"login-saas.glassline.example\",\"version\":\"TLSv13\"}",
+        "---",
+        "{\"_path\":\"ssl\",\"ts\":\"2026-08-04T15:45:26.130382Z\",\"uid\":\"Cfict0000224\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"198.51.100.42\",\"id.resp_p\":443,\"server_name\":\"checkin.dm.glassline-mdm.example\",\"version\":\"TLSv13\"}",
+        "---",
+        "{\"_path\":\"ssl\",\"ts\":\"2026-08-04T15:49:30.091210Z\",\"uid\":\"Cfict0000225\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"203.0.113.53\",\"id.resp_p\":443,\"server_name\":\"agents.manage.glassline-mdm.example\",\"version\":\"TLSv12\"}"
+      ]
+    },
+    "class-context": {
+      "title": "peer search · training VLAN / lab SSID → WirePipe DNS",
+      "lines": [
+        "# peer search · same window · WirePipe / sibling campaign DNS",
+        "query=query in (wirepipe.zone,models.litewire.cloud,sfrlake.example)",
+        "             and id.orig_h != 10.44.30.12",
+        "scope=training VLAN + lab SSID samples",
+        "peers_matching=0",
+        "note=pattern unique to 10.44.30.12 on general Wi-Fi — not shared coursework"
+      ]
+    },
+    "dns-timed": {
+      "title": "corelight_dns · timed IOC samples",
+      "lines": [
+        "# corelight_dns · timed IOC samples (identities fiction)",
+        "id.orig_h=10.44.30.12",
+        "id.resp_h=10.44.16.16",
+        "id.resp_p=53",
+        "id.orig_network_name=general Wi-Fi",
+        "",
+        "# Burst 1 · 15:45",
+        "---",
+        "{\"_path\":\"dns\",\"ts\":\"2026-08-04T15:45:32.343768Z\",\"uid\":\"Cfict0000201\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"proto\":\"udp\",\"qtype_name\":\"A\",\"query\":\"models.litewire.cloud\",\"rcode_name\":\"NXDOMAIN\"}",
+        "---",
+        "{\"_path\":\"dns\",\"ts\":\"2026-08-04T15:45:32.492608Z\",\"uid\":\"Cfict0000202\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"proto\":\"udp\",\"qtype_name\":\"A\",\"query\":\"wirepipe.zone\",\"rcode_name\":\"NOERROR\"}",
+        "---",
+        "{\"_path\":\"dns\",\"ts\":\"2026-08-04T15:45:37.675742Z\",\"uid\":\"Cfict0000203\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"proto\":\"udp\",\"qtype_name\":\"A\",\"query\":\"sfrlake.example\",\"rcode_name\":\"NXDOMAIN\"}",
+        "",
+        "# Burst 2 · 17:40",
+        "---",
+        "{\"_path\":\"dns\",\"ts\":\"2026-08-04T17:40:52.586659Z\",\"uid\":\"Cfict0000211\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"proto\":\"udp\",\"qtype_name\":\"A\",\"query\":\"models.litewire.cloud\",\"rcode_name\":\"NXDOMAIN\"}",
+        "---",
+        "{\"_path\":\"dns\",\"ts\":\"2026-08-04T17:40:52.737662Z\",\"uid\":\"Cfict0000212\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"proto\":\"udp\",\"qtype_name\":\"A\",\"query\":\"wirepipe.zone\",\"rcode_name\":\"NOERROR\"}",
+        "---",
+        "{\"_path\":\"dns\",\"ts\":\"2026-08-04T17:40:53.881172Z\",\"uid\":\"Cfict0000213\",\"id.orig_h\":\"10.44.30.12\",\"id.resp_h\":\"10.44.16.16\",\"id.resp_p\":53,\"proto\":\"udp\",\"qtype_name\":\"A\",\"query\":\"sfrlake.example\",\"rcode_name\":\"NXDOMAIN\"}"
+      ]
+    }
+  }
+}

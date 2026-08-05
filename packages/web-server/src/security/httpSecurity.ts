@@ -10,6 +10,8 @@ export const SINGLE_IP_RE =
 // static/app.js ('self'). Inline onclick handlers still need 'unsafe-inline' on
 // script-src (acceptable: first-party static UI). Google Fonts is the only
 // external origin (stylesheet + font files).
+// Gemini Enterprise apps launch in a new tab (AI Studio / Remix Cloud Run
+// refuses iframe embedding), so no frame-src allowlist is required.
 export const CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
