@@ -53,6 +53,10 @@ describe('CSP / security headers (sweep-4 web-10)', () => {
     expect(CSP).toContain("base-uri 'self'");
   });
 
+  it('frame-src allows the Gemini Enterprise app origin (kiosk iframe mount)', () => {
+    expect(CSP).toContain("frame-src 'self' https://remix-remix-nocgentic-gemini-threat-intelligence-39857249566.us-west2.run.app");
+  });
+
   it('security-header set includes CSP, X-Frame-Options DENY, nosniff, Referrer-Policy', () => {
     expect(SECURITY_HEADERS['Content-Security-Policy']).toBe(CSP);
     expect(SECURITY_HEADERS['X-Frame-Options']).toBe('DENY');

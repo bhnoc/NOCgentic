@@ -9,9 +9,14 @@ export const SINGLE_IP_RE =
 // Content-Security-Policy for the served UI. CSS/JS live in static/app.css and
 // static/app.js ('self'). Inline onclick handlers still need 'unsafe-inline' on
 // script-src (acceptable: first-party static UI). Google Fonts is the only
-// external origin (stylesheet + font files).
-// Gemini Enterprise apps launch in a new tab (AI Studio / Remix Cloud Run
-// refuses iframe embedding), so no frame-src allowlist is required.
+// external stylesheet/font origin.
+// Gemini Enterprise apps mount in an in-page iframe (kiosk-safe: keeps the
+// hardware back button inside our SPA), so their Cloud Run origin needs an
+// explicit frame-src entry -- default-src 'self' would otherwise block the
+// cross-origin frame load. Keep this in sync with the app URLs in
+// static/threat-hunt-config.js (window.THREAT_HUNT_APPS).
+const GEMINI_ENTERPRISE_APP_ORIGIN = 'https://remix-remix-nocgentic-gemini-threat-intelligence-39857249566.us-west2.run.app';
+
 export const CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
@@ -23,6 +28,7 @@ export const CSP = [
   // widen or break it.
   "media-src 'self'",
   "connect-src 'self' ws: wss:",
+  `frame-src 'self' ${GEMINI_ENTERPRISE_APP_ORIGIN}`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
