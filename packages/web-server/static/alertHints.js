@@ -24,8 +24,10 @@
   var RESTRICTED_OCTETS = [12, 13, 14, 15, 150, 152, 153, 154, 199];
   var RESTRICTED_IP_RE = /\b10\.220\.(\d{1,3})\.\d{1,3}\b/;
 
-  // main.py::_ZONE_RE
-  var ZONE_RE = /\b(registration|tools)\b/i;
+  // main.py::_ZONE_RE — includes the real multi-word segment names from
+  // docs/DATA-SCHEMA.md, not just the bare words, per the same live QA
+  // finding that widened the orchestrator's copy.
+  var ZONE_RE = /\b(registration hypervisors|registration|tool mgmt|opendns\/umbrella dns virtual appliances|umbrella dns virtual appliances|tools)\b/i;
 
   // main.py::_REFUSAL_PATTERNS
   var REFUSAL_RE = new RegExp([

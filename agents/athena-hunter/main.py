@@ -689,6 +689,17 @@ SQL_GEN_PROMPT = (
     "  On alerts: `orig_network_name LIKE '%<zone>%'`\n"
     "  On conn/dns/ssl/http/files/notice/suricata_corelight: "
     "`id_orig_network_name LIKE '%<zone>%'`\n\n"
+    "* 'WiFi' / 'wifi devices' / 'wireless clients' scoping: WiFi client IPs are "
+    "192.168.128.0/18 (third octet 128-191), NEVER 10.x — 10.x is conference "
+    "infrastructure/wired segments. A live bug shipped a confident 'no WiFi "
+    "devices talked to each other' from a query that filtered id_orig_h/id_resp_h "
+    "LIKE '10.%', which searched a range with no WiFi clients in it at all. "
+    "Prefer the zone-name filter (`id_orig_network_name LIKE '%WiFi%'`) since it "
+    "doesn't depend on the octet math; if filtering by IP directly, the "
+    "correct range check is "
+    "`CAST(split_part(id_orig_h,'.',2) AS integer) BETWEEN 128 AND 191` "
+    "(second octet, since these are 192.168.x.x addresses) — never a bare "
+    "'10.%' filter for a wifi question.\n\n"
     "* File transfers to/from a specific org (e.g. 'files from IP to Zoho'):\n"
     "  files has no remote_organization OR server_name — JOIN via uid with conn+ssl.\n"
     "  ALWAYS generate BOTH of these so the analyst sees the full picture:\n"
@@ -772,6 +783,17 @@ SQL_GEN_PROMPT = (
     "* Top talkers / exfil / outbound bytes:\n"
     "    FROM conn WHERE dt=...\n"
     "    GROUP BY id_orig_h ORDER BY SUM(CAST(resp_bytes AS bigint)) DESC LIMIT 20\n\n"
+    "* 'Do these two hosts talk ONLY to each other' / exclusivity questions:\n"
+    "  Do NOT filter WHERE to the candidate pair and count distinct responders — that "
+    "GROUP BY already has id_resp_h in the key, so COUNT(DISTINCT id_resp_h) is 1 by "
+    "construction and proves nothing (a live bug reported 'exclusive communication' "
+    "this way while the same host had 197 other real destinations). To prove "
+    "exclusivity, GROUP BY id_orig_h ALONE across its FULL traffic (no pair filter) "
+    "and check whether COUNT(DISTINCT id_resp_h) for that host is actually 1:\n"
+    "    SELECT id_orig_h, COUNT(DISTINCT id_resp_h) AS unique_partners\n"
+    "    FROM conn WHERE dt=... AND id_orig_h='<ip>'\n"
+    "    GROUP BY id_orig_h\n"
+    "  Only report 'exclusive' if unique_partners=1 from this UNRESTRICTED query.\n\n"
     "* Session correlation (got a uid, want everything related):\n"
     # The LIMIT here is load-bearing. Every model tested (Gemini, AQLight,
     # Foundation-Sec) dropped LIMIT on the uid pivot when this exemplar omitted
@@ -1352,7 +1374,14 @@ SYSTEM_PROMPT = (
     "## Evidence\n"
     "Bullets of concrete data — IP × count, signature, timestamps, destinations. One line each.\n\n"
     "## Next Steps\n"
-    "Numbered imperatives: 'Block 1.2.3.4', 'Pivot on uid=ABC123'.\n\n"
+    "Numbered imperatives: 'Block 1.2.3.4', 'Pivot on uid=ABC123'. These are ANALYST "
+    "actions against the NETWORK (block/isolate/pivot/widen the search/ask a narrower "
+    "question) — NEVER an action against the query/SQL/tool itself. A live bug wrote "
+    "'Correct the type mismatch in the known hosts query' and 'Repair the truncated "
+    "syntax in the known services query' as Next Steps — that is SQL-generator-bug "
+    "language, not something an analyst can act on. If a query failed, the one "
+    "allowed Next Steps line is to retry or ask a narrower question — never describe "
+    "what is wrong with the query/tool.\n\n"
     "End with: ```json\n{\"confidence\": 0.XX}\n```\n"
     "Only cite data present in query results — never invent IPs, domains, or UIDs. "
     "If EVERY query returned 0 rows, say so in one line and set confidence < 0.3. "
@@ -1365,7 +1394,9 @@ SYSTEM_PROMPT = (
     "and never repeat the raw error text (e.g. 'COLUMN_NOT_FOUND') — that is a database "
     "detail, forbidden by the STYLE rule above regardless of which section it lands in. "
     "Only state a confident negative, with its time window named, when a query actually "
-    "SUCCEEDED with 0 rows."
+    "SUCCEEDED with 0 rows. If your own Answer text admits the queried window misses "
+    "the time period actually asked about (e.g. 'the window starts at X, missing Y'), "
+    "that is a scope miss, not a finding — set confidence < 0.4."
 )
 
 
@@ -1465,6 +1496,17 @@ async def llm_analyze(
             answer = answer[:m.start()].rstrip() + answer[m.end():]
         else:
             logger.warning("no confidence block in LLM answer, using low default")
+
+        # Code-level backstop for the SYSTEM_PROMPT's failed-query rule above:
+        # when every query failed and none succeeded, the model must not phrase
+        # a confident negative with a named time window ("No activity... in the
+        # last hour (16:00-17:00)") — that reads as a completed search when none
+        # ran. The prompt says this explicitly, but a smaller model (observed on
+        # the local/AQLight lane) can still violate it. Override rather than
+        # trust the model here, since this is a live-caught fabrication class.
+        if context.get("errors") and not context.get("query_results"):
+            answer = "The lookup for this query could not be completed."
+            confidence = min(confidence, 0.2)
 
         return answer, confidence
 

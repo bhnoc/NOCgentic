@@ -21,6 +21,7 @@
   }
 
   let capturedDataUrl = null;
+  let opening = false;
 
   function setStatus(el, text, tone) {
     el.textContent = text || '';
@@ -29,6 +30,19 @@
   }
 
   async function openPanel() {
+    // Re-entrancy guard: a double-click fires two openPanel() calls before
+    // either's html2canvas capture resolves, stacking two screenshots in
+    // the preview (same click-flood class as the threat-hunt.js fixes).
+    if (opening) return;
+    opening = true;
+    try {
+      await doOpenPanel();
+    } finally {
+      opening = false;
+    }
+  }
+
+  async function doOpenPanel() {
     const { backdrop, panel, note, preview, status, submit } = els();
     backdrop.hidden = false;
     panel.hidden = false;
@@ -91,8 +105,8 @@
     submit.disabled = true;
     setStatus(status, 'Sending…', null);
 
-    try {
-      const resp = await fetch('/api/v1/report-issue', {
+    async function send(withImage) {
+      return fetch('/api/v1/report-issue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -100,11 +114,24 @@
         },
         body: JSON.stringify({
           note: text,
-          image: capturedDataUrl || undefined,
+          image: withImage ? (capturedDataUrl || undefined) : undefined,
           view: (document.getElementById('hunt-view') && !document.getElementById('hunt-view').hidden) ? 'hunt' : 'chat',
           path: window.location.hash || window.location.pathname,
         }),
       });
+    }
+
+    try {
+      let resp = await send(true);
+
+      // A 400 means the request itself is invalid (e.g. an oversized
+      // screenshot) — retrying the identical payload will fail forever.
+      // If there's a screenshot to drop, retry once without it instead of
+      // surfacing a "try again" message that can never succeed.
+      if (resp.status === 400 && capturedDataUrl) {
+        setStatus(status, 'Report too large — resending without the screenshot…', null);
+        resp = await send(false);
+      }
 
       if (!resp.ok) {
         throw new Error('status ' + resp.status);

@@ -97,4 +97,22 @@ describe('POST /api/v1/report-issue', () => {
 
     expect(resp.statusCode).toBe(502);
   });
+
+  // Regression (QA sweep 10): chat.ts's extractClient() forwards `referer`,
+  // report-issue.ts's did not, leaving the shared ClientInfo.referer field
+  // silently empty for every report-issue submission.
+  it('forwards the referer header to the orchestrator, matching chat.ts', async () => {
+    const server = buildServer();
+    const resp = await server.inject({
+      method: 'POST',
+      url: '/api/v1/report-issue',
+      headers: { referer: 'https://ng.bhnoc.com/#some-hash' },
+      payload: { note: 'x', view: 'chat' },
+    });
+
+    expect(resp.statusCode).toBe(202);
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string);
+    expect(body.client.referer).toBe('https://ng.bhnoc.com/#some-hash');
+  });
 });
