@@ -58,6 +58,17 @@ IN_SCOPE_NETWORKS: tuple[ipaddress.IPv4Network, ...] = tuple(
 # rather than pattern-trusted, so a sloppy match cannot cause a partial redact.
 _IPV4_CANDIDATE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
+# IPv6. redact_text() previously only looked for a dotted-quad candidate, so an
+# IPv6 literal (e.g. Zeek/Corelight logs carrying a link-local fe80::/10 or ULA
+# fc00::/7 address) was never even considered for redaction — the allowlist
+# machinery in is_in_scope() already handles IPv6 correctly via `ipaddress`,
+# there was just no candidate regex feeding it one. Deliberately broad (same
+# "let ipaddress decide, don't pattern-trust" approach as _IPV4_CANDIDATE):
+# matches anything hex-and-colon shaped, including a leading "::" or one
+# embedded IPv4 tail (::ffff:10.220.30.5); a non-address candidate simply
+# fails ip_address() parsing in _sub() below and is left untouched.
+_IPV6_CANDIDATE = re.compile(r"\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(?::\d{1,3}(?:\.\d{1,3}){3})?\b")
+
 
 def is_in_scope(value: str) -> bool:
     """True if this address may be shown to users.
@@ -116,21 +127,52 @@ def prefix_is_out_of_scope(prefix: str) -> bool:
     return not block[0].is_global
 
 
+_IPV4_OCTET_RE = re.compile(r"^\d{1,3}$")
+
+
+def _normalize_ipv4_leading_zeros(candidate: str) -> str | None:
+    """"010.220.012.005" -> "10.220.12.5", or None if not IPv4-shaped.
+
+    ipaddress.ip_address() rejects leading zeros outright (Python 3.9.5+
+    treats them as octal-ambiguous), so a dotted quad written with them fell
+    through _sub_candidate's except-ValueError branch as "not a real address"
+    and displayed verbatim — including one inside a restricted subnet. This
+    strips the ambiguity ourselves (always base-10, never octal) so the
+    address gets range-checked instead of waved through.
+    """
+    parts = candidate.split(".")
+    if len(parts) != 4 or not all(_IPV4_OCTET_RE.match(p) for p in parts):
+        return None
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if any(o > 255 for o in octets):
+        return None
+    return ".".join(str(o) for o in octets)
+
+
+def _sub_candidate(match: re.Match[str]) -> str:
+    candidate = match.group(0)
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        normalized = _normalize_ipv4_leading_zeros(candidate)
+        if normalized is None:
+            # Not a real address (e.g. a version string like 1.2.3.400, or a
+            # timestamp the IPv6 candidate regex also matches) — leave it.
+            return candidate
+        return candidate if is_in_scope(normalized) else OUT_OF_SCOPE_PLACEHOLDER
+    return candidate if is_in_scope(candidate) else OUT_OF_SCOPE_PLACEHOLDER
+
+
 def redact_text(text: str) -> str:
-    """Replace every out-of-scope IPv4 literal in free text."""
+    """Replace every out-of-scope IPv4 or IPv6 literal in free text."""
     if not isinstance(text, str) or not text:
         return text
-
-    def _sub(match: re.Match[str]) -> str:
-        candidate = match.group(0)
-        try:
-            ipaddress.ip_address(candidate)
-        except ValueError:
-            # Not a real address (e.g. a version string like 1.2.3.400) — leave it.
-            return candidate
-        return candidate if is_in_scope(candidate) else OUT_OF_SCOPE_PLACEHOLDER
-
-    return _IPV4_CANDIDATE.sub(_sub, text)
+    text = _IPV4_CANDIDATE.sub(_sub_candidate, text)
+    text = _IPV6_CANDIDATE.sub(_sub_candidate, text)
+    return text
 
 
 def redact_obj(obj: Any) -> Any:

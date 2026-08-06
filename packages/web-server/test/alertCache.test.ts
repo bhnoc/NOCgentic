@@ -30,6 +30,24 @@ describe('scrubString restricted-subnet scrub (sweep-4 lo-1)', () => {
   });
 });
 
+describe('scrubString zone-name scrub matches the orchestrator (drift check)', () => {
+  it('scrubs the plural zone name "Tools"', () => {
+    expect(scrubString('seen in the Tools zone')).toBe('seen in the internal zone');
+  });
+
+  it('scrubs "Registration" case-insensitively', () => {
+    expect(scrubString('near the registration desk')).toBe('near the internal desk');
+  });
+
+  it('does NOT scrub the singular English word "tool" (e.g. "attack tool")', () => {
+    // Drift regression: this copy of ZONE_RE had "Tools?" (optional plural),
+    // which over-redacted the singular and diverged from
+    // agents/orchestrator/main.py::_ZONE_RE / static/alertHints.js::ZONE_RE,
+    // both of which match the plural zone name only.
+    expect(scrubString('flagged as an attack tool')).toBe('flagged as an attack tool');
+  });
+});
+
 describe('alertCache dequeue id-scrub (sweep-4 lo-1)', () => {
   it('scrubs a restricted-subnet IP embedded in the alert id', () => {
     alertCache.__enqueueForTest(rawAlert({ id: 'x|10.220.199.5|ts' }));

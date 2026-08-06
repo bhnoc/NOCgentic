@@ -108,6 +108,47 @@ class TestRedactText:
     def test_non_ip_dotted_numbers_untouched(self):
         assert redact_text("version 1.2.3.400") == "version 1.2.3.400"
 
+
+class TestRedactTextShapeGapsFound20260805:
+    """redact_text() only ever looked for a dotted-quad candidate, so an IPv6
+    literal was never even considered for redaction, and a leading-zero IPv4
+    (which ipaddress.ip_address() rejects outright as octal-ambiguous) fell
+    through the except-ValueError branch as "not a real address" and rendered
+    verbatim -- including one inside a restricted subnet."""
+
+    def test_out_of_scope_ipv6_link_local_is_redacted(self):
+        out = redact_text("internal host fe80::a00:27ff:fe4e:66a1 talked to 8.8.8.8")
+        assert "fe80::" not in out
+        assert OUT_OF_SCOPE_PLACEHOLDER in out
+
+    def test_out_of_scope_ipv6_unique_local_is_redacted(self):
+        out = redact_text("internal host fc00::1234:5678:9abc talked to 8.8.8.8")
+        assert "fc00::" not in out
+
+    def test_public_ipv6_survives(self):
+        text = "beaconed to 2001:4860:4860::8888"
+        assert redact_text(text) == text
+
+    def test_leading_zero_ipv4_in_restricted_range_is_redacted(self):
+        out = redact_text("restricted host 010.220.012.005 talked to 8.8.8.8")
+        assert "010.220.012.005" not in out
+        assert OUT_OF_SCOPE_PLACEHOLDER in out
+
+    def test_leading_zero_ipv4_in_scope_survives(self):
+        text = "conf host 010.220.040.007 talked to 8.8.8.8"
+        # 10.220.40.7 (after stripping the zeros) is in scope, so the literal,
+        # zero-padded text is left exactly as written -- not renormalized.
+        assert redact_text(text) == text
+
+    def test_out_of_range_octet_with_leading_zero_is_not_treated_as_an_ip(self):
+        assert redact_text("not an ip 010.220.012.999") == "not an ip 010.220.012.999"
+
+    def test_timestamp_shaped_text_is_not_redacted(self):
+        """The IPv6 candidate regex is deliberately broad and can match a
+        colon-separated timestamp; ip_address() parsing must reject it."""
+        text = "event fired at 12:30:00 sharp"
+        assert redact_text(text) == text
+
     def test_empty_and_none_safe(self):
         assert redact_text("") == ""
         assert redact_text(None) is None

@@ -248,3 +248,104 @@ class TestExportGapsFound20260804:
     def test_ordinary_prose_untouched(self):
         text = "The Registration zone had 4.2 GB of egress and no private key material."
         assert scrub_secrets(text) == text
+
+
+class TestUrlSafeBase64TokensFound20260805:
+    """Live screenshot review: query-string auth tokens like Google's
+    cup2key=/cup2hreq= and JWT signature segments use URL-safe base64
+    (RFC 4648 '-'/'_' instead of '+'/'/'), which _RE_SECRET_TOKEN's charset
+    didn't include. Every '-'/'_' split the token into short fragments, so
+    none ever reached the 40-char floor and real secrets rendered on screen
+    verbatim ("cup2key=10:yasFogI_fTvL5ud6bn7fKbyLWBLnuTSwtlhfJCSql-c").
+    """
+
+    def test_url_safe_query_token_is_redacted(self):
+        token = "yasFogI_fTvL5ud6bn7fKbyLWBLnuTSwtlhfJCSql-c"
+        out = scrub_secrets(f"cup2key=10:{token}&cup2hreq=e3b0c44298fc1c149afbf4c899")
+        assert token not in out
+
+    def test_url_safe_token_with_only_underscore_is_redacted(self):
+        token = "B3ig0VnBuJX341APNQu_dyL2RL0D42hrMLaIid3le_8"
+        out = scrub_secrets(f"cup2key=10:{token}&cup2hreq=")
+        assert token not in out
+
+    def test_jwt_signature_segment_is_redacted(self):
+        sig = "iUMsiToGzi8WPvmfaNmCkDRCMdv_HDpJ25LqTsomeLongerTailToClearForty"
+        out = scrub_secrets(f"/?key=eyJhbGciOiJIUzUxMiJ9.{sig}")
+        assert sig not in out
+
+    def test_hyphenated_hostname_is_not_treated_as_a_secret(self):
+        """'.' still breaks a run, so a long hyphenated domain must survive —
+        this must not regress into eating real hostnames/domains."""
+        host = "signin.gentlemens-secrets-club.com"
+        assert scrub_secrets(f"queried {host} via 8.8.4.4") == f"queried {host} via 8.8.4.4"
+
+    def test_file_hashes_still_survive_alongside_the_widened_charset(self):
+        sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        assert sha256 in scrub_secrets(f"file hash {sha256} seen on host")
+
+
+class TestMoreShapeGapsFound20260805:
+    """Follow-up sweep after the URL-safe base64 fix, looking for the same
+    failure mode elsewhere: a redaction regex whose shape/charset assumption
+    doesn't cover a real variant of the thing it's meant to catch."""
+
+    def test_pgp_private_key_block_is_removed(self):
+        """PGP's real export header has " BLOCK" between "KEY" and the
+        trailing dashes (-----BEGIN PGP PRIVATE KEY BLOCK-----), which neither
+        _RE_PRIVATE_KEY nor its header fallback matched before."""
+        text = (
+            "here is the key\n"
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\n"
+            "lQOYBFxxxxxFakeKeyMaterial\n"
+            "-----END PGP PRIVATE KEY BLOCK-----\n"
+            "and that was it"
+        )
+        out = scrub_secrets(text)
+        assert "BEGIN PGP" not in out
+        assert "lQOYBFxxxxxFakeKeyMaterial" not in out
+        assert "[REDACTED-PRIVATE-KEY]" in out
+        assert "here is the key" in out and "and that was it" in out
+
+    def test_pgp_unterminated_header_still_redacted(self):
+        out = scrub_secrets("-----BEGIN PGP PRIVATE KEY BLOCK----- lQOYBF")
+        assert "BEGIN PGP" not in out
+
+    def test_json_secret_value_with_escaped_quote_is_fully_redacted(self):
+        """The value group had no backslash-escape awareness, so it stopped
+        at an escaped quote and left the real secret tail (after the actual
+        closing quote) sitting in the output right after [REDACTED]."""
+        out = scrub_secrets('{"password":"ab\\"cd1234567890secretTail"}')
+        assert "cd1234567890secretTail" not in out
+        assert out == '{"password":"[REDACTED]"}'
+
+    def test_bearer_token_with_base64_padding_is_fully_redacted(self):
+        """Non-JWT bearer tokens (opaque OAuth tokens) use standard base64
+        with +, /, = padding, which the bearer charset excluded."""
+        out = scrub_secrets("Authorization: Bearer AAAB3NzaC1y+ccKV/==")
+        assert "ccKV/==" not in out
+
+    @pytest.mark.parametrize("text,leak", [
+        ("key sk-ant-api03-abcdefghijklmnop", "sk-ant-api03-abcdefghijklmnop"),
+        ("token github_pat_11ABCDEFG1234567890", "github_pat_11ABCDEFG1234567890"),
+        ("slack token xoxa-1234567890-abcdefghij", "xoxa-1234567890-abcdefghij"),
+        ("stripe key sk_live_abcdefghijklmnop1234", "sk_live_abcdefghijklmnop1234"),
+    ])
+    def test_additional_provider_prefixes_are_redacted(self, text, leak):
+        assert leak not in scrub_secrets(text)
+
+    def test_lone_unescaped_backslash_before_closing_quote_does_not_leak_the_next_field(self):
+        """Classic escaped-backslash-before-quote regex trap, caught during
+        adversarial review of the fix above: a malformed/naive-string-concat
+        value ending in a single backslash right before what should be the
+        closing quote (a password containing a literal '\\' that never went
+        through a real JSON encoder) made the GREEDY escape-aware value group
+        read that '\\"' as an escaped quote and keep consuming straight into
+        the NEXT field's opening quote — swallowing '"token' whole and leaving
+        the real secret sitting there completely unquoted and unredacted.
+        The lookahead requiring the closing quote be followed by ',' or '}'
+        stops the match before it can cross into the next field."""
+        text = '{"password":"abc\\","token":"REALSECRETTOKENVALUE1234567890","z":"end"}'
+        out = scrub_secrets(text)
+        assert "REALSECRETTOKENVALUE1234567890" not in out
+        assert '"end"' in out, "the trailing field must survive intact"

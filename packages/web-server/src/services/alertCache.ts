@@ -24,7 +24,13 @@ const BOOT_MAX_RETRIES = 6;
 const RESTRICTED_OCTETS = new Set([12, 13, 14, 15, 150, 152, 153, 154, 199]);
 const DECOY_THIRD_OCTET = 69;
 const IP_RE = /\b10\.220\.(\d{1,3})\.(\d{1,3})\b/g;
-const ZONE_RE = /\b(Registration|Tools?)\b/g;
+// main.py::_ZONE_RE. Must match "Tools" (plural, the real zone name) but NOT
+// the singular English word "tool" (e.g. "attack tool") — this copy had drifted
+// to "Tools?" (optional plural), which over-redacted the singular. Fails safe
+// (extra redaction, not a leak) but drifts from the source it's documented as
+// mirroring; keep it byte-identical with agents/orchestrator/main.py::_ZONE_RE
+// and packages/web-server/static/alertHints.js::ZONE_RE.
+const ZONE_RE = /\b(Registration|Tools)\b/gi;
 
 export function scrubString(s: string | null | undefined): string | undefined {
   if (!s) return s ?? undefined;
