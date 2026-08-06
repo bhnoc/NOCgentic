@@ -129,6 +129,70 @@ def test_sanitize_sql_accepts_legit_join():
     assert ac.sanitize_sql(sql) == sql
 
 
+# ---------------------------------------------------------------------------
+# sanitize_sql; block system-catalog / cross-database access (CodeMender 838d9fc2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "bad_sql",
+    [
+        "SELECT table_catalog, table_schema, table_name FROM information_schema.tables",
+        "SELECT column_name FROM information_schema.columns WHERE table_name='conn'",
+        "SELECT * FROM some_db.information_schema.tables",
+        "select * from INFORMATION_SCHEMA.TABLES",
+    ],
+)
+def test_sanitize_sql_rejects_system_catalog(bad_sql):
+    """REVERT-CHECK: without _RE_SYSTEM_CATALOG this reconnaissance query (real
+    CodeMender PoC 838d9fc2) sailed through sanitize_sql because it starts with
+    SELECT, has no blocked keyword, and names no out-of-scope IP. This test
+    would FAIL (no ValueError raised) if that check were removed."""
+    with pytest.raises(ValueError, match="System catalog"):
+        ac.sanitize_sql(bad_sql)
+
+
+def test_sanitize_sql_rejects_cross_database_reference():
+    """A query naming a database other than ATHENA_DATABASE steps outside the
+    QueryExecutionContext and can reach an unrelated Glue database in the same
+    AWS account."""
+    with pytest.raises(ValueError, match="Cross-database"):
+        ac.sanitize_sql("SELECT * FROM some_other_database.conn WHERE dt='2026-08-06'")
+
+
+def test_sanitize_sql_accepts_own_database_qualified_table():
+    """`ATHENA_DATABASE.conn` is a redundant but legitimate self-reference —
+    must not be rejected as cross-database."""
+    sql = f"SELECT * FROM {ac.ATHENA_DATABASE}.conn WHERE dt='2026-08-06' LIMIT 10"
+    assert ac.sanitize_sql(sql) == sql
+
+
+# ---------------------------------------------------------------------------
+# sanitize_sql; hex-escape obfuscated restricted-subnet bypass (CodeMender 42d3ce00)
+# ---------------------------------------------------------------------------
+
+def test_sanitize_sql_rejects_hex_escaped_restricted_prefix():
+    """REVERT-CHECK: real CodeMender PoC 42d3ce00 wrote the restricted-range dot
+    as \\x2e so _RE_IP_PREFIX (which scans for a literal '.') never saw it. This
+    test would FAIL (no ValueError raised) if _decode_hex_escapes were removed
+    or the scans reverted to scanning the raw `sql` instead of `scan_sql`."""
+    sql = (
+        r"SELECT count(*) FROM conn WHERE "
+        r"regexp_like(id_orig_h, '^10\x2e220\x2e12\x2e')"
+    )
+    with pytest.raises(ValueError, match="Out-of-scope IP prefix"):
+        ac.sanitize_sql(sql)
+
+
+def test_sanitize_sql_accepts_hex_escaped_in_scope_prefix():
+    """Same obfuscation style targeting an IN-SCOPE conference subnet (third
+    octet 40, inside 10.220.31-72) must not false-positive."""
+    sql = (
+        r"SELECT count(*) FROM conn WHERE "
+        r"regexp_like(id_orig_h, '^10\x2e220\x2e40\x2e')"
+    )
+    assert ac.sanitize_sql(sql) == sql
+
+
 def test_sanitize_sql_strips_single_trailing_semicolon():
     # One optional trailing semicolon is allowed and stripped.
     assert ac.sanitize_sql("SELECT 1 FROM conn;") == "SELECT 1 FROM conn"

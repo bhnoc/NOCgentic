@@ -153,6 +153,43 @@ _RE_IP_PREFIX = re.compile(
     r"\b(\d{1,3}(?:\\?\.\d{1,3}){1,2})\\?\.(?=[%_*']|$)"
 )
 
+# \xHH hex escapes, as accepted inside a regexp_like() pattern string by Trino's
+# Java regex engine. A live PoC wrote the restricted-range dot as \x2e
+# (`regexp_like(id_orig_h, '^10\x2e220\x2e12\x2e')`), which the literal/prefix
+# scans above never saw because they look for an actual "." character in the SQL
+# text. Decoding these BEFORE those scans run closes that specific bypass
+# without touching the scans themselves.
+_RE_HEX_ESCAPE = re.compile(r"\\x([0-9a-fA-F]{2})")
+
+
+def _decode_hex_escapes(sql: str) -> str:
+    """Expand \\xHH escapes so an obfuscated IP literal/prefix is scannable."""
+    return _RE_HEX_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), sql)
+
+# athena-hunter's whole purpose is broad NL->SQL hunting across the Zeek/Corelight
+# tables in ATHENA_DATABASE, so this deliberately does NOT allowlist individual
+# table names the way deter's safe_pool.py does — that would fight the agent's own
+# design. What it must never reach is the Glue/Athena CATALOG itself:
+# information_schema (and its aliases across engines) enumerates every table and
+# database this execution role can see, which is a reconnaissance primitive no
+# legitimate hunt query needs. Matches a bare reference or one qualified by any
+# database, so `information_schema.tables` and `some_db.information_schema.columns`
+# are both caught.
+_RE_SYSTEM_CATALOG = re.compile(
+    r"(?i)\b(?:[a-z_][a-z0-9_]*\.)*"
+    r"(?:information_schema|pg_catalog|sys)\b"
+)
+
+# A FROM/JOIN qualified by a database name other than the one this client is
+# configured for. Athena queries run inside QueryExecutionContext={"Database":
+# ATHENA_DATABASE}; a query that names a different database explicitly steps
+# outside that context and can reach data this agent was never scoped to (a
+# different Glue database in the same AWS account). Bare/self-database
+# references are unaffected.
+_RE_CROSS_DATABASE_REF = re.compile(
+    r"(?i)\b(from|join)\s+([a-z_][a-z0-9_]*)\.[a-z_][a-z0-9_]*\b"
+)
+
 
 def sanitize_sql(sql: str) -> str:
     """Validate and strip dangerous SQL — only allow a single SELECT query.
@@ -184,12 +221,32 @@ def sanitize_sql(sql: str) -> str:
     if not sql.upper().startswith("SELECT"):
         raise ValueError(f"Only SELECT queries allowed, got: {sql[:100]}")
 
+    # System-catalog reconnaissance (information_schema et al) is blocked
+    # outright: it isn't a Zeek/Corelight table an analyst would ever hunt in,
+    # only a way to enumerate what else this execution role can see.
+    if _RE_SYSTEM_CATALOG.search(sql):
+        raise ValueError(f"System catalog access not allowed: {sql[:200]}")
+
+    # A query naming a database other than the one this client is scoped to
+    # steps outside QueryExecutionContext and can reach an unrelated Glue
+    # database in the same account. `db.tbl` is only fine when `db` IS this
+    # client's own database (a query the model wrote redundantly, per
+    # athena-hunter's _RE_DB_QUALIFIER comment above it).
+    for _keyword, db in _RE_CROSS_DATABASE_REF.findall(sql):
+        if db.lower() != ATHENA_DATABASE.lower():
+            raise ValueError(f"Cross-database reference not allowed: {db}")
+
     # Scope enforcement, in code and after the LLM. The SQL-generation prompt
     # asks the model to stay in scope, but a prompt is a suggestion; this is the
     # control. Any IP literal in the statement must be in scope, so a query for
     # an out-of-scope host cannot execute even if the model is talked into
     # writing one.
-    for literal in _RE_IP_LITERAL.findall(sql):
+    #
+    # Scanned on the hex-decoded copy, not the raw sql, so a restricted subnet
+    # written as \x2e-escaped octets inside a regexp_like() pattern is caught —
+    # see _decode_hex_escapes above.
+    scan_sql = _decode_hex_escapes(sql)
+    for literal in _RE_IP_LITERAL.findall(scan_sql):
         # Only judge things that are actually addresses. A dotted-numeric token
         # like a version string ("1.2.3.400") matches the candidate pattern but
         # is not an IP, and rejecting it would break legitimate queries.
@@ -212,7 +269,7 @@ def sanitize_sql(sql: str) -> str:
 
     # Partial prefixes too: LIKE '192.168.1.%' and regexp_like(h, '^10\.0\.')
     # target an out-of-scope subnet without containing a full dotted quad.
-    for prefix in _RE_IP_PREFIX.findall(sql):
+    for prefix in _RE_IP_PREFIX.findall(scan_sql):
         if ipscope.prefix_is_out_of_scope(prefix.replace("\\", "")):
             raise ValueError(f"Out-of-scope IP prefix in query: {prefix}")
     return sql
