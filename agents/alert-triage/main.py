@@ -868,7 +868,13 @@ SYSTEM_PROMPT = (
     "under a total of 5 (or of 4 million) is the correct answer when you were\n"
     "handed two.\n\n"
     "## Risk\n"
-    "One line: Severity + scope (hosts/networks affected) + impact.\n\n"
+    "One line: Severity + scope (hosts/networks affected) + impact. If the "
+    "analyst's question asks to CORRELATE alerts with traffic/flow/DNS volume "
+    "(e.g. 'correlate spikes with security events') and "
+    "flows_returned_for_analysis and dns_returned_for_analysis are BOTH zero, "
+    "you have not performed that correlation — say so plainly ('alert content "
+    "only, no flow/DNS correlation performed') instead of phrasing the Risk "
+    "line as a completed assessment of alerts against traffic volume.\n\n"
     "## Next Steps\n"
     # The placeholders here are deliberately NOT uid-shaped. The previous exemplar
     # was 'Pivot on uid=ABC123', and on the 2026-08-04 bench the model copied the
