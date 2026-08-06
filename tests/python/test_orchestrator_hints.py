@@ -107,3 +107,39 @@ class TestStripZoneAssetNoise:
             "Search alerts for high-severity events this week",
         ]
         assert orch_mod._strip_zone_asset_noise(hints) == hints
+
+
+class TestZoneReCatchesLiteralSegmentNames:
+    """Live-caught regression (QA sweep 10): the LLM used the real,
+    space-separated segment name "Tool Mgmt" (docs/DATA-SCHEMA.md) verbatim
+    in Next Steps hints instead of paraphrasing it into an underscore-joined
+    identifier. _strip_zone_asset_noise's underscore/filter-syntax heuristics
+    never see a plain space-separated real name, so _ZONE_RE itself (which
+    sanitize_output_text runs on every hint) has to catch the literal names,
+    not just the bare words "Registration"/"Tools" it originally matched.
+    """
+
+    def test_catches_live_leaked_tool_mgmt_hints(self, orch_mod):
+        leaked = [
+            "pivot to Tool Mgmt zone outbound HTTP user agents",
+            "investigate authentication failures from Tool Mgmt",
+            "filter proxy logs for PyCurl and Go-http-client user agents in Tool Mgmt",
+            "review network flows for data exfiltration from the Tool Mgmt zone",
+        ]
+        for hint in leaked:
+            scrubbed = orch_mod.sanitize_output_text(hint)
+            assert "Tool Mgmt" not in scrubbed
+            assert "internal" in scrubbed.lower()
+
+    def test_catches_other_real_infrastructure_segment_names(self, orch_mod):
+        assert "Registration Hypervisors" not in orch_mod.sanitize_output_text(
+            "unusual traffic from Registration Hypervisors"
+        )
+        assert "Umbrella DNS Virtual Appliances" not in orch_mod.sanitize_output_text(
+            "check the OpenDNS/Umbrella DNS Virtual Appliances logs"
+        )
+
+    def test_does_not_false_trigger_on_singular_tool(self, orch_mod):
+        # "attack tool" (singular, generic English) must survive untouched.
+        text = "the attacker used a custom attack tool"
+        assert orch_mod.sanitize_output_text(text) == text

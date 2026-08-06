@@ -31,7 +31,7 @@ import secrets
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header
@@ -181,7 +181,19 @@ _DECOY_THIRD_OCTET = 69  # target for rewrites
 # Case-insensitive so lowercase "tools"/"registration" can't evade the scrub.
 # Match "Tools" (plural, the actual zone name) exactly, NOT the singular English
 # word "tool" (e.g. "attack tool"), which must not false-trigger a scrub.
-_ZONE_RE = re.compile(r"\b(Registration|Tools)\b", re.IGNORECASE)
+# Longer/multi-word segment names from docs/DATA-SCHEMA.md's Infrastructure
+# list go first so alternation matches the full phrase, not just a prefix
+# (e.g. "Registration Hypervisors" before bare "Registration"). Added
+# "Tool Mgmt" / "Registration Hypervisors" / the Umbrella DNS appliance name
+# after a live QA sweep found the LLM using these real, space-separated
+# segment names verbatim in Next Steps hints — the old pattern only caught
+# the single words "Registration"/"Tools", never the literal real names.
+_ZONE_RE = re.compile(
+    r"\b(Registration Hypervisors|Registration|Tool Mgmt|"
+    r"OpenDNS/Umbrella DNS Virtual Appliances|Umbrella DNS Virtual Appliances|"
+    r"Tools)\b",
+    re.IGNORECASE,
+)
 
 # Service-name scrubbing — re-label specific protocols / databases as
 # generic "Network Service" so user-facing responses don't enumerate
@@ -586,6 +598,14 @@ CLASSIFY_SYSTEM_PROMPT = (
     "conference traffic → athena_hunter (the conn table sums actual bytes per host/network). "
     "thousandeyes_analyst only covers SYNTHETIC test health (uptime, response time, "
     "availability of monitored external targets) — it has no aggregate throughput metric.\n"
+    "* A specific internal IP/CIDR (10.x, 192.168.x) combined with 'gateway'/'route'/'routing' "
+    "words → athena_hunter, NOT thousandeyes_analyst. A live bug routed 'Audit 10.220.41.75 "
+    "for missing internet gateway routes' to thousandeyes_analyst, which has no per-host/"
+    "per-subnet query capability and just returned a generic synthetic-test summary "
+    "unrelated to that IP. thousandeyes_analyst only covers monitored EXTERNAL targets, "
+    "never conference-internal addresses — a query naming an internal IP/CIDR always "
+    "belongs to athena_hunter (it can query conn/dns for that subnet's actual egress path), "
+    "regardless of 'gateway'/'route'/'routing' keywords.\n"
     "* Ambiguous but security-related → athena_hunter.\n\n"
     "Respond with EXACTLY this JSON shape, no markdown, no prose:\n"
     '{"intent": "<alert_triage|thousandeyes_analyst|athena_hunter|refused>",\n'
@@ -834,6 +854,24 @@ def _strip_zone_asset_noise(hints: list[str]) -> list[str]:
     ]
 
 
+# Post-filter: drop hints implying a capability no routed agent actually has.
+# Live-caught: "Verify sensor ingestion for active connection zones like X" —
+# athena-hunter has no sensor/ingestion-health data source (connection/alert/
+# session data only), so it answered by silently redefining "verify ingestion"
+# as "show the connection count", which isn't a health check at all. Reject
+# the hint outright rather than let an agent answer a capability it lacks.
+_UNGROUNDABLE_CAPABILITY_RE = re.compile(
+    r"\b(sensor\s+ingestion|telemetry\s+health|sensor\s+health|heartbeat|"
+    r"ingestion\s+health|log\s+source\s+status)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_ungroundable_capability_hints(hints: list[str]) -> list[str]:
+    """Remove hints asking to verify a monitoring capability no agent has."""
+    return [h for h in hints if not _UNGROUNDABLE_CAPABILITY_RE.search(h)]
+
+
 async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
     """Generate 5 follow-up investigation hints based on the query and answer."""
     try:
@@ -871,7 +909,8 @@ async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
         hints = _strip_vendor_names(hints)
         hints = _strip_schema_noise(hints)
         hints = _strip_zone_asset_noise(hints)
-        logger.info("Parsed %d hints (vendor/schema/zone-filtered): %s", len(hints), hints[:5])
+        hints = _strip_ungroundable_capability_hints(hints)
+        logger.info("Parsed %d hints (vendor/schema/zone/capability-filtered): %s", len(hints), hints[:5])
         if hints:
             return [h[:100] for h in hints[:5]]
         logger.warning("No hints survived after filtering: %s", raw[:300])
@@ -2401,7 +2440,7 @@ async def get_lanes(job_id: str) -> dict[str, Any]:
 class ReportIssueRequest(BaseModel):
     note: str = Field(default="", max_length=1000)
     image: str | None = Field(default=None, max_length=8_000_000)
-    view: str = Field(default="chat")
+    view: Literal["chat", "hunt"] = Field(default="chat")
     path: str | None = Field(default=None, max_length=200)
     client: ClientInfo | None = None
 

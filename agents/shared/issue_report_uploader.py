@@ -70,6 +70,14 @@ def upload_issue_report(
 
     Returns the S3 key written. Raises on any failure — the caller (the
     /report-issue route) decides how to surface that to the web-server.
+
+    NOTE: only `note` is scrubbed (credscrub.scrub_secrets, by the caller)
+    before this runs. `image_data_url` is uploaded verbatim — a screenshot is
+    pixels, not scrubbable text, so it carries whatever was on screen at
+    capture time as-is. This is an accepted gap, not an oversight: unlike
+    chat answers (sanitized before render), a live alert-detail popup's raw
+    vendor `description` text or any other on-screen content is not filtered
+    before it can appear in a screenshot.
     """
     image_b64: str | None = None
     image_content_type: str | None = None

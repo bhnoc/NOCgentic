@@ -29,6 +29,7 @@ function extractClient(request: FastifyRequest) {
     ip: request.ip,
     user_agent: request.headers['user-agent'],
     session_id: sessionFromCookie || sessionFromHeader,
+    referer: (request.headers['referer'] || request.headers['referrer']) as string | undefined,
   };
 }
 
@@ -36,7 +37,12 @@ export function registerReportIssueRoutes(server: FastifyInstance) {
   server.post(
     '/api/v1/report-issue',
     // Default Fastify bodyLimit (1MB) is too small for a screenshot data URL.
-    { bodyLimit: MAX_IMAGE_DATA_URL_LEN + 100_000 },
+    // Own rate-limit bucket, tighter than the shared 120/min: unlike a cheap
+    // GET, each call carries up to an ~8MB body and triggers an S3 write.
+    {
+      bodyLimit: MAX_IMAGE_DATA_URL_LEN + 100_000,
+      config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    },
     async (request, reply) => {
       const parseResult = ReportIssueSchema.safeParse(request.body);
       if (!parseResult.success) {

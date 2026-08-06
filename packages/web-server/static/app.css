@@ -885,10 +885,18 @@
          color-coded dot alone still carries connected/degraded/down) and
          tighten the tab/pill chrome further, matching this block's existing
          pattern of progressive size reduction rather than restructuring. */
-      .status-pill { padding: 3px 6px; gap: 4px; }
+      .status-pill { padding: 3px 4px; gap: 0; }
       .status-pill span { display: none; }
-      .header-tabs { gap: 4px; }
+      /* The Gemini Enterprise chip (commit 01b1bf0) landed inside
+         .header-tab-hunt after this breakpoint block was written and never
+         got the same min-width:0/shrink treatment — regressed the header
+         back to 413px of forced scroll on a 390px viewport. Same fix as
+         the status pills above: drop the chip's label text, keep the dot. */
+      .header-tabs, .header-tab, .header-tab-hunt { min-width: 0; }
       .header-tab { padding: 4px 8px; font-size: 9px; }
+      .header-tab-hunt { gap: 4px; padding-right: 4px; }
+      .gemini-ent-chip { padding: 3px 5px; }
+      .gemini-ent-chip-text { display: none; }
 
       /* Main chat column fills width */
       main { border-right: none; }

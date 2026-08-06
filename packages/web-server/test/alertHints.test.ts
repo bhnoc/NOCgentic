@@ -218,6 +218,15 @@ describe('alertHintIsSafe', () => {
     expect(alertHintIsSafe('Which AI tools are on the network?')).toBe(false);
   });
 
+  // Live QA finding (sweep 10): the orchestrator's Next Steps hints leaked
+  // the real, space-separated segment name "Tool Mgmt" verbatim because the
+  // bare-word ZONE_RE never matched it. Same mirrored regex here, same gap.
+  it('rejects the real multi-word infrastructure segment names', () => {
+    expect(alertHintIsSafe('pivot to Tool Mgmt zone outbound HTTP user agents')).toBe(false);
+    expect(alertHintIsSafe('unusual traffic from Registration Hypervisors')).toBe(false);
+    expect(alertHintIsSafe('check the OpenDNS/Umbrella DNS Virtual Appliances logs')).toBe(false);
+  });
+
   it('rejects restricted subnet addresses but allows the rest of the /16', () => {
     expect(alertHintIsSafe('Show activity from 10.220.152.7')).toBe(false);
     expect(alertHintIsSafe('Show activity from 10.220.65.7')).toBe(true);
