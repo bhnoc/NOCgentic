@@ -1257,6 +1257,7 @@
   // ========== View switching (chat | threat hunt) ==========
   let currentView = 'chat';
   let activeHuntId = null;
+  let activeAppId = null;
 
   function huntApps() {
     return window.THREAT_HUNT_APPS || [];
@@ -1268,6 +1269,7 @@
     const apps = huntApps();
     if (!host) return;
     activeHuntId = null;
+    activeAppId = null;
 
     // Legacy: only one MUD hunt and no external apps → mount directly.
     if (hunts.length === 1 && apps.length === 0 && window.ThreatHunt) {
@@ -1282,57 +1284,22 @@
       '<div class="hunt-briefing hunt-briefing-wide">' +
         '<div class="hunt-panel hunt-briefing-card hunt-picker-card">' +
           '<div class="hunt-panel-head hunt-picker-head">' +
-            '<span class="hunt-picker-head-title">' +
-              '<span>Threat Hunt</span>' +
-              (appCount
-                ? '<span class="gemini-ent-chip gemini-ent-chip-lg" title="Gemini Enterprise apps">' +
-                    '<span class="gemini-ent-spark" aria-hidden="true"></span>' +
-                    '<span class="gemini-ent-chip-text">Gemini Enterprise</span>' +
-                  '</span>'
-                : '') +
-            '</span>' +
+            '<span class="hunt-picker-head-title"><span>Threat Hunt</span></span>' +
             '<span class="hunt-meta">' + mudCount + ' MUD' + (mudCount === 1 ? '' : 's') +
               (appCount ? ' · ' + appCount + ' app' + (appCount === 1 ? '' : 's') : '') +
             '</span>' +
           '</div>' +
           '<div class="hunt-panel-body">' +
             '<div class="hunt-briefing-title">Select a hunt</div>' +
-            '<p class="hunt-briefing-text">Click-only MUD drills end in one BH close code. Gemini Enterprise apps open a guided intelligence console alongside those rooms.</p>' +
-            (appCount ? '<div class="hunt-app-rail" id="hunt-app-rail"></div>' : '') +
-            '<div class="hunt-separator"></div>' +
+            '<p class="hunt-briefing-text">Click-only MUD drills end in one BH close code.</p>' +
             '<div class="hunt-picker-section-label">MUD scenarios</div>' +
             '<div class="hunt-picker-list" id="hunt-picker-list"></div>' +
+            (appCount ? '<div class="hunt-separator"></div>' : '') +
+            (appCount ? '<div class="hunt-picker-section-label">Apps</div>' : '') +
+            (appCount ? '<div class="hunt-picker-list" id="hunt-app-list"></div>' : '') +
           '</div>' +
         '</div>' +
       '</div>';
-
-    const rail = host.querySelector('#hunt-app-rail');
-    if (rail) {
-      apps.forEach((app) => {
-        const card = document.createElement('a');
-        card.className = 'hunt-app-card';
-        card.href = String(app.url || '');
-        card.target = '_blank';
-        card.rel = 'noopener noreferrer';
-        card.innerHTML =
-          '<div class="hunt-app-card-glow" aria-hidden="true"></div>' +
-          '<div class="hunt-app-card-top">' +
-            '<span class="gemini-ent-chip gemini-ent-chip-lg">' +
-              '<span class="gemini-ent-spark" aria-hidden="true"></span>' +
-              '<span class="gemini-ent-chip-text"></span>' +
-            '</span>' +
-            '<span class="hunt-app-card-launch">Open ↗</span>' +
-          '</div>' +
-          '<div class="hunt-app-card-title"></div>' +
-          '<div class="hunt-app-card-sub"></div>' +
-          '<p class="hunt-app-card-blurb"></p>';
-        card.querySelector('.gemini-ent-chip-text').textContent = app.badge || 'Gemini Enterprise';
-        card.querySelector('.hunt-app-card-title').textContent = app.title;
-        card.querySelector('.hunt-app-card-sub').textContent = app.subtitle || '';
-        card.querySelector('.hunt-app-card-blurb').textContent = app.blurb || '';
-        rail.appendChild(card);
-      });
-    }
 
     const list = host.querySelector('#hunt-picker-list');
     if (list && window.ThreatHunt) {
@@ -1351,11 +1318,65 @@
         list.appendChild(btn);
       });
     }
+
+    const appList = host.querySelector('#hunt-app-list');
+    if (appList) {
+      apps.forEach((app) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'hunt-btn hunt-picker-item';
+        btn.innerHTML =
+          '<span class="hunt-picker-title"></span>' +
+          '<span class="hunt-hint hunt-picker-meta"></span>';
+        btn.querySelector('.hunt-picker-title').textContent = app.title;
+        btn.querySelector('.hunt-picker-meta').textContent = app.subtitle || '';
+        btn.addEventListener('click', () => mountHuntApp(app.id));
+        appList.appendChild(btn);
+      });
+    }
   }
 
   function leaveToHuntPicker() {
     activeHuntId = null;
+    activeAppId = null;
     renderHuntPicker();
+  }
+
+  // Kiosk-safe: mounted as an iframe inside our own SPA rather than a new tab
+  // or top-level navigation, so the hardware/OS back button on a kiosk browser
+  // lands back on the picker instead of leaving the app entirely.
+  function mountHuntApp(appId) {
+    const host = document.getElementById('hunt-view');
+    const apps = huntApps();
+    const app = apps.find((a) => a.id === appId) || apps[0];
+    if (!host || !app) return;
+    activeHuntId = null;
+    activeAppId = app.id;
+
+    host.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'hunt-app-frame-wrap';
+
+    const head = document.createElement('div');
+    head.className = 'hunt-panel-head hunt-app-frame-head';
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = app.title;
+    const backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.className = 'hunt-leave hunt-leave-head';
+    backBtn.textContent = '← All hunts';
+    backBtn.addEventListener('click', leaveToHuntPicker);
+    head.appendChild(titleSpan);
+    head.appendChild(backBtn);
+
+    const frame = document.createElement('iframe');
+    frame.className = 'hunt-app-frame';
+    frame.src = String(app.url || '');
+    frame.title = app.title || 'Threat hunt app';
+
+    wrap.appendChild(head);
+    wrap.appendChild(frame);
+    host.appendChild(wrap);
   }
 
   function mountHunt(huntId) {
@@ -1364,6 +1385,7 @@
     const hunt = hunts.find((h) => h.id === huntId) || hunts[0];
     if (!host || !hunt || !window.ThreatHunt) return;
     activeHuntId = hunt.id;
+    activeAppId = null;
     // Picker return is available on briefing, during play, and on the end dialog.
     const canLeave = hunts.length + huntApps().length >= 2;
     ThreatHunt.mount(host, hunt, handleHuntOutcome, {
@@ -1383,6 +1405,7 @@
 
     if (huntActive) {
       if (activeHuntId) mountHunt(activeHuntId);
+      else if (activeAppId) mountHuntApp(activeAppId);
       else renderHuntPicker();
     }
 
