@@ -144,6 +144,41 @@ def test_gather_context_empty_but_successful_inventory_is_no_tests_note(monkeypa
     assert "monitoring_available" not in ctx  # not a dead feed
 
 
+def test_fetch_alerts_returns_none_on_failure():
+    """REVERT-CHECK: fetch_alerts used to catch the error and return [], which
+    reads downstream as 'checked, zero active alerts' (false all-clear) instead
+    of 'the alert feed could not be queried'. None is the fix."""
+    result = asyncio.run(_te.fetch_alerts(_RaisingClient()))
+    assert result is None
+
+
+def test_fetch_alerts_empty_success_is_empty_list_not_none():
+    result = asyncio.run(_te.fetch_alerts(_OkClient({"alerts": []})))
+    assert result == []
+    assert result is not None
+
+
+def test_gather_context_failed_alerts_is_not_all_clear(monkeypatch):
+    """The alerts-fetch counterpart of the inventory ql-4 lock-in: tests are
+    healthy, but the alert feed itself failed (fetch_alerts -> None). Context
+    must set alerts_available=False, not silently report zero alerts as clean.
+    """
+    monkeypatch.setattr(_te, "TE_BEARER_TOKEN", "fake-token")
+
+    async def _empty_tests(client):
+        return []
+
+    async def _failed_alerts(client):
+        return None
+
+    monkeypatch.setattr(_te, "fetch_all_tests", _empty_tests)
+    monkeypatch.setattr(_te, "fetch_alerts", _failed_alerts)
+
+    ctx = asyncio.run(_te.gather_te_context("everything ok?"))
+    assert ctx["alerts_available"] is False
+    assert ctx["active_alert_count"] == 0
+
+
 def test_fetch_latest_results_none_handled(monkeypatch):
     """fetch returning nothing usable must not crash aggregation: a client that
     returns empty results yields {} rather than raising."""

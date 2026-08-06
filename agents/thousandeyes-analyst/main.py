@@ -171,18 +171,23 @@ def _cache_put(key: str, value: Any, client: Any = None) -> None:
             _te_cache.pop(k, None)
 
 
-async def fetch_alerts(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+async def fetch_alerts(client: httpx.AsyncClient) -> list[dict[str, Any]] | None:
+    """Returns the active-alerts list on success, or None if the fetch FAILED
+    (auth/5xx/network/schema). Callers MUST treat None as "couldn't check", not
+    zero alerts — collapsing it to [] reads as a false all-clear."""
     cached = _cache_get("alerts", client)
     if cached is not None:
         return cached
     try:
-        data = await te_get(client, "/alerts", params={"state": "active"})
+        # v7 filters on `active=true`, not `state=active` (the latter 400s:
+        # "Failed to convert 'state' with value: 'active'").
+        data = await te_get(client, "/alerts", params={"active": "true"})
         alerts = data.get("alerts") or data.get("items") or []
         _cache_put("alerts", alerts, client)
         return alerts
     except Exception as exc:
-        logger.warning("fetch_alerts failed: %s", exc)
-        return []
+        logger.warning("fetch_alerts failed (%s): %s", type(exc).__name__, exc)
+        return None
 
 
 async def fetch_all_tests(client: httpx.AsyncClient) -> list[dict[str, Any]] | None:
@@ -411,10 +416,13 @@ async def gather_te_context(query: str) -> dict[str, Any]:
                           description="Fetch test inventory + active alerts")
             set_tool_resource(te_span, server_address="api.thousandeyes.com",
                               peer_service="thousandeyes")
-            tests, alerts = await asyncio.gather(
+            tests, alerts_result = await asyncio.gather(
                 fetch_all_tests(client),
                 fetch_alerts(client),
             )
+
+        alerts_available = alerts_result is not None
+        alerts = alerts_result if alerts_available else []
 
         if tests is None:
             # Inventory fetch FAILED (auth/403/5xx/network): the monitoring feed
@@ -424,6 +432,7 @@ async def gather_te_context(query: str) -> dict[str, Any]:
                 "error": "test inventory fetch failed (monitoring feed unavailable)",
                 "monitoring_available": False,
                 "total_tests": 0,
+                "alerts_available": alerts_available,
                 "active_alert_count": len(alerts),
                 "active_alerts": alerts[:10],
             }
@@ -431,6 +440,7 @@ async def gather_te_context(query: str) -> dict[str, Any]:
         if not tests:
             return {
                 "total_tests": 0,
+                "alerts_available": alerts_available,
                 "active_alert_count": len(alerts),
                 "active_alerts": alerts[:10],
                 "note": "no tests configured",
@@ -478,6 +488,9 @@ async def gather_te_context(query: str) -> dict[str, Any]:
         # the answer never implies all-clear when it isn't.
         "unknown_count": len(unknown),
         "unmeasured_tests": [r["name"] for r in unknown[:15]],
+        # False when the alerts fetch itself failed — a confirmed zero and a
+        # failed check must not read the same to the LLM.
+        "alerts_available": alerts_available,
         "active_alert_count": len(alerts),
         "active_alerts": [
             {
@@ -508,6 +521,7 @@ SYSTEM_PROMPT = (
     "Use these fields and nothing else:\n"
     "  total_tests / green_count / yellow_count / red_count / unknown_count\n"
     "  active_alerts  (list with testName, ruleName, severity)\n"
+    "  alerts_available (whether the alert feed could be queried at all)\n"
     "  degraded_tests (list of tests with non-green status, with metrics)\n"
     "  healthy_sample (names of green tests you may cite to illustrate 'everything else is fine')\n"
     "  unmeasured_tests (names of tests whose latest results could NOT be fetched)\n\n"
@@ -517,6 +531,12 @@ SYSTEM_PROMPT = (
     "them as green or fold them into an 'all systems green' verdict. If unknown_count "
     "> 0, state it explicitly, e.g. 'N healthy, M could not be measured'. Treat "
     "'silence' as a gap to flag, not as health.\n\n"
+    "CRITICAL — ALERT FEED AVAILABILITY:\n"
+    "If alerts_available is false, the alert feed itself could not be queried — "
+    "active_alert_count of 0 in that case means 'unknown', NOT 'no active alerts'. "
+    "NEVER report 'no active alerts' or a clean bill of health on the alert feed when "
+    "alerts_available is false. Say the alert feed could not be checked instead, and "
+    "still report test health from total_tests/green_count/etc. normally.\n\n"
     "STYLE — FOLLOW EXACTLY:\n"
     "- Active voice. No hedging.\n"
     "- NEVER say 'ThousandEyes' or name any vendor. Say 'network monitoring', "
@@ -534,8 +554,9 @@ SYSTEM_PROMPT = (
     "## Evidence\n"
     "If any degraded_tests: one line per test with name + worst metric + target.\n"
     "If any active_alerts: one line per alert with testName + ruleName + severity.\n"
-    "If fully green: cite total_tests count + sample names from healthy_sample + "
-    "'no active alerts'.\n\n"
+    "If fully green: cite total_tests count + sample names from healthy_sample, then "
+    "'no active alerts' only if alerts_available is true, otherwise 'alert feed could "
+    "not be checked'.\n\n"
     "## Next Steps\n"
     "Numbered imperatives scoped to the actual degraded tests, e.g.:\n"
     "  'Escalate the GCP Asia CDN path — 240 ms vs 80 ms baseline'\n"
