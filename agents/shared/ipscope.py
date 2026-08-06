@@ -199,11 +199,18 @@ def row_in_scope(row: dict[str, Any]) -> bool:
 
     Both directions must qualify: a flow from an out-of-scope private host is
     not ours to show even when the peer is a legitimate public address.
+
+    Checks IPv6 candidates as well as IPv4: this previously only ran
+    _IPV4_CANDIDATE, so an out-of-scope IPv6 literal (link-local, ULA, or an
+    IPv6-mapped IPv4 tail like ::ffff:10.220.12.1) in a returned row passed
+    through unfiltered even though redact_text()/is_in_scope() already handle
+    IPv6 correctly — there was just no candidate regex feeding this function
+    one, same shape gap _IPV6_CANDIDATE was added for redact_text.
     """
     for value in row.values():
         if not isinstance(value, str) or not value:
             continue
-        for candidate in _IPV4_CANDIDATE.findall(value):
+        for candidate in (*_IPV4_CANDIDATE.findall(value), *_IPV6_CANDIDATE.findall(value)):
             try:
                 ipaddress.ip_address(candidate)
             except ValueError:

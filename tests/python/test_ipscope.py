@@ -234,6 +234,28 @@ class TestRowFilterResistsAliasing:
         assert row_in_scope({"count": 4213, "ratio": 0.5, "flag": None})
 
 
+class TestRowFilterCatchesIPv6:
+    """CodeMender 42d3ce00: row_in_scope() only ever ran _IPV4_CANDIDATE, so an
+    out-of-scope IPv6 literal (or an IPv6-mapped IPv4 tail) returned in a row
+    passed the egress filter unfiltered even though is_in_scope()/redact_text()
+    already handle IPv6 correctly.
+
+    REVERT-CHECK: reverting row_in_scope to scan only _IPV4_CANDIDATE makes
+    every case below FAIL (row_in_scope wrongly returns True)."""
+
+    def test_ipv6_mapped_ipv4_restricted_is_caught(self):
+        assert not row_in_scope({"id_orig_h": "::ffff:10.220.12.5"})
+
+    def test_pure_ipv6_link_local_is_caught(self):
+        assert not row_in_scope({"id_orig_h": "fe80::1234:5678"})
+
+    def test_pure_ipv6_unique_local_is_caught(self):
+        assert not row_in_scope({"id_orig_h": "fc00::1234:5678:9abc"})
+
+    def test_public_ipv6_row_still_allowed(self):
+        assert row_in_scope({"id_orig_h": "2001:4860:4860::8888"})
+
+
 class TestPrefixScope:
     def test_fully_out_of_scope_prefixes(self):
         assert prefix_is_out_of_scope("192.168.1")
