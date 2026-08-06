@@ -64,3 +64,46 @@ class TestStripSchemaNoise:
             "Search alerts for high-severity events this week",
         ]
         assert orch_mod._strip_schema_noise(hints) == hints
+
+
+class TestStripZoneAssetNoise:
+    """Live-caught bug: hints surfaced raw filter syntax naming internal
+    segments, e.g. "search src_ip=Switch-AP_Mgmt dst_ip=Tool_Mgmt over last 7d"
+    and "stat sum(bytes) by src_ip, dst_ip where zone=AI_Cyber_Bootcamp".
+    _ZONE_RE only substitutes the literal words "Registration"/"Tools" in
+    place, so it never saw these — they're LLM-paraphrased/invented
+    underscore-joined identifiers in the same naming shape as the real
+    restricted segment "Tool Mgmt" (docs/DATA-SCHEMA.md), not that literal
+    word. _strip_zone_asset_noise drops the whole hint instead, matching
+    _strip_vendor_names / _strip_schema_noise's reject-the-candidate pattern.
+    """
+
+    def test_drops_the_live_caught_hints(self, orch_mod):
+        hints = [
+            "search src_ip=Switch-AP_Mgmt dst_ip=Tool_Mgmt over last 7d",
+            "stat sum(bytes) by src_ip, dst_ip where zone=AI_Cyber_Bootcamp",
+            "Show all connections for this IP in the last 24h",
+        ]
+        assert orch_mod._strip_zone_asset_noise(hints) == [
+            "Show all connections for this IP in the last 24h"
+        ]
+
+    def test_drops_raw_key_equals_value_filter_syntax(self, orch_mod):
+        hints = ["Investigate host=10.220.5.12 further"]
+        assert orch_mod._strip_zone_asset_noise(hints) == []
+
+    def test_drops_underscore_joined_identifiers_regardless_of_content(self, orch_mod):
+        """Not name-specific: any zone/asset-shaped token is dropped, so a
+        label the LLM invents (not just ones we've already seen) is caught."""
+        hints = ["Check the Some_Other_Segment for lateral movement"]
+        assert orch_mod._strip_zone_asset_noise(hints) == []
+
+    def test_legitimate_domain_hints_survive_untouched(self, orch_mod):
+        hints = [
+            "Show all connections for this IP in the last 24h",
+            "Query DNS logs for suspicious domains in the last 24h",
+            "Find top talkers by bytes transferred today",
+            "Check SSL/TLS connections to unusual server names",
+            "Search alerts for high-severity events this week",
+        ]
+        assert orch_mod._strip_zone_asset_noise(hints) == hints

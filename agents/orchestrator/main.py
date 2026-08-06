@@ -808,6 +808,32 @@ def _strip_schema_noise(hints: list[str]) -> list[str]:
     return [h for h in hints if not _SCHEMA_NOISE_RE.search(h)]
 
 
+# Post-filter: drop hints shaped like raw query/filter syntax rather than the
+# natural-language follow-up HINTS_SYSTEM_PROMPT asks for. Caught live:
+# "search src_ip=Switch-AP_Mgmt dst_ip=Tool_Mgmt over last 7d" and
+# "stat sum(bytes) by src_ip, dst_ip where zone=AI_Cyber_Bootcamp" — the LLM
+# paraphrased real segment names from the underlying data (docs/DATA-SCHEMA.md
+# "Tool Mgmt") into hostname/zone-shaped identifiers that _ZONE_RE's literal
+# "Registration|Tools" match never sees, because it only substitutes those two
+# exact words in place rather than rejecting the hint outright. Two signals,
+# either one enough to drop the whole hint (matches _strip_vendor_names /
+# _strip_schema_noise: reject the candidate, don't try to patch it):
+#   1. identifier=value syntax (field=value, key: value is not natural language)
+#   2. underscore-joined multi-word tokens (Tool_Mgmt, AI_Cyber_Bootcamp) — the
+#      asset/zone/hostname naming convention itself, not any specific name, so
+#      it also covers zone-shaped labels the LLM invents rather than copies.
+_QUERY_SYNTAX_RE = re.compile(r"\b\w+\s*=\s*[\w.\-]+")
+_UNDERSCORE_IDENTIFIER_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*\b")
+
+
+def _strip_zone_asset_noise(hints: list[str]) -> list[str]:
+    """Remove hints containing raw filter syntax or internal-identifier-shaped tokens."""
+    return [
+        h for h in hints
+        if not _QUERY_SYNTAX_RE.search(h) and not _UNDERSCORE_IDENTIFIER_RE.search(h)
+    ]
+
+
 async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
     """Generate 5 follow-up investigation hints based on the query and answer."""
     try:
@@ -844,7 +870,8 @@ async def generate_hints(query: str, answer: str, agent_used: str) -> list[str]:
         hints = _parse_hints(raw)
         hints = _strip_vendor_names(hints)
         hints = _strip_schema_noise(hints)
-        logger.info("Parsed %d hints (vendor/schema-filtered): %s", len(hints), hints[:5])
+        hints = _strip_zone_asset_noise(hints)
+        logger.info("Parsed %d hints (vendor/schema/zone-filtered): %s", len(hints), hints[:5])
         if hints:
             return [h[:100] for h in hints[:5]]
         logger.warning("No hints survived after filtering: %s", raw[:300])
