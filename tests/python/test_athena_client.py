@@ -134,6 +134,40 @@ def test_sanitize_sql_strips_single_trailing_semicolon():
     assert ac.sanitize_sql("SELECT 1 FROM conn;") == "SELECT 1 FROM conn"
 
 
+def test_sanitize_sql_rejects_real_out_of_scope_ip():
+    """The scope check itself must still work — only the two placeholder
+    addresses are exempt, not IP literals in general."""
+    with pytest.raises(ValueError, match="Out-of-scope IP"):
+        ac.sanitize_sql("SELECT 1 FROM conn WHERE id_orig_h = '10.0.1.63'")
+
+
+class TestUnspecifiedAddressPlaceholdersAreScopeExempt:
+    """Regression (QA sweep 11 live-caught): athena-hunter's SQL_GEN_PROMPT was
+    fixed to exclude the '::' / '0.0.0.0' unspecified-address placeholders from
+    fan-out/relay host rankings via `NOT IN ('::', '0.0.0.0')`. Deployed, this
+    made EVERY fan-out query fail 100% of the time: sanitize_sql's scope check
+    doesn't distinguish "referencing an out-of-scope host" from "excluding a
+    non-host placeholder" and rejected the literal outright. Neither address is
+    a real host (Zeek emits them for unset/unknown endpoints), so excluding
+    them carries none of the leak risk the scope check exists to prevent."""
+
+    def test_ipv6_unspecified_address_exclusion_is_allowed(self):
+        sql = (
+            "SELECT id_orig_h, COUNT(DISTINCT id_resp_h) AS unique_responders "
+            "FROM conn WHERE dt = '2026-08-06' AND id_orig_h NOT IN ('::', '0.0.0.0') "
+            "AND id_resp_h NOT IN ('::', '0.0.0.0') GROUP BY id_orig_h LIMIT 20"
+        )
+        assert ac.sanitize_sql(sql) == sql
+
+    def test_ipv4_unspecified_address_exclusion_is_allowed(self):
+        sql = "SELECT 1 FROM conn WHERE id_orig_h != '0.0.0.0'"
+        assert ac.sanitize_sql(sql) == sql
+
+    def test_bare_ipv6_unspecified_literal_is_allowed(self):
+        sql = "SELECT 1 FROM conn WHERE id_orig_h = '::'"
+        assert ac.sanitize_sql(sql) == sql
+
+
 # ---------------------------------------------------------------------------
 # date_partitions; no over-generation of a trailing day (sweep-3 sh-106)
 # ---------------------------------------------------------------------------

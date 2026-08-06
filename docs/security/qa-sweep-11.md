@@ -136,6 +136,62 @@ the wired zones by alert volume", and a "correlate traffic spikes" hint
 chain) against a deployed copy of this branch before considering these
 closed.
 
+## Post-deploy live verification: one fix regressed, hotfixed same day
+
+Deployed as release 1.4 - PaleAnchor and re-verified all five fixes against
+the live app. Four held or partially held; one had shipped a real
+regression.
+
+**The '::'/'0.0.0.0' fan-out fix broke every fan-out query 100% of the time
+(confirmed, hotfixed).** The fix told the model to write
+`id_orig_h NOT IN ('::', '0.0.0.0')` to exclude the non-attributable
+placeholder addresses from host rankings. Live, every fan-out query
+("which host talks to the most other hosts" and rephrasings) started
+returning "The lookup for this query could not be completed" with
+`errors: [{"error": "Out-of-scope IP in query: 0.0.0.0"}]`. Reproduced by
+direct code inspection, not just live inference:
+`agents/shared/athena_client.py::sanitize_sql()`'s scope-enforcement layer
+checks every IP literal in generated SQL against the conference
+scope/global-routability allowlist and rejects anything that fails, with no
+carve-out for a placeholder address that was never a real host in the first
+place. The fix's own worked example was unexecutable SQL under the
+pre-existing scope control — this bug traded "ranks a placeholder as the top
+host" for "the whole query class always fails," worse than the original
+finding. It also bled into an unrelated query (S11LIVE-03,
+"what hosts have never triggered an alert") when the model pattern-matched
+the nearby prompt example and added the same exclusion there too.
+
+Fixed at the scope-enforcement layer: `sanitize_sql` now exempts `'::'` and
+`'0.0.0.0'` specifically, since excluding them from a query carries none of
+the leak risk the scope check exists to prevent (they are never real hosts,
+so referencing them, in either direction, cannot disclose an out-of-scope
+address). Added a real-out-of-scope-IP-is-still-rejected test alongside the
+two placeholder-exemption tests so the scope control's actual purpose stays
+verified, not just weakened. All 4 new tests confirmed to fail against the
+exact pre-fix code with the exact live-observed error message.
+
+**A smaller, lower-severity gap surfaced alongside the clock-time fix
+(observed, not fixed this sweep).** "Show me activity between 3am and 4am"
+now generates correct epoch bounds (verified: 10:00-11:00 UTC on the deploy
+date is exactly 3am-4am in EVENT_TZ/America-Los_Angeles-PDT) — the core fix
+holds. But the model's own answer text still said "the queried window...
+misses the target period," a false self-report given the window shown was
+the correct localized one. Confidence was already capped low (0.35) by
+sweep 10's FF10-005 fix, so this didn't produce a silently-wrong high-
+confidence answer, but it's a real, if lower-severity, gap: the model
+doesn't reconcile "window shown in UTC" against "window requested in local
+time" and can manufacture a false miss-claim even when the underlying epoch
+math is right. This is the same self-admitted-scope-miss recognition
+problem already flagged as deferred below, approached from the opposite
+direction (false negative rather than false positive) — left deferred
+rather than rushing an unverified synthesis-prompt change.
+
+The zone-sum and alert-triage correlation fixes were not exercised by this
+round's specific re-verification queries (they routed to different agents
+than the ones carrying the fix, or the underlying data didn't reproduce the
+exact collision/zero-flow scenario) — still recommend a follow-up
+verification pass per the original recommendation below.
+
 ## Deferred / not fixed this sweep
 
 - The related-but-out-of-scope gap flagged during Part 1's FF10-005

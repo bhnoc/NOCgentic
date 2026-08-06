@@ -197,6 +197,16 @@ def sanitize_sql(sql: str) -> str:
             ipaddress.ip_address(literal)
         except ValueError:
             continue
+        # '::' and '0.0.0.0' are the IPv6/IPv4 unspecified-address placeholders
+        # Zeek emits for an unset/unknown endpoint (failed connections, some
+        # ICMP/UDP edge cases) — never a real host, so they carry no scope risk
+        # either named directly or (the common case) EXCLUDED via NOT IN to keep
+        # them out of host-ranking results. A live bug rejected the entire query
+        # whenever the model wrote NOT IN ('::', '0.0.0.0') to filter them out,
+        # because this scope check does not distinguish "referencing an
+        # out-of-scope host" from "excluding a non-host placeholder."
+        if literal in ("::", "0.0.0.0"):
+            continue
         if not ipscope.is_in_scope(literal):
             raise ValueError(f"Out-of-scope IP in query: {literal}")
 
