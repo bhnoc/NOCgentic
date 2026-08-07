@@ -1496,6 +1496,40 @@ _lane_store: dict[str, dict[str, Any]] = {}
 # leak jobStore's TTL sweep exists to prevent on the web-server side.
 _LANE_STORE_MAX = 512
 
+# job_id -> owning session (bh_sid). Mirrors packages/web-server/src/api/chat.ts's
+# jobOwners: /api/v1/chat/:id already refuses to serve a job to anyone but its
+# creator, but /hints/{job_id} and /lanes/{job_id} did not carry the same check —
+# a caller who could reach this port (compose-internal only, but defense in depth
+# matters once anything else on that network is compromised or SSRF'd into it)
+# could read any in-flight job's full answer/hints by guessing or observing a
+# job_id. Same lenient rule as the web-server: a job created with no session
+# (cookie-less client, e.g. curl) has no recorded owner and stays readable by
+# anyone, since there is no caller to bind it to.
+_job_owners: dict[str, str] = {}
+_JOB_OWNERS_MAX = 4096
+
+
+def _record_job_owner(job_id: str, session_id: str | None) -> None:
+    if not session_id:
+        return
+    if job_id not in _job_owners and len(_job_owners) >= _JOB_OWNERS_MAX:
+        _job_owners.pop(next(iter(_job_owners)), None)
+    _job_owners[job_id] = session_id
+
+
+def _job_owned_by(job_id: str, session_id: str | None) -> bool:
+    """True if `session_id` may read this job's hints/lanes.
+
+    Same rule as web-server's jobOwnedByRequester: a job with no recorded
+    owner (created without a session cookie) is treated as unowned and
+    readable by anyone, so cookie-less clients (curl, health checks) keep
+    working. A job WITH a recorded owner requires an exact match.
+    """
+    owner = _job_owners.get(job_id)
+    if not owner:
+        return True
+    return session_id == owner
+
 
 def _lane_store_put(job_id: str, payload: dict[str, Any]) -> None:
     if job_id not in _lane_store and len(_lane_store) >= _LANE_STORE_MAX:
@@ -2034,6 +2068,7 @@ async def handle_query(req: QueryRequest) -> QueryResponse:
         span_ctx = span.get_span_context()
         trace_id_hex = format(span_ctx.trace_id, "032x") if span_ctx and span_ctx.trace_id else None
         record_trace_session(trace_id_hex, session_id)
+        _record_job_owner(req.job_id, session_id)
 
         # 0a. Manifold quarantine — before classification and before the
         # restricted filter, so a contained session never reaches a specialist
@@ -2410,8 +2445,18 @@ async def _generate_hints_bg(job_id: str, query: str, answer: str, agent_used: s
 
 
 @app.get("/hints/{job_id}")
-async def get_hints(job_id: str) -> dict[str, Any]:
-    """Poll for async hints. Returns hints if ready, or status=pending."""
+async def get_hints(
+    job_id: str, x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
+) -> dict[str, Any]:
+    """Poll for async hints. Returns hints if ready, or status=pending.
+
+    A foreign job_id (recorded owner, requester doesn't match) reports
+    status=pending rather than 404/403 — same shape as a job whose hints
+    genuinely haven't landed yet, so the response can't be used to fingerprint
+    "this job_id exists but isn't yours" versus "still generating".
+    """
+    if not _job_owned_by(job_id, x_session_id):
+        return {"status": "pending", "hints": []}
     hints = _hints_cache.get(job_id)
     if hints is not None:
         return {"status": "ready", "hints": hints}
@@ -2419,7 +2464,9 @@ async def get_hints(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/lanes/{job_id}")
-async def get_lanes(job_id: str) -> dict[str, Any]:
+async def get_lanes(
+    job_id: str, x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
+) -> dict[str, Any]:
     """Poll for the losing lane's answer (feeds the UI's lane swap control).
 
     status "racing" means at least one lane is still in flight and the client
@@ -2427,7 +2474,14 @@ async def get_lanes(job_id: str) -> dict[str, Any]:
     that errored simply never appears). An unknown job_id returns done+empty
     rather than 404: single-lane boxes never populate this store at all, and a
     404 there would show up in the UI as a broken swap instead of no swap.
+
+    A FOREIGN job_id (recorded owner, requester doesn't match) also gets
+    done+empty rather than a 404/403 — for the same reason: the UI must not be
+    able to tell "not yours" apart from "no lane data for this box" by response
+    shape.
     """
+    if not _job_owned_by(job_id, x_session_id):
+        return {"status": "done", "lanes": []}
     entry = _lane_store.get(job_id)
     if entry is None:
         return {"status": "done", "lanes": []}

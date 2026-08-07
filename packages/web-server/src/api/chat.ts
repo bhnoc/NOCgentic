@@ -176,14 +176,14 @@ async function dispatchToOrchestrator(jobId: string, query: string, client?: Cli
 
     // Poll for async hints if none came with the response
     if (!job.hints || job.hints.length === 0) {
-      void pollForHints(jobId);
+      void pollForHints(jobId, client?.session_id);
     }
 
     // The losing lane normally lands AFTER the winner was returned, so fetch it
     // separately — same fire-and-forget shape as hints. Only when the orchestrator
     // says a lane is still in flight; a single-lane box never sets this.
     if (job.lanesRacing) {
-      void pollForLanes(jobId);
+      void pollForLanes(jobId, 2000, client?.session_id);
     }
   } catch (err) {
     job.status = 'error';
@@ -224,11 +224,12 @@ export function toLaneResult(l: OrchestratorLane): LaneResult {
  * something to swap to. Bounded at 60s: past that the slow lane is not worth
  * waiting on, and the UI already has a usable answer from the winner.
  */
-export async function pollForLanes(jobId: string, intervalMs = 2000): Promise<void> {
+export async function pollForLanes(jobId: string, intervalMs = 2000, sessionId?: string): Promise<void> {
   for (let i = 0; i < 30; i++) {
     await new Promise(r => setTimeout(r, intervalMs));
     try {
       const resp = await fetch(`${ORCHESTRATOR_URL}/lanes/${jobId}`, {
+        headers: sessionId ? { 'X-Session-Id': sessionId } : undefined,
         signal: AbortSignal.timeout(5000),
       });
       if (!resp.ok) continue;
@@ -256,11 +257,12 @@ export async function pollForLanes(jobId: string, intervalMs = 2000): Promise<vo
   }
 }
 
-async function pollForHints(jobId: string): Promise<void> {
+async function pollForHints(jobId: string, sessionId?: string): Promise<void> {
   for (let i = 0; i < 10; i++) {
     await new Promise(r => setTimeout(r, 2000));
     try {
       const resp = await fetch(`${ORCHESTRATOR_URL}/hints/${jobId}`, {
+        headers: sessionId ? { 'X-Session-Id': sessionId } : undefined,
         signal: AbortSignal.timeout(5000),
       });
       if (!resp.ok) continue;
