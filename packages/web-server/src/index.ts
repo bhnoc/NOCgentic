@@ -8,6 +8,7 @@ import path from 'path';
 import { registerChatRoutes } from './api/chat';
 import { registerManifoldRoutes } from './api/manifold';
 import { registerReportIssueRoutes } from './api/report-issue';
+import { registerCatalogRoutes } from './api/catalog';
 import { alertCache } from './services/alertCache';
 import { pickStarterHints } from './services/starterHints';
 import {
@@ -111,6 +112,10 @@ async function main() {
   // Report-issue: screenshot + note from the chat/hunt UI, proxied to the
   // orchestrator for an S3 upload under its own prefix (never the trace archive).
   registerReportIssueRoutes(server);
+
+  // Threat hunting catalog (threathunt-catalog/): read-only reference for the
+  // Playbooks tab and the alert popup. Never forwarded to an agent or model.
+  registerCatalogRoutes(server);
 
   // WebSocket endpoint for real-time updates (server pushes the shared alert feed).
   // @fastify/websocket v11 (required by fastify 5) passes the WebSocket DIRECTLY

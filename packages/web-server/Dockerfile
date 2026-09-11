@@ -18,6 +18,9 @@ RUN npm run build --workspace=packages/shared
 
 # Copy web-server source and build
 COPY packages/web-server/ ./packages/web-server/
+# Threat hunting catalog, read at runtime by services/huntCatalog.ts
+# (resolved relative to dist/, so it must sit at /app/threathunt-catalog).
+COPY threathunt-catalog/ ./threathunt-catalog/
 RUN npm run build --workspace=packages/web-server
 
 EXPOSE 3000

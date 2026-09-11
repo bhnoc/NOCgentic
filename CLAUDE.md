@@ -62,7 +62,9 @@ NOCgentic/
 │
 ├── packages/
 │   ├── shared/                    # @bhnoc/shared — Zod types (ChatQuery, AgentResponse, Alert)
-│   └── web-server/                # Fastify BFF + static UI (index.html, app.css, app.js, alertHints.js)
+│   └── web-server/                # Fastify BFF + static UI (index.html, app.css, app.js, alertHints.js, huntCatalog.js)
+│
+├── threathunt-catalog/            # Hunt playbooks/skills (APE-743, reviewed APE-750) — Playbooks tab; see docs/hunt-catalog.md
 │
 ├── agents/
 │   ├── orchestrator/              # :8001 — classify, guardrails, route, output sanitiser
@@ -331,6 +333,7 @@ GET    /api/v1/chat/:id          # Poll job status / result
 GET    /api/v1/alerts/recent     # Alert sidebar feed
 GET    /api/v1/alerts/status     # Alert cache / kill-switch status
 GET    /api/v1/config            # Public UI config (event label; starter-hint draw)
+GET    /api/v1/catalog           # Hunt catalog index (+ /search, /match, /:id) — Playbooks tab
 GET    /health                   # Health check
 GET    /ws                       # WebSocket (alerts + job_update)
 ```
@@ -371,6 +374,16 @@ a hostile-looking alert yields fewer chips rather than chips that answer with a
 cover. The alert *description* is never pasted into a chip for the same reason:
 it is vendor prose. Covered by `test/alertHints.test.ts` (hint text) and
 `tests/ui/alert-popup.mjs` (the popup itself, needs Chrome).
+
+`/api/v1/catalog` serves `threathunt-catalog/` to the **Playbooks** tab and
+the alert popup's Playbooks row. It is reference material for a person and is
+**never forwarded to an agent or model** — the APE-750 review cleared the files
+for distribution, not for a model's context, and this feature does not cross
+that line. Detection output links to playbooks through one shared file,
+`threathunt-catalog/finding-playbook-map.json`, read by both the web-server and
+zeek-detector (its `playbooks` field). Each playbook's "Hunt this live" question
+lives in that map and is guardrail-checked in `test/huntCatalog.test.ts` like
+the starter pool. See [`docs/hunt-catalog.md`](docs/hunt-catalog.md).
 
 Orchestrator (internal): `POST /query`, `GET /hints/:id`, `GET /lanes/:id`,
 `GET /admin/killswitch`, `GET|DELETE /admin/cache`, `GET|POST /admin/lanemode`,
