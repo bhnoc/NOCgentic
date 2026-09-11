@@ -188,6 +188,35 @@ http {
             proxy_set_header Connection "upgrade";
         }
 
+        # Zeek AI-detection pipeline — analyst access (APE-786).
+        # Two-layer gate: Layer A (nginx) IP allowlist + Layer B (service) bearer token.
+        # Nginx injects the stored token so analysts authenticate by source IP only.
+        # Enable the zeek compose profile (COMPOSE_PROFILES=zeek) and set
+        # ZEEK_DETECTOR_API_TOKEN in .env.s3 before first use.
+        location /zeek/ {
+            allow 136.59.5.6;     # James
+            allow 208.93.179.62;  # Spicer
+            allow 136.38.201.241; # Spicer2
+            allow 69.8.253.0/24;  # Black Hat USA
+            allow 10.20.0.0/16;   # VPC
+            deny all;
+
+            set $zeek_upstream "zeek-detector";
+            rewrite ^/zeek/(.*)$ /$1 break;
+            proxy_pass http://$zeek_upstream:8007;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /zeek;
+            proxy_set_header Authorization "Bearer __ZEEK_DETECTOR_API_TOKEN__";
+
+            # Log uploads can be large; the service enforces ZEEK_MAX_UPLOAD_BYTES
+            # (default 50 MB) as a hard cap, so this just needs to stay above it.
+            client_max_body_size 60m;
+        }
+
         # Default: serve web UI
         location / {
             set $web_upstream "web-server";
