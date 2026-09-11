@@ -18,8 +18,11 @@ if [ ! -x "$PYVENV/bin/python" ]; then
   echo "    building test venv"
   python3 -m venv "$PYVENV"
   "$PYVENV/bin/python" -m pip install --quiet --upgrade pip
-  "$PYVENV/bin/python" -m pip install --quiet -r tests/python/requirements-test.txt
 fi
+# Always sync deps: the self-hosted runner keeps this venv across checkouts, so a
+# requirement added in a PR was never installed and its tests failed on import.
+# pip is a no-op when everything is already satisfied.
+"$PYVENV/bin/python" -m pip install --quiet -r tests/python/requirements-test.txt
 "$PYVENV/bin/python" -m pytest tests/python -q
 
 echo ""

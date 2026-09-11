@@ -1,0 +1,56 @@
+#separator \x09
+#set_separator ,
+#empty_field (empty)
+#unset_field -
+#path conn
+#fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	version	cipher	curve	server_name	resumed	last_alert	next_protocol	established	cert_chain_fuids	client_cert_chain_fuids	subject	issuer
+#types	time	string	addr	port	addr	port	string	string	string	string	bool	string	string	bool	vector[string]	vector[string]	string	string
+1700000003.060181	CYaXRvj7uff0L	192.168.1.10	58164	93.184.216.34	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	example.com	F	-	h2	T	-	-	CN=example.com	CN=DigiCert Global Root
+1700000007.997371	CNwwmq6OLkTkx	192.168.1.10	53242	104.244.42.65	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	twitter.com	F	-	h2	T	-	-	CN=twitter.com	CN=DigiCert Global Root
+1700000021.673190	CpIqK3yn9Ffcg	192.168.1.10	59778	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000024.635310	C8VFgM0Fmxk75	192.168.1.10	51233	104.244.42.65	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	twitter.com	F	-	h2	T	-	-	CN=twitter.com	CN=DigiCert Global Root
+1700000032.156528	CkGL75UQSyPx3	192.168.1.10	65162	216.58.200.174	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	google.com	F	-	h2	T	-	-	CN=google.com	CN=DigiCert Global Root
+1700000033.958156	CWYlgAACTP9gy	192.168.1.10	56514	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000035.201534	CzD13kay5WrRT	192.168.1.10	57299	93.184.216.34	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	example.com	F	-	h2	T	-	-	CN=example.com	CN=DigiCert Global Root
+1700000039.790110	Cz6JJcfOJtqPt	192.168.1.10	54224	104.244.42.65	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	twitter.com	F	-	h2	T	-	-	CN=twitter.com	CN=DigiCert Global Root
+1700000040.716273	CRL9OaYsP6ihg	192.168.1.10	58982	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000043.133365	CIAae24HZKjht	192.168.1.10	58384	216.58.200.174	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	google.com	F	-	h2	T	-	-	CN=google.com	CN=DigiCert Global Root
+1700000050.010719	CX1YqWg21nYCs	192.168.1.10	60876	93.184.216.34	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	example.com	F	-	h2	T	-	-	CN=example.com	CN=DigiCert Global Root
+1700000054.770015	CgATtLFxJpRa5	192.168.1.10	56456	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000057.089523	CzZsnWLtBPFX7	192.168.1.10	61086	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000061.084503	CEpOaUVgAk7Gd	192.168.1.10	58451	93.184.216.34	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	example.com	F	-	h2	T	-	-	CN=example.com	CN=DigiCert Global Root
+1700000061.944344	CU0rWEoBSou3e	192.168.1.10	64109	93.184.216.34	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	example.com	F	-	h2	T	-	-	CN=example.com	CN=DigiCert Global Root
+1700000062.434834	C07zUHLnnBbuQ	192.168.1.10	54159	104.244.42.65	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	twitter.com	F	-	h2	T	-	-	CN=twitter.com	CN=DigiCert Global Root
+1700000063.988972	CpfbH9vOWOU6m	192.168.1.10	64467	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000064.050744	C6mKZpRsQXXJc	192.168.1.10	56968	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000066.333386	CBTq0Zf2pCLxb	192.168.1.10	51411	216.58.200.174	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	google.com	F	-	h2	T	-	-	CN=google.com	CN=DigiCert Global Root
+1700000072.043863	CXfnQsKDGAUuR	192.168.1.10	65128	151.101.1.140	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	fastly.net	F	-	h2	T	-	-	CN=fastly.net	CN=DigiCert Global Root
+1700000072.991764	ClaHr8IRh1E2J	192.168.1.10	56706	216.58.200.174	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	google.com	F	-	h2	T	-	-	CN=google.com	CN=DigiCert Global Root
+1700000074.892987	CWx4sKAJd7gVM	192.168.1.10	60316	104.244.42.65	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	twitter.com	F	-	h2	T	-	-	CN=twitter.com	CN=DigiCert Global Root
+1700000075.815197	ChnjqidXKZ5BD	192.168.1.10	54298	93.184.216.34	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	example.com	F	-	h2	T	-	-	CN=example.com	CN=DigiCert Global Root
+1700000076.902807	CDO4lKNEfvuP1	192.168.1.10	58072	104.244.42.65	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	twitter.com	F	-	h2	T	-	-	CN=twitter.com	CN=DigiCert Global Root
+1700000078.103361	CMEBdqir2EbNX	192.168.1.10	58596	104.244.42.65	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	twitter.com	F	-	h2	T	-	-	CN=twitter.com	CN=DigiCert Global Root
+1700000500.489215	Cx5F21rWz5FYr	192.168.1.20	49600	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000500.947449	CRYxPY8EcFK12	192.168.1.20	58935	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000501.390604	CceN59UAgN2BR	192.168.1.20	64124	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000501.912984	CCppaX3QjBvKN	192.168.1.20	50100	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000502.379259	CWoXnlpUVQigM	192.168.1.20	59051	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000502.896627	CUvh7i71S87Xw	192.168.1.20	50443	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000503.398744	COhcc9hoHyx6R	192.168.1.20	53201	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000503.890645	Cylh0CPNLbWph	192.168.1.20	62885	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000548.690362	CKaqhAhdBwKCn	192.168.1.20	55940	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000549.129941	C9GCLgR0OVSnB	192.168.1.20	59035	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000549.576601	CIKIuhvPU1S8L	192.168.1.20	56639	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000550.037453	ClRtva1JyiNbU	192.168.1.20	56123	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000550.590180	CqUhArQEPcyLa	192.168.1.20	56201	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000551.079244	CJJRzhbuXMZ5f	192.168.1.20	53648	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000551.611907	CgpkjVe6MCIJQ	192.168.1.20	52620	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000552.164848	CxJ7Tc4JlLF7B	192.168.1.20	59742	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000595.762541	CIxp07LjfP4tO	192.168.1.20	51915	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000596.174150	Ct6vVl9jsWFHT	192.168.1.20	61995	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000596.601533	CtYDZw69CrxG7	192.168.1.20	53446	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000597.089314	C25zyxxfntgSu	192.168.1.20	55695	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000597.597806	Cg4KbFpiAMozP	192.168.1.20	64633	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000598.108905	CivuNZQ8DliS6	192.168.1.20	51957	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000598.641554	C3x8EE5GXTeLY	192.168.1.20	55688	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root
+1700000599.149280	CPzFUjb0QBhoO	192.168.1.20	58778	104.18.6.192	443	TLSv13	TLS_AES_256_GCM_SHA384	x25519	api.openai.com	F	-	h2	T	-	-	CN=api.openai.com	CN=DigiCert Global Root

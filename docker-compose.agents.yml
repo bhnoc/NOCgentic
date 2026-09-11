@@ -306,6 +306,36 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  zeek-detector:
+    # Zeek AI-detection pipeline (APE-762). Opt-in: only starts when the "zeek"
+    # profile is enabled (COMPOSE_PROFILES=zeek in .env.s3, or --profile zeek), so
+    # ops/deploy.sh leaves it alone until someone turns it on. Nothing routes to
+    # it yet; analysts hit it from the compose network or an nginx location added
+    # deliberately, with ZEEK_DETECTOR_API_TOKEN set first.
+    build:
+      context: .
+      dockerfile: agents/zeek-detector/Dockerfile
+    profiles: ["zeek"]
+    expose:
+      - "8007"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ZEEK_CLASSIFIER_MODE=${ZEEK_CLASSIFIER_MODE:-auto}
+      - ZEEK_CLASSIFIER_MODEL=${ZEEK_CLASSIFIER_MODEL:-claude-opus-5}
+      - ZEEK_DB_PATH=/data/zeek-detector.db
+      - ZEEK_MAX_UPLOAD_BYTES=${ZEEK_MAX_UPLOAD_BYTES:-52428800}
+      - ZEEK_LLM_MAX_CLUSTERS=${ZEEK_LLM_MAX_CLUSTERS:-200}
+      - ZEEK_LLM_TIMEOUT=${ZEEK_LLM_TIMEOUT:-60}
+      - ZEEK_DETECTOR_API_TOKEN=${ZEEK_DETECTOR_API_TOKEN:-}
+    volumes:
+      - zeek-detector-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8007/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
   thousandeyes-analyst:
     build:
       context: .
@@ -452,3 +482,6 @@ services:
       - audit-monitor
       - web-server
     restart: unless-stopped
+
+volumes:
+  zeek-detector-data:
