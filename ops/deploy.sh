@@ -69,15 +69,21 @@ if [ -z "$ORIGIN_SECRET" ]; then
   echo "   whole shared CloudFront IP range — refusing to deploy an unprotected origin." >&2
   exit 1
 fi
-python3 - "$ORIGIN_SECRET" <<'PY'
+ZEEK_TOKEN="$(grep -E '^ZEEK_DETECTOR_API_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+if [ -z "$ZEEK_TOKEN" ]; then
+  echo "    note: ZEEK_DETECTOR_API_TOKEN not set in $ENV_FILE — /zeek/ location will return 401 until set" >&2
+fi
+python3 - "$ORIGIN_SECRET" "$ZEEK_TOKEN" <<'PY'
 import sys
-secret = sys.argv[1]
+secret, zeek_token = sys.argv[1], sys.argv[2]
 src = 'nginx/nginx-ssl.conf.template'
 dst = 'nginx/nginx-ssl.conf'
 body = open(src).read()
 if '__ORIGIN_SECRET__' not in body:
     sys.exit(f'{src} has no __ORIGIN_SECRET__ placeholder')
-open(dst, 'w').write(body.replace('__ORIGIN_SECRET__', secret))
+body = body.replace('__ORIGIN_SECRET__', secret)
+body = body.replace('__ZEEK_DETECTOR_API_TOKEN__', zeek_token)
+open(dst, 'w').write(body)
 print(f'    rendered {dst}')
 PY
 
