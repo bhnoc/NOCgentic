@@ -200,6 +200,14 @@
       triageAlert(alert, ev);
     });
 
+    el.body.querySelectorAll('.playbook-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const id = chip.getAttribute('data-playbook');
+        closeAlertModal();
+        if (id && window.HuntCatalog) { setView('catalog'); HuntCatalog.open(id); }
+      });
+    });
+
     if (el.close) el.close.focus();
   }
 
@@ -276,6 +284,17 @@
         ${hints.map(h => `<button type="button" class="hint-chip" data-hint="${escHtml(h)}">${escHtml(h)}</button>`).join('')}
       </div>`;
 
+    // Playbooks that hunt this kind of alert, keyed on the same topic label
+    // the hints use (never the vendor description). Empty until the catalog
+    // index has loaded, which is fewer chips rather than wrong ones.
+    const playbooks = (window.HuntCatalog && typeof HuntCatalog.buildAlertPlaybookLinks === 'function')
+      ? HuntCatalog.buildAlertPlaybookLinks(a) : [];
+    const playbookRow = playbooks.length === 0 ? '' : `
+      <div class="hunt-row playbook-row">
+        <span class="hints-label">Playbooks</span>
+        ${playbooks.map(p => `<button type="button" class="playbook-chip" data-playbook="${escHtml(p.id)}" title="${escHtml(p.title)}">${escHtml(p.id)} · ${escHtml(p.short)}</button>`).join('')}
+      </div>`;
+
     return `
       <div class="alert-detail-top">
         <span class="sev-badge ${sevClass}">${escHtml(sev)}</span>
@@ -284,6 +303,7 @@
       <div class="alert-detail-desc">${renderCardDescription(a.description || '')}</div>
       <dl class="alert-detail-grid">${grid}</dl>
       ${hintRow}
+      ${playbookRow}
       <button type="button" class="alert-triage-btn">Triage</button>
     `;
   }
@@ -1397,21 +1417,30 @@
     if (view === currentView) return;
     currentView = view;
     const huntActive = view === 'hunt';
-    document.querySelector('main').hidden = huntActive;
-    document.querySelector('.sidebar').hidden = huntActive;
+    const catalogActive = view === 'catalog';
+    const chatActive = !huntActive && !catalogActive;
+    const catalogView = document.getElementById('catalog-view');
+    const tabCatalog = document.getElementById('tab-catalog');
+    document.querySelector('main').hidden = !chatActive;
+    document.querySelector('.sidebar').hidden = !chatActive;
     document.getElementById('hunt-view').hidden = !huntActive;
-    document.getElementById('tab-chat').classList.toggle('active', !huntActive);
+    if (catalogView) catalogView.hidden = !catalogActive;
+    document.getElementById('tab-chat').classList.toggle('active', chatActive);
     document.getElementById('tab-hunt').classList.toggle('active', huntActive);
+    if (tabCatalog) tabCatalog.classList.toggle('active', catalogActive);
 
     if (huntActive) {
       if (activeHuntId) mountHunt(activeHuntId);
       else if (activeAppId) mountHuntApp(activeAppId);
       else renderHuntPicker();
     }
+    if (catalogActive && catalogView && window.HuntCatalog) HuntCatalog.mount(catalogView);
 
-    // Deep link: #threat-hunt opens the hunt directly. Use replaceState so
-    // tab flips don't pollute browser history.
-    const hash = huntActive ? '#threat-hunt' : '';
+    // Deep link: #threat-hunt opens the hunt directly, #playbooks[/PB-nn] the
+    // catalog. Use replaceState so tab flips don't pollute browser history.
+    let hash = '';
+    if (huntActive) hash = '#threat-hunt';
+    else if (catalogActive) hash = window.HuntCatalog ? HuntCatalog.hashFor() : '#playbooks';
     history.replaceState(null, '', location.pathname + location.search + hash);
   }
 
@@ -1422,7 +1451,16 @@
   }
 
   function applyHashView() {
-    setView(location.hash === '#threat-hunt' ? 'hunt' : 'chat');
+    const hash = location.hash;
+    if (hash === '#threat-hunt') { setView('hunt'); return; }
+    if (hash === '#playbooks' || hash.indexOf('#playbooks/') === 0) {
+      // Order matters: applyHash before mount so a deep link opens its entry
+      // on first render instead of the welcome pane.
+      if (window.HuntCatalog) HuntCatalog.applyHash(hash);
+      setView('catalog');
+      return;
+    }
+    setView('chat');
   }
 
   window.addEventListener('hashchange', applyHashView);
@@ -1486,6 +1524,10 @@
   // ========== Boot ==========
   connectWS();
   loadConfig();
+  // Warm the catalog index so an alert popup can show its Playbooks row
+  // before anyone has opened the tab. Failure is silent: the row just stays
+  // empty, and the tab reports the problem in its own pane.
+  if (window.HuntCatalog) HuntCatalog.ensureIndex().catch(() => {});
   applyHashView();
   loadInitialAlerts();
   applyMobileAlertMode();

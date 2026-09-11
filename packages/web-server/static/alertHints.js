@@ -247,5 +247,6 @@
   root.buildAlertHuntHints = buildAlertHuntHints;
   root.buildTriageQuery = buildTriageQuery;
   root.alertHintIsSafe = alertHintIsSafe;
+  root.alertTopic = alertTopic;
   root.MAX_HUNT_HINTS = MAX_HUNT_HINTS;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
