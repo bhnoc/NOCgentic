@@ -342,3 +342,35 @@ def test_compose_service_is_internal_and_opt_in():
     for var in ("ANTHROPIC_API_KEY", "ZEEK_CLASSIFIER_MODE", "ZEEK_CLASSIFIER_MODEL",
                 "ZEEK_DB_PATH", "ZEEK_DETECTOR_API_TOKEN", "ZEEK_MAX_UPLOAD_BYTES"):
         assert var in block, f"compose zeek-detector missing {var}"
+
+
+# ── Catalogue pattern accuracy (APE-787) ─────────────────────────────────────
+
+def test_google_ai_catalogue_matches_ai_endpoints_only():
+    sys.path.insert(0, str(_AGENT_DIR))
+    from pipeline.classifier import lookup_service_indicators  # noqa: PLC0415
+
+    # Should match: dedicated AI/ML API subdomains
+    for host in (
+        "generativelanguage.googleapis.com",
+        "us-central1-aiplatform.googleapis.com",
+        "ml.googleapis.com",
+        "us-east1-ml.googleapis.com",
+    ):
+        result = lookup_service_indicators(host, 443)
+        assert result["matched_service"] == "google_ai", (
+            f"{host!r} should match google_ai but got {result['matched_service']!r}"
+        )
+
+    # Should NOT match: shared / non-AI Google infrastructure (APE-787 regression)
+    for host in (
+        "storage.googleapis.com",
+        "maps.googleapis.com",
+        "www.googleapis.com",
+        "fonts.googleapis.com",
+        "oauth2.googleapis.com",
+    ):
+        result = lookup_service_indicators(host, 443)
+        assert result["matched_service"] != "google_ai", (
+            f"{host!r} must not match google_ai (over-broad pattern regressed)"
+        )
