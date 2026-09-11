@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "description": "Links detection output to hunt playbooks. One file, two readers: packages/web-server/src/services/huntCatalog.ts (alert feed + /api/v1/catalog/match) and agents/zeek-detector/pipeline/findings_generator.py (the `playbooks` field on every finding). Edit here, never in code. Order within a list is relevance order; readers dedupe and cap.",
+  "zeek_detector": {
+    "patterns": {
+      "agentic_loop": ["PB-01", "PB-13"],
+      "context_reset": ["PB-04", "PB-09"]
+    },
+    "behaviors": {
+      "agentic-orchestration": ["PB-01", "PB-06", "PB-13", "PB-04"],
+      "data-retrieval": ["PB-04", "PB-06"],
+      "unknown": ["PB-09"]
+    }
+  },
+  "alert_topics": {
+    "port scan": ["PB-12"],
+    "C2 beacon": ["PB-01", "PB-10"],
+    "suspicious DNS": ["PB-02"],
+    "Tor traffic": ["PB-08", "PB-01"],
+    "brute-force login": ["PB-05", "PB-03"],
+    "data exfiltration": ["PB-04"],
+    "malware": ["PB-07", "PB-15"],
+    "threat-intel match": ["PB-08", "PB-15"],
+    "lateral movement": ["PB-03"],
+    "SSH": ["PB-03", "PB-06"],
+    "RDP": ["PB-03", "PB-06"],
+    "phishing": ["PB-07"]
+  },
+  "hunt_queries": {
+    "PB-01": "Are any hosts connecting to the same external destination on a regular interval today?",
+    "PB-02": "Are there any signs of DNS tunneling or DGA-style domain lookups in the last 24 hours?",
+    "PB-03": "Is there any lateral movement activity like SMB or RDP between internal hosts today?",
+    "PB-04": "Which internal hosts uploaded the most data to external destinations in the last 24 hours?",
+    "PB-05": "Are there any suspicious Kerberos authentication alerts today?",
+    "PB-06": "Are there any TLS connections with unusual fingerprints or certificates in the last 24 hours?",
+    "PB-07": "Were any executable or suspicious files downloaded over HTTP in the last 24 hours?",
+    "PB-08": "Which external IPs with the most alerts today are known bad infrastructure?",
+    "PB-09": "Which hosts are behaving abnormally compared to the rest of the network today?",
+    "PB-10": "Are there any signs of Cobalt Strike or other C2 framework activity on the network?",
+    "PB-11": "Are there any ransomware indicators like mass SMB file writes today?",
+    "PB-12": "Which hosts are port scanning or sweeping the network right now?",
+    "PB-13": "Which rare or suspicious HTTP user agents were seen in the last 24 hours?",
+    "PB-14": "Are there any protocol anomalies or weird traffic alerts in the last 24 hours?",
+    "PB-15": "Has any host on the network contacted a known malicious IOC in the last 24 hours?",
+    "PB-16": "Are there any remote execution attempts like WMI or WinRM between internal hosts today?"
+  }
+}

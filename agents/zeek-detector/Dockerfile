@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY agents/zeek-detector/main.py .
 COPY agents/zeek-detector/storage.py .
 COPY agents/zeek-detector/pipeline/ ./pipeline/
+# Finding -> hunt playbook links (shared with the web-server; see the file).
+COPY threathunt-catalog/finding-playbook-map.json ./finding-playbook-map.json
 
 RUN mkdir -p /data
 VOLUME ["/data"]

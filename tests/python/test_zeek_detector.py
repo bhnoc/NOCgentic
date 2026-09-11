@@ -145,6 +145,34 @@ def test_explicit_parts_override_inference(client):
 
 # ── 2. Persistence ────────────────────────────────────────────────────────────
 
+def test_findings_link_to_hunt_playbooks(client):
+    """Every finding names the threathunt-catalog playbooks that hunt it,
+    from the one shared map file; the CSV carries the same column."""
+    body = _upload(client).json()
+    top = body["findings"][0]
+    assert top["playbooks"][:2] == ["PB-04", "PB-09"]  # context_reset first
+    assert "PB-01" in top["playbooks"]                   # agentic_loop / behaviour
+    assert len(top["playbooks"]) <= 4
+    catalog = Path(__file__).resolve().parents[2] / "threathunt-catalog" / "playbooks"
+    for pb in top["playbooks"]:
+        assert list(catalog.glob(f"{pb}-*.md")), f"{pb} is not a catalog playbook"
+    for f in body["findings"][1:]:
+        assert f["detected_patterns"] == []
+        assert f["playbooks"] == ["PB-04", "PB-06"]      # data-retrieval, from the behaviour map alone
+
+    csv_text = client.get(f"/analyses/{body['analysis_id']}/findings.csv").text
+    header, first = csv_text.strip().splitlines()[:2]
+    assert "playbooks" in header.split(",")
+    assert "PB-04|PB-09" in first
+
+
+def test_missing_playbook_map_is_a_warning_not_a_failure(monkeypatch, tmp_path):
+    svc = _load_service(monkeypatch, tmp_path, ZEEK_PLAYBOOK_MAP=str(tmp_path / "absent.json"))
+    body = _upload(TestClient(svc.app)).json()
+    assert body["findings"][0]["behavior_classification"] == "agentic-orchestration"
+    assert all(f["playbooks"] == [] for f in body["findings"])
+
+
 def test_response_is_the_stored_record(client):
     created = _upload(client).json()
     aid = created["analysis_id"]

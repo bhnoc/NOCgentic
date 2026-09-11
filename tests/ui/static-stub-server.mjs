@@ -33,6 +33,24 @@ const laneOf = (name, over = {}) => ({
 const lanePolls = new Map();
 const hintPolls = new Map();
 
+const CATALOG = [
+  {
+    id: 'PB-01', section: 'playbooks', title: 'PB-01: C2 Beaconing Detection', shortTitle: 'C2 Beaconing Detection',
+    summary: 'An implanted host keeps a schedule.', techniques: ['T1071'], tactics: [], dataSources: ['conn.log'],
+    tools: ['RITA'], headings: ['Hypothesis', 'Detection Logic'], path: 'playbooks/PB-01-c2-beaconing.md', wordCount: 40,
+    huntQuery: 'STUB HUNT: any hosts beaconing on a regular interval today?',
+    body: '# PB-01: C2 Beaconing Detection\n\n**ATT&CK**: T1071\n\n## Hypothesis\n\nAn implanted host keeps a schedule <script>alert(1)</script>.\n\n' +
+      '| Field | Meaning |\n|---|---|\n| ts | time |\n\n```bash\nrita show-beacons ds\n```\n\n- one\n- two\n',
+  },
+  {
+    id: 'PB-02', section: 'playbooks', title: 'PB-02: DNS Tunneling & DGA Detection', shortTitle: 'DNS Tunneling & DGA Detection',
+    summary: 'Long, high-entropy queries.', techniques: ['T1071.004'], tactics: [], dataSources: ['dns.log', 'conn.log'],
+    tools: ['tshark'], headings: ['Hypothesis'], path: 'playbooks/PB-02-dns-tunneling-dga.md', wordCount: 30,
+    huntQuery: 'STUB HUNT: any DNS tunneling in the last 24 hours?',
+    body: '# PB-02: DNS Tunneling & DGA Detection\n\n## Hypothesis\n\nLong, high-entropy queries.\n',
+  },
+];
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -170,6 +188,38 @@ const server = createServer(async (req, res) => {
     }));
   }
 
+  // Hunt catalog (tests/ui/playbooks.mjs). Two canned entries stand in for the
+  // real index; the real indexer and ranking are covered by vitest
+  // (packages/web-server/test/huntCatalog.test.ts). The PB-01 body carries a
+  // literal <script> so the gate can prove the markdown renderer escapes it.
+  if (url.pathname === '/api/v1/catalog') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      loadedAt: '2026-09-11T00:00:00Z', count: CATALOG.length,
+      facets: {
+        sections: [{ id: 'playbooks', count: 2 }],
+        dataSources: [{ id: 'conn.log', count: 2 }, { id: 'dns.log', count: 1 }],
+        techniques: [{ id: 'T1071', count: 1 }],
+      },
+      links: { alertTopics: { 'C2 beacon': ['PB-01', 'PB-10'], 'suspicious DNS': ['PB-02'] } },
+      entries: CATALOG.map(({ body, ...summary }) => summary),
+    }));
+  }
+  if (url.pathname === '/api/v1/catalog/search') {
+    const q = (url.searchParams.get('q') || '').toLowerCase();
+    const hits = CATALOG
+      .filter((e) => !q || e.title.toLowerCase().includes(q))
+      .map(({ body, ...summary }) => ({ ...summary, score: 1, matched: q ? [q] : [], snippet: summary.summary }));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ query: { q }, total: hits.length, hits }));
+  }
+  if (url.pathname.startsWith('/api/v1/catalog/')) {
+    const id = decodeURIComponent(url.pathname.split('/').pop());
+    const entry = CATALOG.find((e) => e.id === id);
+    res.writeHead(entry ? 200 : 404, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify(entry || { error: 'not found' }));
+  }
+
   if (url.pathname === '/__received') {
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify(received));
@@ -194,6 +244,7 @@ const server = createServer(async (req, res) => {
     '/app.js': 'text/javascript',
     '/app.css': 'text/css',
     '/alertHints.js': 'text/javascript',
+    '/huntCatalog.js': 'text/javascript',
     '/assets/bhnoc-logo.png': 'image/png',
   }[url.pathname];
   if (asset) {

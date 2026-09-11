@@ -30,6 +30,7 @@
       <button class="header-tab header-tab-hunt" id="tab-hunt" onclick="setView('hunt')">
         <span class="header-tab-label">Threat Hunt</span>
       </button>
+      <button class="header-tab" id="tab-catalog" onclick="setView('catalog')">Playbooks</button>
     </nav>
     <div class="header-status">
       <div class="status-pill" id="ws-status">
@@ -123,6 +124,9 @@
 
   <!-- ===== THREAT HUNT (full content area, hidden until the tab is opened) ===== -->
   <section id="hunt-view" class="hunt-view" hidden></section>
+
+  <!-- ===== PLAYBOOKS (threat hunting catalog; huntCatalog.js renders into it) ===== -->
+  <section id="catalog-view" class="catalog-view" hidden></section>
 </div>
 
 <!-- ===== ALERT DETAIL POPUP =====
@@ -164,6 +168,7 @@
 
 <script src="/vendor/html2canvas.min.js"></script>
 <script src="/alertHints.js"></script>
+<script src="/huntCatalog.js"></script>
 <script src="/threat-hunt-config.js"></script>
 <script src="/threat-hunt.js"></script>
 <script src="/app.js"></script>
