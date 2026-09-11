@@ -78,7 +78,7 @@ AI_SERVICE_CATALOG: dict[str, dict] = {
         "hostname_patterns": [
             "generativelanguage.googleapis.com",
             r".*aiplatform\.googleapis\.com$",
-            r".*\.googleapis\.com$",
+            r".*ml\.googleapis\.com$",
         ],
         "behaviors": ["data-retrieval", "agentic_loop"],
         "typical_ports": [443],
