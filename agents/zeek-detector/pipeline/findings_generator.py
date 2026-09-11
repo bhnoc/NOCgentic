@@ -16,7 +16,18 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
+
+_log = logging.getLogger("zeek-detector.playbooks")
+
+# How many hunt playbooks one finding links to, most relevant first. Same cap
+# as packages/web-server/src/services/huntCatalog.ts MAX_LINKED_PLAYBOOKS.
+MAX_LINKED_PLAYBOOKS = 4
+PLAYBOOK_MAP_FILENAME = "finding-playbook-map.json"
 
 SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
 
@@ -24,8 +35,66 @@ CSV_FIELDS = [
     "finding_id", "severity", "host", "destination", "service_name",
     "behavior_classification", "confidence", "confidence_level", "classifier_mode",
     "first_seen", "session_duration_seconds", "request_count", "detected_patterns",
-    "narrative", "recommendation",
+    "playbooks", "narrative", "recommendation",
 ]
+
+_EMPTY_MAP: dict = {"patterns": {}, "behaviors": {}}
+_playbook_map: dict | None = None
+
+
+def _playbook_map_candidates() -> list[Path]:
+    """ZEEK_PLAYBOOK_MAP is exclusive when set; otherwise the container copy
+    (next to main.py) and then the repo checkout (threathunt-catalog/)."""
+    env = os.environ.get("ZEEK_PLAYBOOK_MAP")
+    if env:
+        return [Path(env)]
+    here = Path(__file__).resolve()
+    return [
+        here.parents[1] / PLAYBOOK_MAP_FILENAME,
+        here.parents[3] / "threathunt-catalog" / PLAYBOOK_MAP_FILENAME,
+    ]
+
+
+def load_playbook_map() -> dict:
+    """The `zeek_detector` block of threathunt-catalog/finding-playbook-map.json.
+
+    Read once per process. A missing or unreadable map is a warning and an
+    empty mapping, never a failed upload: the finding is still the finding.
+    """
+    global _playbook_map
+    if _playbook_map is not None:
+        return _playbook_map
+    for candidate in _playbook_map_candidates():
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        block = data.get("zeek_detector") or {}
+        _playbook_map = {
+            "patterns": dict(block.get("patterns") or {}),
+            "behaviors": dict(block.get("behaviors") or {}),
+        }
+        return _playbook_map
+    _log.warning("%s not found; findings carry no playbook links", PLAYBOOK_MAP_FILENAME)
+    _playbook_map = dict(_EMPTY_MAP)
+    return _playbook_map
+
+
+def playbooks_for(behavior: str, patterns: list[str]) -> list[str]:
+    """Hunt playbook ids for one finding: patterns first (the specific
+    evidence), then the behaviour label; deduped in order and capped."""
+    m = load_playbook_map()
+    ordered: list[str] = []
+    for p in patterns:
+        ordered.extend(m["patterns"].get(p, []))
+    ordered.extend(m["behaviors"].get(behavior, []))
+    out: list[str] = []
+    for pb in ordered:
+        if pb not in out:
+            out.append(pb)
+        if len(out) >= MAX_LINKED_PLAYBOOKS:
+            break
+    return out
 
 
 def _ts_to_iso(ts: float | None) -> str | None:
@@ -137,6 +206,7 @@ def generate_findings(
             "severity": cls.get("severity", "low"),
             "classifier_mode": cls.get("classifier_mode", "rules"),
             "detected_patterns": list(patterns),
+            "playbooks": playbooks_for(cls.get("behavior_classification", "unknown"), list(patterns)),
             "evidence_chain": evidence_chain,
             "timeline": {
                 "first_seen": first_ts,
@@ -208,5 +278,6 @@ def findings_to_csv(findings_report: dict) -> str:
             "session_duration_seconds": timeline.get("session_duration_seconds", ""),
             "request_count": (finding.get("metrics") or {}).get("request_count", ""),
             "detected_patterns": "|".join(finding.get("detected_patterns", [])),
+            "playbooks": "|".join(finding.get("playbooks", [])),
         })
     return buf.getvalue()

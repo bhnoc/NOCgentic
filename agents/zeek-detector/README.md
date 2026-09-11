@@ -49,6 +49,7 @@ A finding looks like:
   "severity": "high",
   "classifier_mode": "rules",
   "detected_patterns": ["context_reset", "agentic_loop"],
+  "playbooks": ["PB-04", "PB-09", "PB-01", "PB-13"],
   "evidence_chain": ["SNI/server_name: api.openai.com", "..."],
   "timeline": {"first_seen": "...", "last_seen": "...", "session_duration_seconds": 100.5},
   "metrics": {"request_count": 24, "sawtooth_score": 0.72, "loop_score": 0.46, "...": "..."},
@@ -90,6 +91,7 @@ at `/data`). Tables `analyses` and `findings`; every SQL statement is in
 | `ZEEK_LLM_MAX_CLUSTERS` | `200` | Clusters per upload sent to the model |
 | `ZEEK_LLM_TIMEOUT` | `60` | Seconds per model call |
 | `ZEEK_DETECTOR_API_TOKEN` | unset | When set, bearer required on all routes but `/health` |
+| `ZEEK_PLAYBOOK_MAP` | unset | Override path to `finding-playbook-map.json`; default is the copy next to `main.py`, then the repo's `threathunt-catalog/` |
 
 ## Tests
 

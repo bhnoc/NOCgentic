@@ -137,6 +137,10 @@ class Finding(BaseModel):
     severity: str
     classifier_mode: str
     detected_patterns: list[str]
+    # Hunt playbook ids (threathunt-catalog/) for this finding, most relevant
+    # first; empty when the map file is absent. Defaulted so rows stored before
+    # the field existed still validate.
+    playbooks: list[str] = []
     evidence_chain: list[str]
     timeline: Timeline
     metrics: FindingMetrics
